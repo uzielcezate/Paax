@@ -1,0 +1,249 @@
+================================================================
+  BEATY — GUÍA DE DESPLIEGUE EN RAILWAY (BACKEND)
+  Versión: 1.0 | Idioma: Español
+================================================================
+
+ÍNDICE
+------
+1. Requisitos previos
+2. Preparar el repositorio en GitHub
+3. Crear el proyecto en Railway
+4. Configurar el directorio raíz (monorepo)
+5. Variables de entorno
+6. Dominio y URL de producción
+7. Pruebas de verificación
+8. Errores comunes y soluciones
+9. Actualizar el frontend con la URL de Railway
+10. Nota sobre Vercel/Netlify (frontend — a futuro)
+
+================================================================
+1. REQUISITOS PREVIOS
+================================================================
+
+- Tener una cuenta gratuita en Railway: https://railway.app
+- Tener el repositorio BeatyRepo subido a GitHub
+- Tener el archivo oauth.json de ytmusicapi (obtenido con `ytmusicapi oauth`)
+- Tener instalado Git en tu PC
+
+================================================================
+2. PREPARAR EL REPOSITORIO EN GITHUB
+================================================================
+
+Si ya tienes el repo en GitHub, salta a la sección 3.
+
+Pasos:
+a) Ve a https://github.com → botón "New repository"
+b) Nombre: beaty (o el que prefieras)
+c) Visibilidad: Private (recomendado) o Public
+d) NO inicialices con README ni .gitignore (déjalo vacío)
+e) Copia la URL del repo, ejemplo:
+   https://github.com/tuusuario/beaty.git
+
+En tu PC (PowerShell desde la carpeta BeatyRepo):
+   git remote add origin https://github.com/tuusuario/beaty.git
+   git push -u origin main
+
+================================================================
+3. CREAR EL PROYECTO EN RAILWAY
+================================================================
+
+a) Ve a https://railway.app y haz clic en "New Project"
+b) Selecciona "Deploy from GitHub repo"
+c) Autentica Railway con tu cuenta de GitHub si aún no lo has hecho
+d) Selecciona el repositorio "beaty" (o el nombre que elegiste)
+e) Railway detectará el repositorio. NO hagas clic en "Deploy" aún.
+
+================================================================
+4. CONFIGURAR EL DIRECTORIO RAÍZ (MONOREPO)
+================================================================
+
+IMPORTANTE: Como es un monorepo, Railway debe apuntar
+SOLO a la carpeta /backend, no a la raíz del repo.
+
+OPCIÓN A — Mediante la interfaz de Railway (recomendado):
+  a) Dentro del proyecto recién creado, haz clic en el servicio
+  b) Ve a la pestaña "Settings"
+  c) En la sección "Source" busca el campo "Root Directory"
+  d) Escribe exactamente:  backend
+     (sin barra inicial, solo la palabra "backend")
+  e) Haz clic en "Save" o "Update"
+
+OPCIÓN B — El archivo railway.json ya incluido:
+  El archivo backend/railway.json configura el builder y el
+  comando de inicio automáticamente. Railway lo detecta cuando
+  el Root Directory apunta al folder correcto.
+
+Start Command (Railway lo lee del railway.json, pero si
+lo pide manualmente escribe esto):
+   uvicorn main:app --host 0.0.0.0 --port $PORT
+
+================================================================
+5. VARIABLES DE ENTORNO
+================================================================
+
+En Railway → tu proyecto → pestaña "Variables", agrega:
+
+┌──────────────────────┬────────────────────────────────────────────┐
+│ Nombre               │ Valor                                      │
+├──────────────────────┼────────────────────────────────────────────┤
+│ YTMUSIC_OAUTH_JSON   │ (contenido completo de tu oauth.json)      │
+│ FRONTEND_ORIGINS     │ https://tu-app.vercel.app (opcional hoy)   │
+└──────────────────────┴────────────────────────────────────────────┘
+
+Cómo obtener el valor de YTMUSIC_OAUTH_JSON:
+1. Abre el archivo oauth.json con cualquier editor de texto
+2. Copia TODO el contenido (es un JSON que empieza con { )
+3. En Railway → Variables → botón "Raw Editor" o "+"
+4. Nombre: YTMUSIC_OAUTH_JSON
+5. Valor: pega el JSON completo
+6. Haz clic en "Add" → luego "Deploy"
+
+NOTA: FRONTEND_ORIGINS es opcional hoy. Cuando despliegues
+el frontend en Vercel/Netlify, vuelve aquí y agrega la URL.
+Ejemplo: https://beaty.vercel.app
+
+NOTA: NO necesitas agregar PORT. Railway lo inyecta solo.
+
+================================================================
+6. DOMINIO Y URL DE PRODUCCIÓN
+================================================================
+
+Railway asigna un subdominio automático. Para encontrarlo:
+  a) Ve a tu proyecto en Railway
+  b) Pestaña "Settings" → sección "Domains"
+  c) Haz clic en "Generate Domain" si aún no hay uno
+  d) Te aparecerá algo como: beaty-production.up.railway.app
+
+Guarda esa URL. La necesitarás para:
+  - Pruebas de verificación (sección 7)
+  - Configurar Flutter con --dart-define (sección 9)
+
+================================================================
+7. PRUEBAS DE VERIFICACIÓN
+================================================================
+
+Una vez que el deploy esté en estado "Active" (verde en Railway):
+
+PRUEBA 1 — Health check (obligatoria):
+   Abre en el navegador:
+   https://TU-APP.up.railway.app/health
+
+   Respuesta esperada:
+   {"ok": true, "authenticated": true}
+
+   Si "authenticated" es false, revisa la variable YTMUSIC_OAUTH_JSON.
+
+PRUEBA 2 — Endpoint raíz:
+   https://TU-APP.up.railway.app/
+
+   Respuesta esperada:
+   {"status": "running", "service": "Beaty YouTube Music Backend"}
+
+PRUEBA 3 — Búsqueda de prueba:
+   https://TU-APP.up.railway.app/search?q=coldplay&filter=songs
+
+   Respuesta esperada: JSON con lista de canciones de Coldplay.
+   Si hay error 500, revisa los logs y el oauth.json.
+
+PRUEBA 4 — Logs de inicialización:
+   En Railway → tu proyecto → pestaña "Logs"
+   Busca esta línea al inicio del deploy:
+   [Beaty] YTMusic initialized with OAuth via env var ✓
+
+   Si ves en cambio:
+   [Beaty] YTMusic running unauthenticated
+   → La variable YTMUSIC_OAUTH_JSON no está bien configurada.
+
+PRUEBA 5 — CORS (después del deploy del frontend):
+   Abre Flutter web desde Vercel/Netlify y abre DevTools.
+   En la pestaña Network, verifica que las peticiones a Railway
+   tengan en los headers de respuesta:
+   Access-Control-Allow-Origin: https://tu-app.vercel.app
+
+================================================================
+8. ERRORES COMUNES Y SOLUCIONES
+================================================================
+
+ERROR: "Application failed to respond"
+  Causa: El Start Command es incorrecto, o falta la variable PORT.
+  Solución: Verifica que en Settings → Start Command esté:
+    uvicorn main:app --host 0.0.0.0 --port $PORT
+  Asegúrate que el Root Directory sea "backend".
+
+ERROR: "ModuleNotFoundError: No module named 'ytmusicapi'"
+  Causa: Railway no instaló las dependencias.
+  Solución: Verifica que requirements.txt esté en la carpeta
+  backend/ y que el Root Directory en Railway sea "backend".
+
+ERROR: "/health → {"ok": true, "authenticated": false}"
+  Causa: YTMUSIC_OAUTH_JSON no está configurado o tiene un
+  valor inválido (JSON malformado, o con saltos de línea rotos).
+  Solución:
+    1. Copia el CONTENIDO del oauth.json (no la ruta, el JSON).
+    2. En Railway usa el "Raw Editor" para pegar JSON largo.
+    3. Vuelve a hacer Deploy.
+
+ERROR: CORS blocked en el navegador
+  Causa: La URL del frontend no está en FRONTEND_ORIGINS.
+  Solución: Agrega la URL exacta (con https://, sin barra final)
+  a FRONTEND_ORIGINS en Railway Variables. Ejemplo:
+  FRONTEND_ORIGINS=https://beaty.vercel.app
+  Luego redeploy.
+
+ERROR: "yaml: could not find expected ':'"  o build falla
+  Causa: railway.json tiene un error de sintaxis.
+  Solución: Verifica el archivo backend/railway.json en el repo.
+
+ERROR: OAuth JSON inválido al iniciar
+  Causa: El JSON en la variable tiene caracteres escapados dobles.
+  Solución: Pega el JSON RAW, no uses comillas adicionales.
+  Usa el Raw Editor de Railway para pegar valores largos.
+
+================================================================
+9. ACTUALIZAR EL FRONTEND CON LA URL DE RAILWAY
+================================================================
+
+Una vez que tengas la URL de Railway (ej: beaty.up.railway.app),
+actualiza Flutter así:
+
+Para desarrollo local apuntando a producción:
+   flutter run -d chrome \
+     --dart-define=API_BASE_URL=https://beaty.up.railway.app
+
+Para compilar el web de producción (Vercel/Netlify):
+   flutter build web \
+     --dart-define=API_BASE_URL=https://beaty.up.railway.app
+
+La carpeta generada estará en: frontend/build/web/
+Esa carpeta es lo que subes a Vercel o Netlify.
+
+================================================================
+10. NOTA SOBRE VERCEL / NETLIFY (FRONTEND — A FUTURO)
+================================================================
+
+Cuando estés listo para desplegar el frontend Flutter Web:
+
+OPCIÓN A — Vercel:
+  1. Instala Vercel CLI: npm i -g vercel
+  2. flutter build web --dart-define=API_BASE_URL=https://TU-APP.railway.app
+  3. cd frontend/build/web
+  4. vercel --prod
+  5. Copia la URL que te da Vercel.
+  6. En Railway → Variables → FRONTEND_ORIGINS → agrega esa URL.
+
+OPCIÓN B — Netlify:
+  1. flutter build web --dart-define=API_BASE_URL=https://TU-APP.railway.app
+  2. Ve a https://app.netlify.com → "Add new site" → "Deploy manually"
+  3. Arrastra la carpeta frontend/build/web/ a la zona de upload.
+  4. Copia la URL que te asigna Netlify.
+  5. En Railway → Variables → FRONTEND_ORIGINS → agrega esa URL.
+
+NOTA: También puedes conectar Netlify/Vercel directamente a
+GitHub y configurar el Build Command y Publish Directory:
+  - Build Command: (ninguno, ya construiste localmente)
+  - O configurar CI con: flutter build web --dart-define=...
+  - Publish Directory: frontend/build/web
+
+================================================================
+FIN DEL DOCUMENTO
+================================================================

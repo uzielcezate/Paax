@@ -1,0 +1,67 @@
+# ============================================================
+# ROOT MONOREPO .gitignore — Beaty (Flutter + FastAPI)
+# ============================================================
+
+# ─── Python / FastAPI ────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+venv/
+.venv/
+env/
+ENV/
+.env
+.env.*
+!.env.example
+
+# SECRETS — never commit these
+oauth.json
+*oauth*.json
+
+# Test / debug scripts (optional: remove exclusion to track them)
+backend/debug_*.py
+backend/test_*.py
+backend/verify_*.py
+backend/explore_*.py
+
+# ─── Flutter / Dart ──────────────────────────────────────────
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+frontend/build/
+frontend/.dart_tool/
+
+# Symbolication / obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android build artifacts
+frontend/android/app/debug/
+frontend/android/app/profile/
+frontend/android/app/release/
+
+# ─── IDE / OS ────────────────────────────────────────────────
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+.atom/
+.history/
+.svn/
+migrate_working_dir/
