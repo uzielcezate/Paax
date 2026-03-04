@@ -1,4 +1,4 @@
-# 🎵 Beaty — YouTube Music Client
+# 🎵 Paax — YouTube Music Client
 
 A full-stack music streaming app: **Flutter** frontend + **FastAPI** backend powered by `ytmusicapi`.
 
