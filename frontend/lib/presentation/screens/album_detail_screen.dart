@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter/foundation.dart'; // For kDebugMode
+import 'package:flutter/foundation.dart';
+import 'package:shimmer/shimmer.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/track.dart';
@@ -215,7 +216,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 ),
                 
                 if (isLoading)
-                   const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: AppColors.primaryStart)))
+                   SliverList(
+                     delegate: SliverChildBuilderDelegate(
+                       (context, index) => _buildSkeletonRow(),
+                       childCount: 8, // Show 8 placeholder rows
+                     ),
+                   )
                 else if (hasData) ...[
                   SliverToBoxAdapter(
                     child: Padding(
@@ -400,6 +406,39 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final mins = (totalSeconds % 3600) ~/ 60;
     return "$hours hr $mins min";
   }
+
+  /// Shimmer placeholder row shown while tracks are loading.
+  Widget _buildSkeletonRow() {
+    return Shimmer.fromColors(
+      baseColor: AppColors.surfaceLight,
+      highlightColor: const Color(0xFF3A3A4A),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            // Index number placeholder
+            Container(width: 20, height: 14, color: Colors.white),
+            const SizedBox(width: 16),
+            // Title + artist stack
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(height: 14, width: double.infinity, color: Colors.white),
+                  const SizedBox(height: 6),
+                  Container(height: 11, width: 120, color: Colors.white),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Trailing icon placeholder
+            Container(width: 24, height: 24, color: Colors.white),
+          ],
+        ),
+      ),
+    );
+  }
+
 
   Future<void> _onArtistTap() async {
     // Guard against placeholder artist

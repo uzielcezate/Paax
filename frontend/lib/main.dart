@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/theme/app_theme.dart';
+import 'core/config/api_config.dart';
 import 'data/local/hive_storage.dart';
 import 'presentation/state/auth_controller.dart';
 import 'presentation/state/library_controller.dart';
@@ -11,7 +12,10 @@ import 'presentation/screens/splash_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await HiveStorage.init();
-  
+
+  // Print active API environment (debug only — no-op in release builds)
+  ApiConfig.logStartup();
+
   runApp(const BeatyApp());
 }
 

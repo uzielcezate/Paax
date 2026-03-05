@@ -23,32 +23,38 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      // Reduced from 2 s → 600 ms: polished but never makes the user wait
+      duration: const Duration(milliseconds: 600),
     );
-    
-    _scaleAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+
+    _scaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
     );
-    
+
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeIn),
     );
 
+    // Start animation and navigation check in parallel.
+    // Auth state is read from Hive (synchronous), so _checkNavigation
+    // is ready before the animation finishes — we navigate as soon as
+    // the animation completes (max 600 ms wait).
     _controller.forward().whenComplete(_checkNavigation);
   }
 
   void _checkNavigation() {
+    if (!mounted) return;
     final auth = context.read<AuthController>();
-    
+
     Widget nextScreen;
     if (!auth.onboardingCompleted) {
       nextScreen = const OnboardingScreen();
     } else if (!auth.isAuthenticated) {
       nextScreen = const AuthScreen();
     } else {
-      nextScreen = MainWrapper(key: MainWrapper.shellKey); // Home
+      nextScreen = MainWrapper(key: MainWrapper.shellKey);
     }
-    
+
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => nextScreen),
     );

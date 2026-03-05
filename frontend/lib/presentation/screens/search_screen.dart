@@ -2,18 +2,18 @@
 import 'package:flutter/material.dart';
 import 'main_wrapper.dart';
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
-import '../state/search_controller.dart' as app_search; 
+import '../state/search_controller.dart' as app_search;
 import '../state/playback_controller.dart';
 import 'artist_detail_screen.dart';
 import 'album_detail_screen.dart';
 import 'track_detail_screen.dart';
-import '../widgets/track_list_tile.dart'; 
+import '../widgets/track_list_tile.dart';
 import '../widgets/music_card.dart';
+import '../widgets/thumbnail.dart';
 
 import '../widgets/bottom_content_padding.dart';
 import '../widgets/black_glass_blur_surface.dart';
@@ -546,7 +546,12 @@ class _SearchScreenState extends State<SearchScreen> {
                   child: Column(
                        crossAxisAlignment: CrossAxisAlignment.start,
                        children: [
-                         Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(12), child: CachedNetworkImage(imageUrl: album.artworkUrl, fit: BoxFit.cover))),
+                         Expanded(child: Thumbnail(
+                           url: album.artworkUrl,
+                           sizePx: 200,
+                           borderRadius: 12,
+                           fit: BoxFit.cover,
+                         )),
                          const SizedBox(height: 8),
                          Text(album.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                          Text(album.artistName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
