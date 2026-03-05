@@ -1,4 +1,4 @@
-import 'package:cached_network_image/cached_network_image.dart'; // Added
+import '../widgets/thumbnail.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
@@ -209,16 +209,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           mainAxisSize: MainAxisSize.min, // Essential
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AspectRatio(
-              aspectRatio: 1, // Forces square based on width
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: CachedNetworkImage(
-                  imageUrl: track.artworkUrl,
-                  fit: BoxFit.cover,
-                  placeholder: (_,__) => Container(color: Colors.grey[900]),
-                ),
-              ),
+            Thumbnail.list(
+              url: track.artworkUrl,
+              size: 100,
+              borderRadius: 8,
             ),
             const SizedBox(height: 8),
             Text(

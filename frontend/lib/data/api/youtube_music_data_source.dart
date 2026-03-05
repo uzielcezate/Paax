@@ -1,13 +1,12 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
-import 'package:beaty/core/config/app_config.dart';
+import 'package:beaty/core/config/api_config.dart';
 
 class YouTubeMusicDataSource {
-  // API base URL is injected at compile time via --dart-define=API_BASE_URL=<url>
-  // Defaults to http://localhost:8000 when not set.
-  // See lib/core/config/app_config.dart for environment-specific values.
-  static String get _baseUrl => AppConfig.apiBaseUrl;
+  // Base URL resolved from --dart-define=ENV= (local | lan | prod).
+  // See lib/core/config/api_config.dart for full documentation.
+  static String get _baseUrl => ApiConfig.baseUrl;
   
   final http.Client _client;
 

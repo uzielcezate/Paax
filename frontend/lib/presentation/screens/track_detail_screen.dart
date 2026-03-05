@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import '../widgets/thumbnail.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/entities/track.dart';
 import '../state/playback_controller.dart';
@@ -89,7 +89,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                      children: [
                         Hero(
                           tag: "track_${widget.track.id}",
-                          child: CachedNetworkImage(imageUrl: widget.track.artworkUrl, fit: BoxFit.cover),
+                          child: Thumbnail.hero(url: widget.track.artworkUrl, borderRadius: 0),
                         ),
                         
                         Container(

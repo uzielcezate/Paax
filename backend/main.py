@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Body, Query
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from ytmusicapi import YTMusic
 from typing import Optional, List, Dict, Any
@@ -6,6 +7,7 @@ from contextlib import asynccontextmanager
 import os
 import json
 import tempfile
+from cache import get_redis_client, make_cache_key, cache_get, cache_set
 from ytmusicapi.navigation import nav, SINGLE_COLUMN_TAB, SECTION_LIST_ITEM, GRID_ITEMS, GRID, CAROUSEL_CONTENTS
 from ytmusicapi.parsers.library import parse_albums
 try:
@@ -19,12 +21,13 @@ except ImportError:
 yt: YTMusic = None  # type: ignore
 _tmp_oauth_path: str | None = None
 _is_authenticated: bool = False
+redis_client = None  # initialised in lifespan
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize YTMusic on startup; clean up temp files on shutdown."""
-    global yt, _tmp_oauth_path, _is_authenticated
+    """Initialize YTMusic and Redis on startup; clean up on shutdown."""
+    global yt, _tmp_oauth_path, _is_authenticated, redis_client
 
     oauth_json_str = os.environ.get("YTMUSIC_OAUTH_JSON")
 
@@ -57,6 +60,11 @@ async def lifespan(app: FastAPI):
         yt = YTMusic()
         print("[Beaty] YTMusic running unauthenticated (public content only)")
 
+    # Redis
+    redis_client = get_redis_client()
+    redis_enabled = redis_client is not None
+    print(f"[Cache] Redis {'enabled' if redis_enabled else 'disabled'}.")
+
     yield  # App runs here
 
     # Cleanup
@@ -64,24 +72,43 @@ async def lifespan(app: FastAPI):
         os.unlink(_tmp_oauth_path)
         print("[Beaty] Cleaned up temp oauth file.")
 
+    if redis_client:
+        await redis_client.aclose()
+        print("[Cache] Redis connection closed.")
+
 
 # ---------------------------------------------------------------------------
 # App + CORS
 # ---------------------------------------------------------------------------
 app = FastAPI(lifespan=lifespan)
 
-# CORS: always allow localhost/127.0.0.1 (local dev + Android emulator via 10.0.2.2).
-# For production, set FRONTEND_ORIGINS env var to a comma-separated list of
-# your deployed frontend origin(s), e.g.:
-#   FRONTEND_ORIGINS=https://beaty.vercel.app,https://beaty.netlify.app
-_local_origins_regex = r"https?://(localhost|127\.0\.0\.1|10\.0\.2\.2)(:\d+)?"
+# CORS
+# ─────────────────────────────────────────────────────────────────────────────
+# Always allow:
+#   - localhost / 127.0.0.1   (Flutter web dev, Chrome)
+#   - 10.0.2.2                (Android emulator ↔ host)
+#   - 192.168.x.x / 10.x.x.x / 172.16–31.x.x  (physical phone on LAN)
+# Production origins: set FRONTEND_ORIGINS env var (comma-separated)
+# e.g. FRONTEND_ORIGINS=https://paax.vercel.app,https://paax.netlify.app
+_local_origins_regex = (
+    r"https?://("
+    r"localhost"
+    r"|127\.0\.0\.1"
+    r"|10\.0\.2\.2"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r")(:\d+)?"
+)
 _extra_origins_raw = os.environ.get("FRONTEND_ORIGINS", "")
 _extra_origins = [o.strip() for o in _extra_origins_raw.split(",") if o.strip()]
 
+print(f"[CORS] LAN regex active. Extra origins: {_extra_origins or '(none)'}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_extra_origins,        # exact production origins
-    allow_origin_regex=_local_origins_regex,  # local dev (always)
+    allow_origins=_extra_origins,             # exact production origins
+    allow_origin_regex=_local_origins_regex,  # local + LAN dev (always)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,6 +123,20 @@ app.add_middleware(
 def health():
     """Railway / uptime health check."""
     return {"ok": True, "authenticated": _is_authenticated}
+
+
+@app.get("/cache/status")
+async def cache_status():
+    """Report whether Redis is configured and reachable."""
+    redis_enabled = redis_client is not None
+    redis_ok = False
+    if redis_enabled:
+        try:
+            await redis_client.ping()
+            redis_ok = True
+        except Exception:
+            redis_ok = False
+    return {"redis_enabled": redis_enabled, "redis_ok": redis_ok}
 
 
 @app.get("/")
@@ -125,26 +166,48 @@ def reload_auth():
 
 # --- Search ---
 
+# TTL constants
+_TTL_SEARCH = 900    # 15 minutes
+_TTL_HOME   = 21600  # 6 hours
+
 @app.get("/search")
-def search(q: str, filter: str = None, limit: int = 20):
+async def search(q: str, filter: str = None, limit: int = 20):
     """
     Search for content.
     filter options: songs, videos, albums, artists, playlists, community_playlists, featured_playlists, uploads
     """
+    cache_key = make_cache_key("search", {"q": q, "filter": filter, "limit": limit})
+    cached = await cache_get(redis_client, cache_key)
+    if cached is not None:
+        print(f"[Cache] HIT {cache_key}")
+        return JSONResponse(content=cached, headers={"X-Cache": "HIT"})
+
     try:
         results = yt.search(query=q, filter=filter, limit=limit)
-        return {"data": results}
+        payload = {"data": results}
+        await cache_set(redis_client, cache_key, payload, _TTL_SEARCH)
+        print(f"[Cache] MISS {cache_key}")
+        return JSONResponse(content=payload, headers={"X-Cache": "MISS"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Home / Discovery ---
 
 @app.get("/home")
-def get_home():
+async def get_home():
+    cache_key = make_cache_key("home", {})
+    cached = await cache_get(redis_client, cache_key)
+    if cached is not None:
+        print(f"[Cache] HIT {cache_key}")
+        return JSONResponse(content=cached, headers={"X-Cache": "HIT"})
+
     try:
-        return yt.get_home()
+        data = yt.get_home()
+        await cache_set(redis_client, cache_key, data, _TTL_HOME)
+        print(f"[Cache] MISS {cache_key}")
+        return JSONResponse(content=data, headers={"X-Cache": "MISS"})
     except Exception as e:
-         # get_home can be fickle unauthenticated or with certain locales
+        # get_home can be fickle unauthenticated or with certain locales
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts")

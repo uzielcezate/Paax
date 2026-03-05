@@ -6,6 +6,15 @@ import 'app_image.dart';
 
 import '../../core/utils/string_utils.dart';
 
+// Const shadow — avoids re-allocation on every card build during scroll
+const _kCardShadow = [
+  BoxShadow(
+    color: Color(0x33000000), // Colors.black @ 20% opacity, compile-time const
+    blurRadius: 8,
+    offset: Offset(0, 4),
+  ),
+];
+
 class MusicCard extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -45,13 +54,7 @@ class MusicCard extends StatelessWidget {
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: isCircle ? BorderRadius.circular(100) : BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 8,
-                      offset: const Offset(0, 4),
-                    )
-                  ],
+                  boxShadow: _kCardShadow,
                 ),
                 child: AppImage(
                   url: imageUrl,

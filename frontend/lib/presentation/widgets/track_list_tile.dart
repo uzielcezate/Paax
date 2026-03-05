@@ -27,12 +27,16 @@ class TrackListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Watch playback state for current track
-    final playback = context.watch<PlaybackController>();
-    final isCurrentTrack = playback.currentTrack?.id == track.id;
-    final isPlaying = isCurrentTrack && playback.isPlaying;
-    
-    // Scale sizes
+    // Selector: rebuild ONLY when this exact tile's play/current status changes.
+    // Previously used context.watch which fired on every position tick (~100 ms),
+    // causing 20 tiles × 10 rebuilds/s = 200 unnecessary rebuilds/s during scroll.
+    final (isCurrentTrack, isPlaying) =
+        context.select<PlaybackController, (bool, bool)>((p) {
+      final isCurrent = p.currentTrack?.id == track.id;
+      return (isCurrent, isCurrent && p.isPlaying);
+    });
+
+    // Scale sizes — computed once per build (not per frame)
     final fontSizeTitle = Responsive.fontSize(context, 16, min: 14, max: 18);
     final fontSizeSubtitle = Responsive.fontSize(context, 12, min: 11, max: 14);
     final iconSize = Responsive.iconSize(context, base: 20, min: 18, max: 24);
