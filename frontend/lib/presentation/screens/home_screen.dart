@@ -245,6 +245,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ListView.builder(
             padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
             scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            primary: false,
             itemCount: tracks.length,
             itemBuilder: (context, index) {
               final track = tracks[index];
@@ -294,6 +296,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ListView.builder(
             padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
             scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            primary: false,
             itemCount: albums.length,
             itemBuilder: (context, index) {
               final album = albums[index];
@@ -330,6 +334,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ListView.builder(
             padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
             scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            primary: false,
             itemCount: artists.length,
             itemBuilder: (context, index) {
               final artist = artists[index];

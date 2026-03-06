@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:provider/provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/config/api_config.dart';
@@ -19,6 +20,30 @@ void main() async {
   runApp(const BeatyApp());
 }
 
+/// Custom scroll behavior:
+/// - Removes Android overscroll glow (no more blue flicker)
+/// - Allows touch + mouse drag (web compat)
+/// - Does NOT set physics here — each list owns its own physics
+class PaaxScrollBehavior extends MaterialScrollBehavior {
+  const PaaxScrollBehavior();
+
+  // Allow drag scrolling with mouse (important for web/desktop)
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.stylus,
+  };
+
+  // Remove overscroll glow indicator on Android
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
+}
+
 class BeatyApp extends StatelessWidget {
   const BeatyApp({super.key});
 
@@ -35,8 +60,10 @@ class BeatyApp extends StatelessWidget {
         title: 'Beaty',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,
+        scrollBehavior: const PaaxScrollBehavior(),
         home: const SplashScreen(),
       ),
     );
   }
 }
+

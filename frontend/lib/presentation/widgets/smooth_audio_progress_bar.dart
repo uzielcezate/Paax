@@ -158,7 +158,7 @@ class _SmoothAudioProgressBarState extends State<SmoothAudioProgressBar> with Si
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(_formatDuration(Duration(milliseconds: (currentSeconds * 1000).toInt())), style: const TextStyle(fontSize: 12, color: Colors.white70)),
-                  Text(_formatDuration(duration), style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                  Text(duration == Duration.zero ? '--:--' : _formatDuration(duration), style: const TextStyle(fontSize: 12, color: Colors.white70)),
                 ],
               ),
             )

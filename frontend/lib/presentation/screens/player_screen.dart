@@ -1,7 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:just_audio/just_audio.dart';
 import '../../core/theme/app_colors.dart';
 import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
@@ -21,14 +20,16 @@ import '../../core/image/lh3_url_builder.dart';
 
 const kPlayerHorizontalPadding = 24.0;
 
-class PlayerScreen extends StatelessWidget {
+class PlayerScreen extends StatefulWidget {
   const PlayerScreen({super.key});
 
   @override
+  State<PlayerScreen> createState() => _PlayerScreenState();
+}
+
+class _PlayerScreenState extends State<PlayerScreen> {
+  @override
   Widget build(BuildContext context) {
-    // Only read controller here, don't watch
-    final controller = context.read<PlaybackController>();
-    
     return Selector<PlaybackController, Track?>(
       selector: (_, c) => c.currentTrack,
       builder: (context, track, _) {
@@ -47,6 +48,7 @@ class PlayerScreen extends StatelessWidget {
                         url: track.artworkUrl,
                         sizePx: Lh3UrlBuilder.headerSize,
                         fit: BoxFit.cover,
+                        forceLoad: true,
                       ),
                       BackdropFilter(
                          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
@@ -93,7 +95,30 @@ class PlayerScreen extends StatelessWidget {
                               child: SizedBox(
                                 width: Responsive.artworkSize(context),
                                 height: Responsive.artworkSize(context),
-                                child: _ArtworkWidget(url: track.artworkUrl),
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    _ArtworkWidget(url: track.artworkUrl),
+                                    // Loading overlay while stream URL resolves
+                                    Selector<PlaybackController, bool>(
+                                      selector: (_, c) => c.isLoadingTrack,
+                                      builder: (_, isLoading, __) => isLoading
+                                          ? Container(
+                                              decoration: BoxDecoration(
+                                                color: Colors.black.withOpacity(0.45),
+                                                borderRadius: BorderRadius.circular(24),
+                                              ),
+                                              child: const Center(
+                                                child: CircularProgressIndicator(
+                                                  color: Colors.white,
+                                                  strokeWidth: 3,
+                                                ),
+                                              ),
+                                            )
+                                          : const SizedBox.shrink(),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -296,6 +321,7 @@ class _ArtworkWidget extends StatelessWidget {
         height: artworkSize,
         fit: BoxFit.cover,
         borderRadius: 24,
+        forceLoad: true,
       ),
     );
   }
@@ -352,7 +378,7 @@ class _PlayerControls extends StatelessWidget {
            selector: (_, c) => c.loopMode,
            builder: (_, loopMode, __) => IconButton(
              icon: Icon(
-                 loopMode == LoopMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded, 
+                 loopMode == LoopMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
                  color: loopMode != LoopMode.off ? AppColors.primaryStart : Colors.white
              ),
              onPressed: controller.toggleLoop,

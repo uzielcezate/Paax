@@ -30,9 +30,26 @@ import '../../core/utils/responsive.dart';
 }
 
 class _SearchScreenState extends State<SearchScreen> {
-  // ... (State variables same)
   final TextEditingController _textController = TextEditingController();
+  // ValueNotifier for clear-button visibility — avoids full setState on every keystroke
+  late final ValueNotifier<bool> _hasText;
   String _selectedFilter = 'All';
+
+  @override
+  void initState() {
+    super.initState();
+    _hasText = ValueNotifier(_textController.text.isNotEmpty);
+    _textController.addListener(() {
+      _hasText.value = _textController.text.isNotEmpty;
+    });
+  }
+
+  @override
+  void dispose() {
+    _hasText.dispose();
+    _textController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -94,32 +111,34 @@ class _SearchScreenState extends State<SearchScreen> {
                              child: TextField(
                                 controller: _textController,
                                 style: const TextStyle(color: Colors.white, fontSize: 16),
-                                decoration: InputDecoration(
-                                  hintText: "What do you want to listen to?",
-                                  hintStyle: const TextStyle(color: Colors.grey, fontSize: 15),
-                                  prefixIcon: const Icon(Icons.search, color: Colors.white70, size: 22),
-                                  filled: true,
-                                  fillColor: Colors.white.withOpacity(0.08),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(30),
-                                    borderSide: BorderSide.none,
-                                  ),
-                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                                  isDense: true,
-                                  suffixIcon: _textController.text.isNotEmpty 
-                                      ? IconButton(
-                                          icon: const Icon(Icons.clear, color: Colors.grey, size: 20),
-                                          onPressed: () {
-                                            _textController.clear();
-                                            search.onQueryChanged("");
-                                          },
-                                        ) 
-                                      : null,
-                                ),
-                                onChanged: (val) {
+                                 decoration: InputDecoration(
+                                   hintText: "What do you want to listen to?",
+                                   hintStyle: const TextStyle(color: Colors.grey, fontSize: 15),
+                                   prefixIcon: const Icon(Icons.search, color: Colors.white70, size: 22),
+                                   filled: true,
+                                   fillColor: Colors.white.withOpacity(0.08),
+                                   border: OutlineInputBorder(
+                                     borderRadius: BorderRadius.circular(30),
+                                     borderSide: BorderSide.none,
+                                   ),
+                                   contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                                   isDense: true,
+                                   suffixIcon: ValueListenableBuilder<bool>(
+                                     valueListenable: _hasText,
+                                     builder: (_, hasText, __) => hasText
+                                         ? IconButton(
+                                             icon: const Icon(Icons.clear, color: Colors.grey, size: 20),
+                                             onPressed: () {
+                                               _textController.clear();
+                                               search.onQueryChanged("");
+                                             },
+                                           )
+                                         : const SizedBox.shrink(),
+                                   ),
+                                 ),
+                                 onChanged: (val) {
                                    search.onQueryChanged(val);
-                                   setState(() {}); 
-                                },
+                                 },
                               ),
                            ),
                         ],
@@ -129,13 +148,14 @@ class _SearchScreenState extends State<SearchScreen> {
                   
                   const SizedBox(height: 12),
                   
-                  SizedBox(
-                    height: 48, 
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
-                      physics: const BouncingScrollPhysics(),
-                      children: ["All", "Tracks", "Albums", "Artists"].map((filter) {
+                   SizedBox(
+                     height: 48, 
+                     child: ListView(
+                       scrollDirection: Axis.horizontal,
+                       padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
+                       physics: const ClampingScrollPhysics(),
+                       primary: false,
+                       children: ["All", "Tracks", "Albums", "Artists"].map((filter) {
                         final isSelected = _selectedFilter == filter;
                         return Padding(
                           padding: const EdgeInsets.only(right: 8, bottom: 8),
@@ -385,7 +405,7 @@ class _SearchScreenState extends State<SearchScreen> {
               tag: 'artist_${artist.id}',
               child: CircleAvatar(
                 radius: large ? 40 : 24,
-                backgroundImage: CachedNetworkImageProvider(artist.picture),
+                backgroundImage: NetworkImage(artist.picture),
               ),
             ),
             const SizedBox(width: 16),
@@ -416,6 +436,8 @@ class _SearchScreenState extends State<SearchScreen> {
       height: railHeight,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        primary: false,
         itemCount: artists.length,
         itemBuilder: (_, i) => Padding(
           padding: EdgeInsets.only(right: Responsive.spacing(context)),
@@ -427,7 +449,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 ))),
                 child: CircleAvatar(
                   radius: avatarRadius,
-                  backgroundImage: CachedNetworkImageProvider(artists[i].picture),
+                  backgroundImage: NetworkImage(artists[i].picture),
                 ),
               ),
               const SizedBox(height: 8),
@@ -477,7 +499,7 @@ class _SearchScreenState extends State<SearchScreen> {
                          decoration: BoxDecoration(
                            shape: BoxShape.circle,
                            image: DecorationImage(
-                             image: CachedNetworkImageProvider(artist.picture),
+                             image: NetworkImage(artist.picture),
                              fit: BoxFit.cover,
                            ),
                          ),
@@ -512,6 +534,8 @@ class _SearchScreenState extends State<SearchScreen> {
       child: ListView.builder(
         padding: const EdgeInsets.only(left: 0), 
         scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        primary: false,
         itemCount: albums.length,
         itemBuilder: (_, i) => Padding(
           padding: EdgeInsets.only(right: Responsive.spacing(context)),

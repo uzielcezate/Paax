@@ -100,6 +100,7 @@ class MiniPlayer extends StatelessWidget {
                           height: 48,
                           fit: BoxFit.cover,
                           borderRadius: 8,
+                          forceLoad: true,
                         ),
                       ),
                     ),

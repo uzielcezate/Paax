@@ -23,6 +23,7 @@ class MainWrapper extends StatefulWidget {
 class MainWrapperState extends State<MainWrapper> {
   int _currentIndex = 0;
   final List<int> _history = [];
+  PlaybackController? _playbackController;
   
   final List<GlobalKey<NavigatorState>> _navigatorKeys = [
     GlobalKey<NavigatorState>(),
@@ -90,6 +91,37 @@ class MainWrapperState extends State<MainWrapper> {
      if (_navigatorKeys[_currentIndex].currentState != null) {
        _navigatorKeys[_currentIndex].currentState!.push(route);
      }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final controller = context.read<PlaybackController>();
+    if (_playbackController != controller) {
+      _playbackController?.removeListener(_onPlaybackError);
+      _playbackController = controller;
+      _playbackController!.addListener(_onPlaybackError);
+    }
+  }
+
+  void _onPlaybackError() {
+    final msg = _playbackController?.errorMessage;
+    if (msg != null && mounted) {
+      _playbackController!.clearError();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: Colors.red.shade800,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _playbackController?.removeListener(_onPlaybackError);
+    super.dispose();
   }
 
   @override

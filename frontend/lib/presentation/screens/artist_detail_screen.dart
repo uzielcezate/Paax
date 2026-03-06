@@ -539,6 +539,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                    child: ListView.builder(
                      padding: EdgeInsets.only(left: Responsive.spacing(context)),
                      scrollDirection: Axis.horizontal,
+                     physics: const ClampingScrollPhysics(),
+                     primary: false,
                      itemCount: albums.length,
                      itemBuilder: (context, index) {
                        return _buildReleaseCard(context, albums[index], "Album", cardWidth);
@@ -563,6 +565,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                    child: ListView.builder(
                      padding: EdgeInsets.only(left: Responsive.spacing(context)),
                      scrollDirection: Axis.horizontal,
+                     physics: const ClampingScrollPhysics(),
+                     primary: false,
                      itemCount: singles.length,
                      itemBuilder: (context, index) {
                        return _buildReleaseCard(context, singles[index], "Single", cardWidth);
@@ -609,6 +613,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                  child: ListView.builder(
                    padding: EdgeInsets.only(left: Responsive.spacing(context)),
                    scrollDirection: Axis.horizontal,
+                   physics: const ClampingScrollPhysics(),
+                   primary: false,
                    itemCount: artists.length,
                    itemBuilder: (context, index) {
                      final artist = artists[index];
