@@ -431,6 +431,8 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       child: ListView.builder(
         padding: const EdgeInsets.only(left: 16),
         scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        primary: false,
         itemCount: _albums.length,
         itemBuilder: (context, index) {
           final album = _albums[index];
@@ -454,6 +456,8 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       child: ListView.builder(
         padding: const EdgeInsets.only(left: 16),
         scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        primary: false,
         itemCount: _artists.length,
         itemBuilder: (context, index) {
           final artist = _artists[index];

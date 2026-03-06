@@ -86,6 +86,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                    child: ListView.builder(
                      padding: const EdgeInsets.only(left: 20),
                      scrollDirection: Axis.horizontal,
+                     physics: const ClampingScrollPhysics(),
+                     primary: false,
                      itemCount: history.length,
                      itemBuilder: (context, index) {
                        final track = history[index];

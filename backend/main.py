@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 import os
 import json
 import tempfile
+import asyncio
+import datetime
 from cache import get_redis_client, make_cache_key, cache_get, cache_set
 from ytmusicapi.navigation import nav, SINGLE_COLUMN_TAB, SECTION_LIST_ITEM, GRID_ITEMS, GRID, CAROUSEL_CONTENTS
 from ytmusicapi.parsers.library import parse_albums
@@ -562,6 +564,99 @@ def get_watch_playlist(videoId: str = None, playlistId: str = None):
         return yt.get_watch_playlist(videoId=videoId, playlistId=playlistId)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Stream URL Resolver (used by mobile Flutter client via just_audio)
+# ---------------------------------------------------------------------------
+
+# In-memory cache: videoId -> {"url": str, "duration": int, "thumbnail": str, "expires_at": datetime}
+_stream_cache: Dict[str, Dict] = {}
+_STREAM_TTL_SECONDS = 600  # 10 minutes
+
+
+def _extract_stream_url(video_id: str) -> Dict:
+    """Blocking yt-dlp extraction — run via asyncio.to_thread."""
+    import yt_dlp  # type: ignore
+
+    ydl_opts = {
+        "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+    }
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if info is None:
+        raise ValueError(f"yt-dlp returned no info for {video_id}")
+
+    # Stream URL
+    stream_url: Optional[str] = info.get("url")
+    if not stream_url:
+        raise ValueError(f"No direct URL in yt-dlp info for {video_id}")
+
+    # Duration (seconds)
+    duration: int = int(info.get("duration") or 0)
+
+    # Best thumbnail
+    thumbnail: str = ""
+    thumbnails = info.get("thumbnails") or []
+    if thumbnails:
+        # yt-dlp lists thumbnails from smallest to largest — pick the last one
+        thumbnail = thumbnails[-1].get("url", "")
+    if not thumbnail:
+        thumbnail = info.get("thumbnail", "")
+
+    return {"url": stream_url, "duration": duration, "thumbnail": thumbnail}
+
+
+@app.get("/stream/{videoId}")
+async def get_stream_url(videoId: str):
+    """
+    Resolves a YouTube videoId to a direct audio stream URL.
+    Used exclusively by the Android/iOS Flutter client (just_audio).
+    Web client uses the YouTube IFrame API directly — do NOT call this from web.
+    """
+    # Cache hit?
+    cached = _stream_cache.get(videoId)
+    if cached and cached["expires_at"] > datetime.datetime.utcnow():
+        print(f"[Stream] CACHE HIT {videoId}")
+        return JSONResponse(content={
+            "url": cached["url"],
+            "duration": cached["duration"],
+            "thumbnail": cached["thumbnail"],
+        })
+
+    print(f"[Stream] Resolving {videoId} via yt-dlp …")
+    try:
+        result = await asyncio.to_thread(_extract_stream_url, videoId)
+    except Exception as e:
+        print(f"[Stream] ERROR resolving {videoId}: {e}")
+        raise HTTPException(status_code=502, detail=f"Stream resolve failed: {e}")
+
+    if not result.get("url"):
+        raise HTTPException(status_code=404, detail=f"No audio stream found for {videoId}")
+
+    # Store in cache
+    result["expires_at"] = datetime.datetime.utcnow() + datetime.timedelta(seconds=_STREAM_TTL_SECONDS)
+    _stream_cache[videoId] = result
+
+    # Prune stale entries (keep cache lean)
+    now = datetime.datetime.utcnow()
+    stale = [k for k, v in _stream_cache.items() if v["expires_at"] <= now]
+    for k in stale:
+        del _stream_cache[k]
+
+    print(f"[Stream] Resolved {videoId}: duration={result['duration']}s")
+    return JSONResponse(content={
+        "url": result["url"],
+        "duration": result["duration"],
+        "thumbnail": result["thumbnail"],
+    })
 
 # --- Library (Authenticated) ---
 

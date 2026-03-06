@@ -48,6 +48,10 @@ class AppImage extends StatefulWidget {
   /// Placeholder background color.
   final Color? placeholderColor;
 
+  /// When true, bypass the VisibilityDetector queue and load immediately.
+  /// Use this for artwork that is always visible on first paint (player screens).
+  final bool forceLoad;
+
   const AppImage({
     super.key,
     required this.url,
@@ -58,6 +62,7 @@ class AppImage extends StatefulWidget {
     this.fit = BoxFit.cover,
     this.isCircular = false,
     this.placeholderColor,
+    this.forceLoad = false,
   });
 
   @override
@@ -78,6 +83,10 @@ class _AppImageState extends State<AppImage> {
     super.initState();
     _visibilityKey = 'app_img_${widget.url.hashCode}_${DateTime.now().microsecondsSinceEpoch}';
     _sizedUrl = Lh3UrlBuilder.build(widget.url, widget.sizePx);
+    // For always-visible widgets (e.g. player artwork) skip the queue entirely.
+    if (widget.forceLoad && widget.url.isNotEmpty) {
+      _canLoad = true;
+    }
   }
 
   @override
@@ -95,9 +104,14 @@ class _AppImageState extends State<AppImage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url || oldWidget.sizePx != widget.sizePx) {
       // URL changed - reset state and recalculate
-      _canLoad = false;
       _hasError = false;
       _sizedUrl = Lh3UrlBuilder.build(widget.url, widget.sizePx);
+      if (widget.forceLoad && widget.url.isNotEmpty) {
+        // Stay loaded for force-load images; just update the URL.
+        _canLoad = true;
+      } else {
+        _canLoad = false;
+      }
       if (_requestId != null) {
         ImageRequestQueue.instance.cancel(_requestId!);
         _requestId = null;

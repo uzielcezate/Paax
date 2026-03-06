@@ -26,6 +26,8 @@ class LibraryChipTabs extends StatelessWidget implements PreferredSizeWidget {
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        primary: false,
         itemCount: tabs.length,
         separatorBuilder: (_, __) => const SizedBox(width: 10),
         itemBuilder: (context, index) {

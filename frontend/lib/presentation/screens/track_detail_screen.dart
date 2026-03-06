@@ -200,6 +200,8 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                   height: 200,
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    primary: false,
                     itemCount: tracks.length,
                     itemBuilder: (context, index) {
                       final t = tracks[index];

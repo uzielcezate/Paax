@@ -119,9 +119,16 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     Playlist? currentPlaylist;
     try {
       currentPlaylist = library.playlists.firstWhere((p) => p.id == widget.playlist.id);
-    } catch (e) {
-      // Playlist deleted
-      return const SizedBox(); 
+    } catch (_) {
+      // Playlist was deleted — navigate back on the next frame instead of
+      // rendering a blank SizedBox that leaves a dead route on the stack.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
+      });
+      // Return a neutral scaffold while the pop is pending (never actually shown)
+      return const Scaffold(backgroundColor: Colors.transparent);
     }
 
     final tracks = currentPlaylist.tracks;
@@ -443,19 +450,35 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   }
 
   void _confirmDelete(BuildContext context, LibraryController library, Playlist playlist) {
+    // Capture the detail screen's Navigator BEFORE opening the dialog.
+    // The dialog gets its own BuildContext; using that context for Navigator
+    // after the dialog is disposed causes errors or pops the wrong route.
+    final screenNavigator = Navigator.of(context);
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         backgroundColor: AppColors.surface,
         title: const Text("Delete Playlist?", style: TextStyle(color: Colors.white)),
         content: Text("Are you sure you want to delete '${playlist.name}'?", style: const TextStyle(color: Colors.grey)),
         actions: [
-          TextButton(onPressed: ()=>Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
-            onPressed: () {
-               library.deletePlaylist(playlist);
-               Navigator.pop(context); // Close dialog
-               Navigator.pop(context); // Close screen
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () async {
+              // Close dialog first so it's off the stack before we do async work.
+              Navigator.of(dialogContext).pop();
+
+              // Await so state is correct before navigation.
+              await library.deletePlaylist(playlist);
+
+              // Pop the detail screen.  popUntil is safe even if the screen
+              // was already popped by the build() fallback above.
+              if (screenNavigator.canPop()) {
+                screenNavigator.pop();
+              }
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
           ),
