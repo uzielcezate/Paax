@@ -7,12 +7,14 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'playback_engine.dart';
 
-/// In-memory cache entry: stream URL + expiry
-class _CacheEntry {
-  final String url;
-  final DateTime expiresAt;
-  _CacheEntry(this.url, this.expiresAt);
-  bool get isExpired => DateTime.now().isAfter(expiresAt);
+/// Typed exception thrown when the backend cannot resolve a playable stream URL.
+/// The [message] is already a safe, user-friendly string — never contains raw
+/// yt-dlp output, YouTube anti-bot text, or HTTP error codes.
+class _PlaybackResolveException implements Exception {
+  final String message;
+  const _PlaybackResolveException(this.message);
+  @override
+  String toString() => message;
 }
 
 /// Native-platform playback engine shared by **Android and iOS**.
@@ -33,9 +35,6 @@ class _CacheEntry {
 /// - Becoming-noisy events (headphone unplug) pause audio.
 class PlaybackEngineImpl implements PlaybackEngine {
   final _player = AudioPlayer();
-
-  // 10-minute TTL cache: videoId -> stream URL
-  final _urlCache = <String, _CacheEntry>{};
 
   // Broadcast controllers to match interface contract
   final _completionController = StreamController<void>.broadcast();
@@ -106,57 +105,64 @@ class PlaybackEngineImpl implements PlaybackEngine {
     );
   }
 
-  /// Resolves a YouTube videoId to a direct streaming URL via the backend.
-  /// Results are cached for 10 minutes to avoid redundant fetches.
-  /// Retries once after 2 s on any transient failure (timeout, 5xx, etc.).
+  /// Friendly messages shown to the user for each backend error code.
+  /// Never shows raw HTTP errors, yt-dlp text, or YouTube bot messages.
+  static const _kErrorMessages = {
+    'BOT_CHECK':      'This track is temporarily unavailable.',
+    'GEO_BLOCKED':    'This track is not available in your region.',
+    'UNAVAILABLE':    'This track is no longer available.',
+    'RESOLVE_FAILED': 'Playback is not available right now.',
+    'NETWORK_ERROR':  'Check your connection and try again.',
+  };
+
+  /// Resolves a YouTube videoId to a playable stream URL via the centralized
+  /// backend endpoint `/playback/resolve`.
+  ///
+  /// The backend owns all caching (Redis + in-memory) and all retry logic.
+  /// On failure, throws a [_PlaybackResolveException] with a safe user-facing
+  /// message — the raw YouTube / yt-dlp error never reaches the client.
   Future<String> _resolveStreamUrl(String videoId) async {
-    final cached = _urlCache[videoId];
-    if (cached != null && !cached.isExpired) {
-      return cached.url;
-    }
+    final uri = Uri.parse(
+        '${ApiConfig.baseUrl}/playback/resolve?videoId=${Uri.encodeComponent(videoId)}');
+    debugPrint('[PlaybackEngine] → /playback/resolve?videoId=$videoId');
 
-    // Inner helper — one attempt at resolution.
-    Future<String> attempt() async {
-      final uri = Uri.parse('${ApiConfig.baseUrl}/stream/$videoId');
-      debugPrint('[PlaybackEngine] Resolving stream for $videoId …');
-
-      // 45 s: yt-dlp cold-start on Railway can take up to ~35 s.
-      final response =
-          await http.get(uri).timeout(const Duration(seconds: 45));
-
-      if (response.statusCode != 200) {
-        final reason = 'HTTP ${response.statusCode}: ${response.body}';
-        debugPrint('[PlaybackEngine] Stream resolve failed [$videoId]: $reason');
-        throw Exception('Stream resolve failed [$reason]');
-      }
-
-      final body = json.decode(response.body);
-      final url = body['url'] as String?;
-      if (url == null || url.isEmpty) {
-        debugPrint('[PlaybackEngine] Backend returned empty URL for $videoId');
-        throw Exception('Backend returned empty stream URL for $videoId');
-      }
-
-      debugPrint('[PlaybackEngine] Resolved $videoId → ${url.substring(0, url.length.clamp(0, 80))}…');
-      return url;
-    }
-
-    // First attempt.
+    // 95 s: backend retries 3× with backoff (up to ~50 s) before responding.
+    late final http.Response response;
     try {
-      final url = await attempt();
-      _urlCache[videoId] =
-          _CacheEntry(url, DateTime.now().add(const Duration(minutes: 10)));
-      return url;
-    } catch (firstError) {
-      debugPrint('[PlaybackEngine] First attempt failed for $videoId: $firstError — retrying in 2 s…');
+      response = await http.get(uri).timeout(const Duration(seconds: 95));
+    } on Exception catch (e) {
+      debugPrint('[PlaybackEngine] Network error for $videoId: $e');
+      throw _PlaybackResolveException(
+          _kErrorMessages['NETWORK_ERROR']!);
     }
 
-    // One retry after a short pause.
-    await Future.delayed(const Duration(seconds: 2));
-    final url = await attempt(); // let any second failure propagate to caller
-    _urlCache[videoId] =
-        _CacheEntry(url, DateTime.now().add(const Duration(minutes: 10)));
-    return url;
+    // Always 200 — backend returns ok:false instead of 4xx/5xx for resolve errors.
+    late final Map<String, dynamic> body;
+    try {
+      body = json.decode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      debugPrint('[PlaybackEngine] Malformed JSON from /playback/resolve for $videoId');
+      throw _PlaybackResolveException(
+          _kErrorMessages['RESOLVE_FAILED']!);
+    }
+
+    final ok = body['ok'] as bool? ?? false;
+    if (!ok) {
+      final code = (body['errorCode'] as String?) ?? 'RESOLVE_FAILED';
+      final msg = _kErrorMessages[code] ?? _kErrorMessages['RESOLVE_FAILED']!;
+      debugPrint('[PlaybackEngine] Resolve failed [$videoId]: code=$code');
+      throw _PlaybackResolveException(msg);
+    }
+
+    final streamUrl = body['streamUrl'] as String?;
+    if (streamUrl == null || streamUrl.isEmpty) {
+      debugPrint('[PlaybackEngine] ok=true but empty streamUrl for $videoId');
+      throw _PlaybackResolveException(_kErrorMessages['RESOLVE_FAILED']!);
+    }
+
+    final cached = body['cached'] as bool? ?? false;
+    debugPrint('[PlaybackEngine] Resolved $videoId (cached=$cached)');
+    return streamUrl;
   }
 
   @override
