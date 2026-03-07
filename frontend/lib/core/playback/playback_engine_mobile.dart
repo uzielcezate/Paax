@@ -132,16 +132,41 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // Stream resolution
   // -------------------------------------------------------------------------
 
+  // ── Playable container whitelist ─────────────────────────────────────────
+  // just_audio on Android (ExoPlayer) and iOS (AVPlayer) reliably handles
+  // direct mp4/m4a AAC streams. webm/Opus containers are NOT reliably
+  // supported via HttpAudioSource on either platform and cause:
+  //   Android → PlayerException (0) Source error
+  //   iOS     → Connection aborted / AVPlayer item failed
+  //
+  // We therefore apply a strict whitelist: only streams whose MIME type or
+  // container name indicates an mp4/m4a/aac container are eligible.
+  // webm, opus, and any unrecognised container are explicitly excluded.
+  // If no whitelisted stream exists for a video, we fail fast with a clear
+  // user-facing message rather than forwarding an incompatible source.
+  static bool _isMp4Compatible(AudioOnlyStreamInfo s) {
+    final mime = s.codec.mimeType.toLowerCase();
+    final container = s.container.name.toLowerCase();
+    // Accept: audio/mp4 · audio/m4a · audio/aac · container "mp4"
+    // Reject: audio/webm · audio/opus · container "webm" · anything else
+    return mime.contains('mp4') ||
+        mime.contains('m4a') ||
+        mime.contains('aac') ||
+        container == 'mp4';
+  }
+
   /// Resolves a YouTube [videoId] to a playable audio stream URL **on-device**
   /// using [youtube_explode_dart] — no backend call is made.
   ///
-  /// Stream selection priority (best Android ExoPlayer / iOS AVPlayer compat):
-  ///   1. Audio-only m4a/AAC  — most compatible, lowest bot-detection risk
-  ///   2. Audio-only webm/Opus — widely available fallback
-  ///   3. Any audio-only stream — last resort before failing
+  /// Only mp4/m4a/AAC streams are considered (see [_isMp4Compatible]).
+  /// webm/Opus streams are **never** selected — they are incompatible with
+  /// just_audio's HttpAudioSource on Android ExoPlayer and iOS AVPlayer.
   ///
-  /// Within each tier the highest-bitrate stream is chosen.
-  /// Throws [_PlaybackResolveException] with a safe user-facing message on any failure.
+  /// Within the compatible set the highest-bitrate stream is chosen.
+  /// Throws [_PlaybackResolveException] with a friendly message if:
+  ///   - The manifest fetch fails
+  ///   - No audio streams exist at all
+  ///   - No *compatible* audio stream is found (all are webm/opus)
   Future<({String url, String codec, String container, int bitrateKbps})>
       _resolveStream(String videoId) async {
     final yt = YoutubeExplode();
@@ -158,8 +183,9 @@ class PlaybackEngineImpl implements PlaybackEngine {
           '[PlaybackEngine] Found ${audioStreams.length} audio-only streams for $videoId',
         );
         for (final s in audioStreams) {
+          final compat = _isMp4Compatible(s) ? '✓ mp4-compat' : '✗ skip';
           debugPrint(
-            '  • ${s.codec.mimeType} | ${s.container.name} | '
+            '  $compat  ${s.codec.mimeType} | ${s.container.name} | '
             '${(s.bitrate.bitsPerSecond / 1000).round()} kbps',
           );
         }
@@ -170,31 +196,24 @@ class PlaybackEngineImpl implements PlaybackEngine {
         throw Exception('no audio streams');
       }
 
-      // ── Tier 1: m4a / AAC ──────────────────────────────────────────────
-      final m4aStreams = audioStreams
-          .where((s) =>
-              s.codec.mimeType.contains('mp4') ||
-              s.codec.mimeType.contains('m4a'))
+      // ── Whitelist: only mp4/m4a/AAC containers ────────────────────────
+      // webm/Opus is intentionally excluded — see _isMp4Compatible().
+      final compatibleStreams = audioStreams
+          .where(_isMp4Compatible)
           .toList()
         ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
 
-      // ── Tier 2: webm / Opus ────────────────────────────────────────────
-      final webmStreams = audioStreams
-          .where((s) =>
-              s.codec.mimeType.contains('webm') ||
-              s.codec.mimeType.contains('opus'))
-          .toList()
-        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      if (compatibleStreams.isEmpty) {
+        // All available streams are webm/opus — unsupported by just_audio.
+        // Log the formats found so developers know what YouTube returned.
+        debugPrint(
+          '[PlaybackEngine] ✗ No mp4-compatible stream for $videoId. '
+          'Available: ${audioStreams.map((s) => s.codec.mimeType).join(', ')}',
+        );
+        throw Exception('no compatible audio format');
+      }
 
-      // ── Tier 3: any audio-only ─────────────────────────────────────────
-      final allSorted = audioStreams.toList()
-        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
-
-      final chosen = m4aStreams.isNotEmpty
-          ? m4aStreams.first
-          : webmStreams.isNotEmpty
-              ? webmStreams.first
-              : allSorted.first;
+      final chosen = compatibleStreams.first;
 
       final resolvedUrl = chosen.url.toString();
       final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
