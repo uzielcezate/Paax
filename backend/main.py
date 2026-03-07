@@ -575,56 +575,103 @@ _stream_cache: Dict[str, Dict] = {}
 _STREAM_TTL_SECONDS = 600  # 10 minutes
 
 
-def _extract_stream_url(video_id: str) -> Dict:
-    """Blocking yt-dlp extraction — run via asyncio.to_thread."""
-    import yt_dlp  # type: ignore
+# Common yt-dlp options reused across all format attempts.
+_YDL_BASE_OPTS: Dict = {
+    "quiet": True,
+    "no_warnings": True,
+    "skip_download": True,
+    "noplaylist": True,
+    # Browser-like User-Agent reduces YouTube bot detection.
+    "http_headers": {
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 10; K) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Mobile Safari/537.36"
+        ),
+    },
+}
 
-    ydl_opts = {
-        # Prefer m4a (AAC) first — best ExoPlayer/AVPlayer compatibility on Android/iOS.
-        # Opus/WebM is technically supported but YouTube throttles/blocks it more
-        # aggressively when fetched by non-browser user-agents.
-        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-        # Use a browser-like User-Agent so YouTube doesn't flag the request as a bot.
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Linux; Android 10; K) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Mobile Safari/537.36"
-            ),
-        },
-        # Skip YouTube's cookie/consent check — speeds up resolution ~2-3s.
-        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
-    }
+# Format fallback chain — tried in order from most-preferred to least.
+# Each entry is (label, format_string) so logs identify which tier succeeded.
+_FORMAT_FALLBACKS = [
+    # Tier 1: m4a / AAC — best Android ExoPlayer / iOS AVPlayer compatibility.
+    ("m4a",      "bestaudio[ext=m4a]/bestaudio[ext=mp4][vcodec=none]"),
+    # Tier 2: webm / Opus — widely available; slightly more bot-checked.
+    ("webm",     "bestaudio[ext=webm]/bestaudio[ext=opus]"),
+    # Tier 3: any bestaudio — lets yt-dlp pick the highest-quality audio track.
+    ("bestaudio","bestaudio"),
+    # Tier 4: dynamic scan — inspect all formats and pick best audio-capable stream.
+    # acodec != none filters out video-only streams.
+    ("dynamic",  "bestaudio[acodec!=none]/best[acodec!=none]"),
+]
 
+
+def _extract_with_format(video_id: str, label: str, fmt: str) -> Dict:
+    """
+    Single blocking yt-dlp extraction attempt for one format string.
+    Raises on any failure so callers can try the next format.
+    """
+    import yt_dlp  # type: ignore  # noqa: PLC0415
+
+    opts = {**_YDL_BASE_OPTS, "format": fmt}
     url = f"https://www.youtube.com/watch?v={video_id}"
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    if info is None:
-        raise ValueError(f"yt-dlp returned no info for {video_id}")
+    if not info:
+        raise ValueError(f"[{label}] yt-dlp returned no info")
 
-    # Stream URL
     stream_url: Optional[str] = info.get("url")
     if not stream_url:
-        raise ValueError(f"No direct URL in yt-dlp info for {video_id}")
+        raise ValueError(f"[{label}] no direct URL in yt-dlp info")
 
-    # Duration (seconds)
     duration: int = int(info.get("duration") or 0)
 
-    # Best thumbnail
     thumbnail: str = ""
     thumbnails = info.get("thumbnails") or []
     if thumbnails:
-        # yt-dlp lists thumbnails from smallest to largest — pick the last one
         thumbnail = thumbnails[-1].get("url", "")
     if not thumbnail:
         thumbnail = info.get("thumbnail", "")
 
-    return {"url": stream_url, "duration": duration, "thumbnail": thumbnail}
+    return {"url": stream_url, "duration": duration, "thumbnail": thumbnail,
+            "format_label": label}
+
+
+def _extract_with_format_fallback(video_id: str) -> Dict:
+    """
+    Try each format in _FORMAT_FALLBACKS in order.
+    Returns on the first success; raises the LAST exception only when all fail.
+    Handles the critical distinction:
+      - FORMAT_UNAVAILABLE  → this format doesn't exist for the video (keep trying)
+      - VIDEO_UNAVAILABLE   → the video itself is gone/private (stop immediately)
+      - BOT_CHECK / GEO_BLOCKED → external block (stop immediately)
+    """
+    last_exc: Exception = RuntimeError("no formats attempted")
+    permanent_codes = {"VIDEO_UNAVAILABLE", "BOT_CHECK", "GEO_BLOCKED"}
+
+    for label, fmt in _FORMAT_FALLBACKS:
+        try:
+            result = _extract_with_format(video_id, label, fmt)
+            print(f"[Resolver] {video_id}: SUCCESS via '{label}' format")
+            return result
+        except Exception as exc:
+            last_exc = exc
+            code = _classify_yt_error(exc)
+            print(f"[Resolver] {video_id}: '{label}' failed ({code}) — trying next format")
+
+            # Permanent errors: no point trying more formats
+            if code in permanent_codes:
+                print(f"[Resolver] {video_id}: permanent error '{code}' — aborting fallback chain")
+                raise exc
+
+            # FORMAT_UNAVAILABLE / RESOLVE_FAILED: continue to next format tier
+            continue
+
+    # All formats exhausted
+    print(f"[Resolver] {video_id}: all format fallbacks exhausted")
+    raise last_exc
 
 
 @app.get("/stream/{videoId}")
@@ -677,57 +724,109 @@ async def get_stream_url(videoId: str):
 # Playback Resolution — centralized endpoint for Flutter mobile client
 # ---------------------------------------------------------------------------
 # Error code taxonomy returned to the frontend.
+# FORMAT_UNAVAILABLE is internal-only — frontend never sees this code;
+# it is remapped to RESOLVE_FAILED in resolve_playback().
 _PLAYBACK_ERROR_MESSAGES: Dict[str, str] = {
-    "BOT_CHECK":      "Track temporarily unavailable",
-    "GEO_BLOCKED":    "Track not available in your region",
-    "UNAVAILABLE":    "Track is no longer available",
-    "RESOLVE_FAILED": "Playback is not available right now",
-    "NETWORK_ERROR":  "Check your connection and try again",
+    "BOT_CHECK":          "Track temporarily unavailable",
+    "GEO_BLOCKED":        "Track not available in your region",
+    "VIDEO_UNAVAILABLE":  "This track is no longer available",
+    "FORMAT_UNAVAILABLE": "Playback is not available right now",
+    "RESOLVE_FAILED":     "Playback is not available right now",
+    "NETWORK_ERROR":      "Check your connection and try again",
 }
 
 # Redis cache key prefix for resolved stream URLs.
 _RESOLVE_CACHE_PREFIX = "playback_resolve"
-_RESOLVE_TTL = 600  # 10 minutes (matching _STREAM_TTL_SECONDS)
+_RESOLVE_TTL = 600  # 10 minutes
 
 
 def _classify_yt_error(exc: Exception) -> str:
     """
-    Map a raw yt-dlp / network exception to a stable frontend error code.
-    Never leaks raw error text — only returns one of the defined codes.
+    Map a raw yt-dlp / network exception to a stable backend error code.
+    Raw error text is NEVER forwarded to the frontend.
+
+    Classification priority (most specific → least specific):
+      BOT_CHECK        — YouTube rate-limit / anti-bot block
+      GEO_BLOCKED      — geographic restriction (403 + country keywords)
+      VIDEO_UNAVAILABLE— video is gone, private, or age-restricted
+      FORMAT_UNAVAILABLE — requested format doesn't exist for this video
+      NETWORK_ERROR    — transient network / timeout
+      RESOLVE_FAILED   — catch-all
     """
     msg = str(exc).lower()
-    if any(p in msg for p in ("sign in to confirm", "confirm you're not a bot", "bot", "429")):
+
+    # Bot / rate-limit — most actionable, check first
+    if any(p in msg for p in (
+        "sign in to confirm", "confirm you're not a bot",
+        "please sign in", "429", "too many requests",
+    )):
         return "BOT_CHECK"
-    if any(p in msg for p in ("not available in your country", "geo", "country", "403")):
+
+    # Geographic restriction — 403 alone is too broad; require a country signal
+    if any(p in msg for p in (
+        "not available in your country", "geo-restricted",
+        "geo_restricted", "georestricted",
+    )) or ("403" in msg and "country" in msg):
         return "GEO_BLOCKED"
-    if any(p in msg for p in ("video unavailable", "removed", "private", "not available")):
-        return "UNAVAILABLE"
-    if any(p in msg for p in ("network", "connection", "timeout", "timed out")):
+
+    # Video truly gone / private / age-locked — video-level, not format-level
+    if any(p in msg for p in (
+        "video unavailable", "this video is unavailable",
+        "has been removed", "account has been terminated",
+        "private video", "members-only", "age-restricted",
+    )):
+        return "VIDEO_UNAVAILABLE"
+
+    # Format-level failure — the video exists but the requested format doesn't
+    if any(p in msg for p in (
+        "requested format", "no video formats", "format is not available",
+        "no direct url", "yt-dlp returned no info", "no formats",
+    )):
+        return "FORMAT_UNAVAILABLE"
+
+    # Transient network
+    if any(p in msg for p in (
+        "network", "connection", "timed out", "timeout", "urlopen error",
+    )):
         return "NETWORK_ERROR"
+
     return "RESOLVE_FAILED"
 
 
 async def _resolve_stream_with_retry(video_id: str) -> Dict:
     """
-    Run _extract_stream_url with up to 3 attempts and exponential backoff.
-    Raises a dict with {errorCode, message} on all-failure.
-    Returns {url, duration, thumbnail} on success.
+    Drive the multi-format fallback chain (_extract_with_format_fallback)
+    with up to 2 full retries on transient / format errors.
+
+    Retry policy:
+      - Permanent errors (VIDEO_UNAVAILABLE, BOT_CHECK, GEO_BLOCKED):
+        abort immediately — retrying never helps.
+      - Transient errors (FORMAT_UNAVAILABLE, NETWORK_ERROR, RESOLVE_FAILED):
+        retry with exponential backoff (1 s, 2 s).
+
+    The format-fallback chain inside _extract_with_format_fallback already
+    tries m4a → webm → bestaudio → dynamic before raising, so a single call
+    here represents a full multi-format attempt.
     """
+    permanent_codes = {"VIDEO_UNAVAILABLE", "BOT_CHECK", "GEO_BLOCKED"}
     delays = [1, 2]  # seconds between attempt 1→2 and 2→3
     last_exc: Exception = RuntimeError("unknown")
 
     for attempt in range(3):
         try:
-            result = await asyncio.to_thread(_extract_stream_url, video_id)
+            result = await asyncio.to_thread(_extract_with_format_fallback, video_id)
             return result
         except Exception as exc:
             last_exc = exc
             code = _classify_yt_error(exc)
-            print(f"[Resolve] Attempt {attempt + 1}/3 failed for {video_id}: {code} — {exc}")
+            print(
+                f"[Resolve] Full attempt {attempt + 1}/3 failed for {video_id}: "
+                f"{code}"
+            )
 
-            # Don't retry bot-checks or permanent unavailability
-            if code in ("BOT_CHECK", "GEO_BLOCKED", "UNAVAILABLE"):
-                raise exc  # skip remaining retries
+            if code in permanent_codes:
+                print(f"[Resolve] Permanent failure for {video_id} ({code}) — not retrying")
+                raise exc
 
             if attempt < len(delays):
                 await asyncio.sleep(delays[attempt])
