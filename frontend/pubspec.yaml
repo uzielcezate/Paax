@@ -52,6 +52,7 @@ dependencies:
   rxdart: ^0.28.0
   share_plus: ^10.0.0
   visibility_detector: ^0.4.0+2
+  youtube_explode_dart: ^2.2.0
 
 dev_dependencies:
   flutter_test:

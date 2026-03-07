@@ -1,15 +1,13 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
-import 'package:beaty/core/config/api_config.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'playback_engine.dart';
 
-/// Typed exception thrown when the backend cannot resolve a playable stream URL.
-/// The [message] is already a safe, user-friendly string — never contains raw
-/// yt-dlp output, YouTube anti-bot text, or HTTP error codes.
+/// Typed exception thrown when on-device stream resolution fails.
+/// [message] is already a safe, user-friendly string — never exposes raw errors.
 class _PlaybackResolveException implements Exception {
   final String message;
   const _PlaybackResolveException(this.message);
@@ -105,65 +103,71 @@ class PlaybackEngineImpl implements PlaybackEngine {
     );
   }
 
-  /// Friendly messages shown to the user for each backend error code.
-  /// Never shows raw HTTP errors, yt-dlp text, or YouTube bot messages.
-  static const _kErrorMessages = {
-    'BOT_CHECK':      'This track is temporarily unavailable.',
-    'GEO_BLOCKED':    'This track is not available in your region.',
-    'UNAVAILABLE':    'This track is no longer available.',
-    'RESOLVE_FAILED': 'Playback is not available right now.',
-    'NETWORK_ERROR':  'Check your connection and try again.',
-  };
-
-  /// Resolves a YouTube videoId to a playable stream URL via the centralized
-  /// backend endpoint `/playback/resolve`.
+  /// Resolves a YouTube [videoId] to a playable audio stream URL **on-device**
+  /// using [youtube_explode_dart] — no backend call is made.
   ///
-  /// The backend owns all caching (Redis + in-memory) and all retry logic.
-  /// On failure, throws a [_PlaybackResolveException] with a safe user-facing
-  /// message — the raw YouTube / yt-dlp error never reaches the client.
+  /// Stream selection priority (best Android ExoPlayer / iOS AVPlayer compat):
+  ///   1. Audio-only m4a/AAC  — most compatible, lowest bot-detection risk
+  ///   2. Audio-only webm/Opus — widely available fallback
+  ///   3. Any audio-only stream — last resort before failing
+  ///
+  /// Within each tier the highest-bitrate stream is chosen.
+  /// Throws [_PlaybackResolveException] with a safe user-facing message on any failure.
   Future<String> _resolveStreamUrl(String videoId) async {
-    final uri = Uri.parse(
-        '${ApiConfig.baseUrl}/playback/resolve?videoId=${Uri.encodeComponent(videoId)}');
-    debugPrint('[PlaybackEngine] → /playback/resolve?videoId=$videoId');
-
-    // 95 s: backend retries 3× with backoff (up to ~50 s) before responding.
-    late final http.Response response;
+    final yt = YoutubeExplode();
     try {
-      response = await http.get(uri).timeout(const Duration(seconds: 95));
-    } on Exception catch (e) {
-      debugPrint('[PlaybackEngine] Network error for $videoId: $e');
-      throw _PlaybackResolveException(
-          _kErrorMessages['NETWORK_ERROR']!);
-    }
+      debugPrint('[PlaybackEngine] Resolving stream on-device for $videoId');
 
-    // Always 200 — backend returns ok:false instead of 4xx/5xx for resolve errors.
-    late final Map<String, dynamic> body;
-    try {
-      body = json.decode(response.body) as Map<String, dynamic>;
-    } catch (_) {
-      debugPrint('[PlaybackEngine] Malformed JSON from /playback/resolve for $videoId');
-      throw _PlaybackResolveException(
-          _kErrorMessages['RESOLVE_FAILED']!);
-    }
+      final manifest = await yt.videos.streamsClient.getManifest(videoId);
+      final audioStreams = manifest.audioOnly;
 
-    final ok = body['ok'] as bool? ?? false;
-    if (!ok) {
-      final code = (body['errorCode'] as String?) ?? 'RESOLVE_FAILED';
-      final msg = _kErrorMessages[code] ?? _kErrorMessages['RESOLVE_FAILED']!;
-      debugPrint('[PlaybackEngine] Resolve failed [$videoId]: code=$code');
-      throw _PlaybackResolveException(msg);
-    }
+      if (audioStreams.isEmpty) {
+        debugPrint('[PlaybackEngine] No audio-only streams for $videoId');
+        throw Exception('no audio streams');
+      }
 
-    final streamUrl = body['streamUrl'] as String?;
-    if (streamUrl == null || streamUrl.isEmpty) {
-      debugPrint('[PlaybackEngine] ok=true but empty streamUrl for $videoId');
-      throw _PlaybackResolveException(_kErrorMessages['RESOLVE_FAILED']!);
-    }
+      // ── Tier 1: m4a / AAC ──────────────────────────────────────────────
+      final m4aStreams = audioStreams
+          .where((s) => s.codec.mimeType.contains('mp4') ||
+                        s.codec.mimeType.contains('m4a'))
+          .toList()
+        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
 
-    final cached = body['cached'] as bool? ?? false;
-    debugPrint('[PlaybackEngine] Resolved $videoId (cached=$cached)');
-    return streamUrl;
+      // ── Tier 2: webm / Opus ────────────────────────────────────────────
+      final webmStreams = audioStreams
+          .where((s) => s.codec.mimeType.contains('webm') ||
+                        s.codec.mimeType.contains('opus'))
+          .toList()
+        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+
+      // ── Tier 3: any audio-only ─────────────────────────────────────────
+      final allSorted = audioStreams.toList()
+        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+
+      final chosen = m4aStreams.isNotEmpty
+          ? m4aStreams.first
+          : webmStreams.isNotEmpty
+              ? webmStreams.first
+              : allSorted.first;
+
+      if (kDebugMode) {
+        debugPrint(
+          '[PlaybackEngine] Resolved $videoId → '
+          'codec=${chosen.codec.mimeType} '
+          'bitrate=${chosen.bitrate} '
+          'container=${chosen.container.name}',
+        );
+      }
+
+      return chosen.url.toString();
+    } catch (e) {
+      debugPrint('[PlaybackEngine] Resolution failed for $videoId: $e');
+      throw const _PlaybackResolveException('This track is temporarily unavailable.');
+    } finally {
+      yt.close();
+    }
   }
+
 
   @override
   Future<void> load(String videoId) async {
