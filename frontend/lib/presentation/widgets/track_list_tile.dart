@@ -61,7 +61,7 @@ class TrackListTile extends StatelessWidget {
         ),
       ),
       subtitle: Text(
-        track.artistName,
+        track.displayArtist,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(color: Colors.grey, fontSize: fontSizeSubtitle),

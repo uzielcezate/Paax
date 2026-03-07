@@ -580,11 +580,24 @@ def _extract_stream_url(video_id: str) -> Dict:
     import yt_dlp  # type: ignore
 
     ydl_opts = {
-        "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
+        # Prefer m4a (AAC) first — best ExoPlayer/AVPlayer compatibility on Android/iOS.
+        # Opus/WebM is technically supported but YouTube throttles/blocks it more
+        # aggressively when fetched by non-browser user-agents.
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
+        # Use a browser-like User-Agent so YouTube doesn't flag the request as a bot.
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 10; K) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Mobile Safari/537.36"
+            ),
+        },
+        # Skip YouTube's cookie/consent check — speeds up resolution ~2-3s.
+        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
     }
 
     url = f"https://www.youtube.com/watch?v={video_id}"

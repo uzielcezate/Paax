@@ -253,7 +253,7 @@ class _HomeScreenState extends State<HomeScreen> {
               return MusicCard(
                 width: cardWidth,
                 title: track.title,
-                subtitle: track.artistName,
+                subtitle: track.displayArtist,
                 imageUrl: track.artworkUrl,
                 onTap: () {
                    // Play single track or album context

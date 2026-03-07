@@ -133,7 +133,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                 child: Column(
                   children: [
                     Text(widget.track.title, style: Theme.of(context).textTheme.headlineSmall, textAlign: TextAlign.center),
-                    Text(widget.track.artistName, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: AppColors.textSecondary)),
+                    Text(widget.track.displayArtist, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: AppColors.textSecondary)),
                     const SizedBox(height: 32),
             
             Row(
@@ -207,7 +207,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                       final t = tracks[index];
                       return MusicCard(
                         title: t.title, 
-                        subtitle: t.artistName, 
+                        subtitle: t.displayArtist, 
                         imageUrl: t.artworkUrl, 
                         onTap: () {
                            // Navigate to new track detail
