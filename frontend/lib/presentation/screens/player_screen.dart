@@ -133,19 +133,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   GestureDetector(
-                                    onTap: () { 
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () {
                                        if (track.albumId.isNotEmpty) {
-                                          Navigator.push(context, MaterialPageRoute(
-                                             builder: (_) => AlbumDetailScreen(
-                                                album: SavedAlbum(
-                                                   albumId: track.albumId, 
-                                                   title: track.albumTitle.isNotEmpty ? track.albumTitle : track.title + " Album", 
-                                                   artworkUrl: track.artworkUrl,
-                                                   artistName: track.artistName,
-                                                   artistId: track.artistId ?? '',
-                                                )
-                                             )
-                                          ));
+                                          // Close the full-screen player first
+                                          Navigator.pop(context);
+                                          // Push onto current tab's nested navigator — keeps bottom nav visible
+                                          MainWrapper.shellKey.currentState?.navigateTo(
+                                             MaterialPageRoute(
+                                               builder: (_) => AlbumDetailScreen(
+                                                  album: SavedAlbum(
+                                                     albumId: track.albumId,
+                                                     title: track.albumTitle.isNotEmpty
+                                                         ? track.albumTitle
+                                                         : '${track.title} Album',
+                                                     artworkUrl: track.artworkUrl,
+                                                     artistName: track.artistName,
+                                                     artistId: track.artistId ?? '',
+                                                  ),
+                                               ),
+                                             ),
+                                          );
                                        }
                                     },
                                     child: Text(
@@ -159,81 +167,49 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                       overflow: TextOverflow.ellipsis
                                     ),
                                   ),
-                                  const SizedBox(height: 4),
-                                  // Artist(s)
-                                  if (track.artists != null && track.artists!.isNotEmpty)
-                                     SingleChildScrollView(
-                                        scrollDirection: Axis.horizontal,
-                                        child: Row(
-                                           children: track.artists!.map((artist) {
-                                               final isLast = artist == track.artists!.last;
-                                               return Row(
-                                                  children: [
-                                                     GestureDetector(
-                                                        onTap: () {
-                                                            // Guard against placeholder artist
-                                                            if (isPlaceholderArtist(artist['name'])) return;
+                                   const SizedBox(height: 4),
+                                  // Artist(s) — tappable, navigates to primary artist profile
+                                  GestureDetector(
+                                     behavior: HitTestBehavior.opaque,
+                                     onTap: () {
+                                        // Primary artist = first entry in structured list, else fallback
+                                        final firstArtist = (track.artists != null && track.artists!.isNotEmpty)
+                                            ? track.artists!.first
+                                            : null;
+                                        final artistId   = (firstArtist?['id'] ?? track.artistId ?? '').toString();
+                                        final artistName = (firstArtist?['name'] ?? track.artistName);
 
-                                                            if (artist['id'] != null && artist['id']!.isNotEmpty) {
-                                                                Navigator.pop(context); // Close Player
-                                                                MainWrapper.shellKey.currentState?.navigateTo(
-                                                                   MaterialPageRoute(
-                                                                      builder: (_) => ArtistDetailScreen(
-                                                                          artistId: artist['id']!,
-                                                                          artistName: artist['name'] ?? 'Artist',
-                                                                          pictureUrl: '', // FIX: Empty to force fetch
-                                                                      )
-                                                                   )
-                                                                );
-                                                            }
-                                                        },
-                                                        child: Text(
-                                                            artist['name'] ?? '',
-                                                            style: TextStyle(
-                                                              fontSize: Responsive.fontSize(context, 18, min: 14, max: 18), 
-                                                              color: Colors.white
-                                                            ),
-                                                        ),
-                                                     ),
-                                                     if (!isLast)
-                                                        Text(" • ", style: TextStyle(
-                                                          fontSize: Responsive.fontSize(context, 18, min: 14, max: 18), 
-                                                          color: Colors.white
-                                                        )),
-                                                  ],
-                                               );
-                                           }).toList(),
-                                        ),
-                                     )
-                                  else
-                                    GestureDetector(
-                                       onTap: () { 
-                                          // Guard against placeholder artist
-                                          if (isPlaceholderArtist(track.artistName)) return;
+                                        // Guard: don't navigate for placeholder compilations
+                                        if (isPlaceholderArtist(artistName)) return;
 
-                                          if (track.artistId != null && track.artistId!.isNotEmpty) {
-                                              Navigator.pop(context); // Close Player
-                                              MainWrapper.shellKey.currentState?.navigateTo(
-                                                 MaterialPageRoute(
-                                                   builder: (_) => ArtistDetailScreen(
-                                                      artistId: track.artistId!,
-                                                      artistName: track.artistName,
-                                                      pictureUrl: '', // FIX: Empty prevents using track artwork
-                                                   )
-                                                 )
-                                              );
-                                          }
-                                       },
-                                       child: Text(
-                                         track.artistName, 
-                                         style: TextStyle(
-                                           fontSize: Responsive.fontSize(context, 18, min: 14, max: 18), 
-                                           color: Colors.white
-                                         ), 
-                                         maxLines: 1, 
-                                         overflow: TextOverflow.ellipsis
+                                        // Close the full-screen player first
+                                        Navigator.pop(context);
+
+                                        // Push onto current tab's navigator — keeps bottom nav visible
+                                        MainWrapper.shellKey.currentState?.navigateTo(
+                                           MaterialPageRoute(
+                                             builder: (_) => ArtistDetailScreen(
+                                                // If id is known, pass it directly.
+                                                // If empty, pass sourceTrack so ArtistDetailScreen
+                                                // can resolve the real artistId via getTrack().
+                                                artistId:   artistId,
+                                                artistName: artistName,
+                                                pictureUrl: '',
+                                                sourceTrack: artistId.isEmpty ? track : null,
+                                             ),
+                                           ),
+                                        );
+                                     },
+                                     child: Text(
+                                       track.displayArtist,
+                                       style: TextStyle(
+                                         fontSize: Responsive.fontSize(context, 16, min: 13, max: 18),
+                                         color: AppColors.textSecondary,
                                        ),
-                                    ),
+                                       maxLines: 1,
+                                       overflow: TextOverflow.ellipsis,
+                                     ),
+                                  ),
                                 ],
                               ),
                             ),

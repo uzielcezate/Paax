@@ -1,3 +1,30 @@
+// ─── Artist Name Utilities ─────────────────────────────────────────────────
+
+/// Returns true if [s] looks like a view/play/stream count rather than an
+/// artist name (e.g. "2.3M views", "1.1B plays", "543K listeners").
+/// Also rejects null or blank strings.
+bool isViewCountString(String? s) {
+  if (s == null || s.trim().isEmpty) return true;
+  final lower = s.trim().toLowerCase();
+  // Match patterns like "2.3M views", "543 plays", "1.1b streams", "17M listeners"
+  return RegExp(
+    r'^\d[\d,\.]*\s*[kmb]?\s*(view|play|stream|listener|like)',
+    caseSensitive: false,
+  ).hasMatch(lower);
+}
+
+/// Joins [names] into a comma-separated display string.
+/// Returns "Unknown Artist" if the list is empty or all entries are blank.
+///
+/// Example: ["Calvin Harris", "Dua Lipa"] → "Calvin Harris, Dua Lipa"
+String formatArtistNames(List<String> names) {
+  final clean = names.where((n) => n.trim().isNotEmpty).toList();
+  if (clean.isEmpty) return 'Unknown Artist';
+  return clean.join(', ');
+}
+
+// ─── Placeholder Artist Detection ─────────────────────────────────────────
+
 /// Returns true if the artist name appears to be a placeholder/compilation name
 /// rather than a real artist (e.g., "Various Artists", "80's Greatest Hits", etc.)
 bool isPlaceholderArtist(String? name) {

@@ -108,27 +108,54 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   /// Resolves a YouTube videoId to a direct streaming URL via the backend.
   /// Results are cached for 10 minutes to avoid redundant fetches.
+  /// Retries once after 2 s on any transient failure (timeout, 5xx, etc.).
   Future<String> _resolveStreamUrl(String videoId) async {
     final cached = _urlCache[videoId];
     if (cached != null && !cached.isExpired) {
       return cached.url;
     }
 
-    final uri = Uri.parse('${ApiConfig.baseUrl}/stream/$videoId');
-    // yt-dlp cold-start can take ~10-15 s; 30 s is safe.
-    final response = await http.get(uri).timeout(const Duration(seconds: 30));
+    // Inner helper — one attempt at resolution.
+    Future<String> attempt() async {
+      final uri = Uri.parse('${ApiConfig.baseUrl}/stream/$videoId');
+      debugPrint('[PlaybackEngine] Resolving stream for $videoId …');
 
-    if (response.statusCode != 200) {
-      throw Exception('Stream resolve failed [${response.statusCode}]: ${response.body}');
+      // 45 s: yt-dlp cold-start on Railway can take up to ~35 s.
+      final response =
+          await http.get(uri).timeout(const Duration(seconds: 45));
+
+      if (response.statusCode != 200) {
+        final reason = 'HTTP ${response.statusCode}: ${response.body}';
+        debugPrint('[PlaybackEngine] Stream resolve failed [$videoId]: $reason');
+        throw Exception('Stream resolve failed [$reason]');
+      }
+
+      final body = json.decode(response.body);
+      final url = body['url'] as String?;
+      if (url == null || url.isEmpty) {
+        debugPrint('[PlaybackEngine] Backend returned empty URL for $videoId');
+        throw Exception('Backend returned empty stream URL for $videoId');
+      }
+
+      debugPrint('[PlaybackEngine] Resolved $videoId → ${url.substring(0, url.length.clamp(0, 80))}…');
+      return url;
     }
 
-    final body = json.decode(response.body);
-    final url = body['url'] as String?;
-    if (url == null || url.isEmpty) {
-      throw Exception('Backend returned empty stream URL for $videoId');
+    // First attempt.
+    try {
+      final url = await attempt();
+      _urlCache[videoId] =
+          _CacheEntry(url, DateTime.now().add(const Duration(minutes: 10)));
+      return url;
+    } catch (firstError) {
+      debugPrint('[PlaybackEngine] First attempt failed for $videoId: $firstError — retrying in 2 s…');
     }
 
-    _urlCache[videoId] = _CacheEntry(url, DateTime.now().add(const Duration(minutes: 10)));
+    // One retry after a short pause.
+    await Future.delayed(const Duration(seconds: 2));
+    final url = await attempt(); // let any second failure propagate to caller
+    _urlCache[videoId] =
+        _CacheEntry(url, DateTime.now().add(const Duration(minutes: 10)));
     return url;
   }
 

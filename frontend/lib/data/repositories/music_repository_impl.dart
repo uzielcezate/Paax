@@ -277,29 +277,34 @@ class MusicRepositoryImpl implements MusicRepository {
     if (e['artists'] != null && e['artists'] is List) {
        final artists = e['artists'] as List;
        if (artists.isNotEmpty) {
-           artistName = artists.map((a) => a['name'].toString()).join(' • ');
-           artistId = artists[0]['id']?.toString() ?? '';
-           
-           for (var a in artists) {
-              if (a['name'] != null) {
+           // Filter out any entry whose name looks like a view/play count
+           final realArtists = artists.where((a) {
+             final name = a['name']?.toString() ?? '';
+             return name.isNotEmpty && !isViewCountString(name);
+           }).toList();
+
+           if (realArtists.isNotEmpty) {
+               artistId = realArtists[0]['id']?.toString() ?? '';
+               for (var a in realArtists) {
                   artistsList.add({
                       'name': a['name'].toString(),
                       'id': a['id']?.toString() ?? '',
                   });
-              }
+               }
+               // Build the stored artistName using comma separator
+               artistName = artistsList.map((a) => a['name']!).join(', ');
            }
        }
-    } 
+    }
     
     // Fallback if 'artists' is empty or missing
     if (artistName == 'Unknown Artist') {
        if (e['author'] != null) {
-           artistName = e['author'].toString();
-       } else if (e['runs'] != null && e['runs'] is List) {
-           // 'runs' usually alternates text and navigation. 
-           // For a track, it might be "Title", "Artist", "Views".
-           // This is situational, but sometimes helpful.
-           // However, usually 'artists' is better.
+           final author = e['author'].toString();
+           // Only use author if it doesn't look like a view count
+           if (!isViewCountString(author)) {
+             artistName = author;
+           }
        }
     }
 
@@ -329,27 +334,35 @@ class MusicRepositoryImpl implements MusicRepository {
      if (e['artists'] != null && e['artists'] is List) {
         final artists = e['artists'] as List;
         if (artists.isNotEmpty) {
-             artistName = artists.map((a) => a['name'].toString()).join(' • ');
-             artistId = artists[0]['id']?.toString() ?? '';
-             
-             for (var a in artists) {
-                if (a['name'] != null) {
-                    artistsList.add({
-                        'name': a['name'].toString(),
-                        'id': a['id']?.toString() ?? '',
-                    });
-                }
+             // Filter out view-count pseudo-artist entries
+             final realArtists = artists.where((a) {
+               final name = a['name']?.toString() ?? '';
+               return name.isNotEmpty && !isViewCountString(name);
+             }).toList();
+
+             if (realArtists.isNotEmpty) {
+               artistId = realArtists[0]['id']?.toString() ?? '';
+               for (var a in realArtists) {
+                   artistsList.add({
+                       'name': a['name'].toString(),
+                       'id': a['id']?.toString() ?? '',
+                   });
+               }
+               artistName = artistsList.map((a) => a['name']!).join(', ');
              }
         }
      }
      
-     // If track doesn't specify artists, inherit from album? 
-     // Usually album tracks might feature someone. If empty, it's the album artist.
+     // If track doesn't specify artists, inherit from album artist.
      if (artistsList.isEmpty && albumParams['artistName'] != null) {
-         artistsList.add({
-             'name': albumParams['artistName'],
-             'id': albumParams['artistId'] ?? '',
-         });
+         final fallbackName = albumParams['artistName'] as String;
+         if (!isViewCountString(fallbackName)) {
+           artistsList.add({
+               'name': fallbackName,
+               'id': albumParams['artistId'] ?? '',
+           });
+           artistName = fallbackName;
+         }
      }
 
      // ARTWORK RESOLUTION: Prioritize track's own artwork, fallback to album

@@ -225,7 +225,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             const SizedBox(height: 2), // Tighter spacing
             Text(
-              track.artistName, 
+             track.displayArtist, 
               maxLines: 1, 
               overflow: TextOverflow.ellipsis, 
               style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)

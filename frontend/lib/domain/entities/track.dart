@@ -1,4 +1,5 @@
 import 'package:hive/hive.dart';
+import '../../core/utils/string_utils.dart';
 
 part 'track.g.dart';
 
@@ -46,7 +47,26 @@ class Track extends HiveObject {
     this.artistId,
     this.artists,
   });
-  
+
+  /// Single source of truth for the artist subtitle line shown in all UIs.
+  /// Reads from [artists] list (filtering view-count strings), joins with ", ".
+  /// Falls back to [artistName] if the list is absent or yields nothing.
+  String get displayArtist {
+    if (artists != null && artists!.isNotEmpty) {
+      final names = artists!
+          .map((a) => a['name'] ?? '')
+          .where((n) => n.isNotEmpty && !isViewCountString(n))
+          .toList();
+      if (names.isNotEmpty) return formatArtistNames(names.cast<String>());
+    }
+    // Fallback: artistName may already be joined with " • " from an old mapper;
+    // replace any bullet separators with ", " for a consistent look.
+    if (artistName.isNotEmpty) {
+      return artistName.replaceAll(' • ', ', ');
+    }
+    return 'Unknown Artist';
+  }
+
   // Helper to standardizing empty/loading state if needed
   factory Track.empty() => Track(
     id: '',

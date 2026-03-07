@@ -294,7 +294,11 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
                     ),
                     title: Text(pl.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     subtitle: Text("${pl.tracks.length} tracks", style: const TextStyle(color: AppColors.textSecondary)),
-                    trailing: OverflowMenu(type: MenuType.playlist, playlist: pl),
+                    trailing: OverflowMenu(
+                      type: MenuType.playlist,
+                      playlist: pl,
+                      onDelete: () => _confirmDeletePlaylist(context, pl.id, pl.name),
+                    ),
                     onTap: () {
                        Navigator.push(context, MaterialPageRoute(builder: (_) => PlaylistDetailScreen(playlist: pl)));
                     },
@@ -343,6 +347,41 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  void _confirmDeletePlaylist(BuildContext context, String playlistId, String playlistName) {
+    final library = context.read<LibraryController>();
+    final playlist = library.playlists.firstWhere((p) => p.id == playlistId);
+
+    showDialog(
+      context: context,
+      useRootNavigator: true,
+      barrierColor: Colors.black.withOpacity(0.55),
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text("Delete Playlist?", style: TextStyle(color: Colors.white)),
+        content: Text(
+          "Are you sure you want to delete '$playlistName'?",
+          style: const TextStyle(color: Colors.grey),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop(); // close dialog first
+              await library.deletePlaylist(playlist);
+              // LibraryController.deletePlaylist calls _loadData() → notifyListeners(),
+              // so the ListView watching LibraryController auto-refreshes.
+              // No navigation needed — we stay on the Playlists screen.
+            },
+            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
     );
   }
