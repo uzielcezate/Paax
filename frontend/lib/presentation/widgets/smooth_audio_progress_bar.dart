@@ -100,56 +100,79 @@ class _SmoothAudioProgressBarState extends State<SmoothAudioProgressBar> with Si
     return ValueListenableBuilder<Duration>(
       valueListenable: _controller!.durationNotifier,
       builder: (context, duration, _) {
+        final durationKnown = duration > Duration.zero;
         final max = duration.inSeconds.toDouble();
-        final maxVal = max > 0 ? max : 1.0;
-        
+        // When duration is unknown we set maxVal = 1.0 ONLY for the
+        // disabled slider widget — the slider is non-interactive and
+        // the value is locked to 0, so no fake 1-second progress appears.
+        final maxVal = durationKnown ? max : 1.0;
+
         // Calculate current visual position
         double currentSeconds = 0.0;
-        
-        if (_dragValue != null) {
-          currentSeconds = _dragValue!;
-        } else {
-          // INTERPOLATION LOGIC
-          if (_controller!.isPlaying) {
-             final elapsed = DateTime.now().difference(_lastSyncedTime);
-             currentSeconds = (_lastSyncedPosition + elapsed).inMilliseconds / 1000.0;
+
+        if (durationKnown) {
+          if (_dragValue != null) {
+            currentSeconds = _dragValue!;
           } else {
-             currentSeconds = _lastSyncedPosition.inMilliseconds / 1000.0;
+            // INTERPOLATION LOGIC
+            if (_controller!.isPlaying) {
+              final elapsed = DateTime.now().difference(_lastSyncedTime);
+              currentSeconds =
+                  (_lastSyncedPosition + elapsed).inMilliseconds / 1000.0;
+            } else {
+              currentSeconds = _lastSyncedPosition.inMilliseconds / 1000.0;
+            }
+            currentSeconds = currentSeconds.clamp(0.0, maxVal);
           }
-          currentSeconds = currentSeconds.clamp(0.0, maxVal);
         }
+        // When duration is unknown, currentSeconds stays 0.0 — slider is disabled.
 
         return Column(
           children: [
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 4,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                thumbShape: durationKnown
+                    ? const RoundSliderThumbShape(enabledThumbRadius: 6)
+                    : const RoundSliderThumbShape(
+                        enabledThumbRadius: 0), // hide thumb when unknown
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-                activeTrackColor: AppColors.primaryStart,
+                activeTrackColor: durationKnown
+                    ? AppColors.primaryStart
+                    : Colors.white12, // dimmed when unknown
                 inactiveTrackColor: Colors.white24,
                 thumbColor: Colors.white,
                 trackShape: CustomTrackShape(),
               ),
               child: Slider(
-                value: currentSeconds.clamp(0.0, maxVal),
+                value: durationKnown
+                    ? currentSeconds.clamp(0.0, maxVal)
+                    : 0.0, // locked to start when unknown
                 min: 0,
                 max: maxVal,
-                onChanged: (val) {
-                  setState(() {
-                    _dragValue = val;
-                  });
-                },
-                onChangeStart: (_) {
-                  _controller!.startScrubbing();
-                },
-                onChangeEnd: (val) {
-                   _dragValue = null;
-                   _controller!.endScrubbing(Duration(seconds: val.toInt()));
-                   // Update sync point locally immediately for responsiveness
-                   _lastSyncedPosition = Duration(seconds: val.toInt());
-                   _lastSyncedTime = DateTime.now();
-                },
+                // Disable all interaction when duration is unknown
+                onChanged: durationKnown
+                    ? (val) {
+                        setState(() {
+                          _dragValue = val;
+                        });
+                      }
+                    : null,
+                onChangeStart: durationKnown
+                    ? (_) {
+                        _controller!.startScrubbing();
+                      }
+                    : null,
+                onChangeEnd: durationKnown
+                    ? (val) {
+                        _dragValue = null;
+                        _controller!.endScrubbing(
+                            Duration(seconds: val.toInt()));
+                        _lastSyncedPosition =
+                            Duration(seconds: val.toInt());
+                        _lastSyncedTime = DateTime.now();
+                      }
+                    : null,
               ),
             ),
             Padding(
@@ -157,8 +180,18 @@ class _SmoothAudioProgressBarState extends State<SmoothAudioProgressBar> with Si
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(_formatDuration(Duration(milliseconds: (currentSeconds * 1000).toInt())), style: const TextStyle(fontSize: 12, color: Colors.white70)),
-                  Text(duration == Duration.zero ? '--:--' : _formatDuration(duration), style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                  Text(
+                    durationKnown
+                        ? _formatDuration(Duration(
+                            milliseconds:
+                                (currentSeconds * 1000).toInt()))
+                        : '--:--',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.white70)),
+                  Text(
+                    durationKnown ? _formatDuration(duration) : '--:--',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.white70)),
                 ],
               ),
             )

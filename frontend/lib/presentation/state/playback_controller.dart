@@ -34,6 +34,9 @@ class PlaybackController extends ChangeNotifier {
   bool get isPlaying => _isPlaying;
   Duration get position => _position;
   Duration get duration => _duration;
+  /// True only when the player has reported a real, positive duration.
+  /// UI should show '--:--' and disable seeking while this is false.
+  bool get durationKnown => _duration > Duration.zero;
   bool get isShuffle => _isShuffle;
   LoopMode get loopMode => _loopMode;
   bool get isLoadingTrack => _isLoadingTrack;
@@ -184,17 +187,24 @@ class PlaybackController extends ChangeNotifier {
     durationNotifier.value = Duration.zero;
     notifyListeners();
 
+    bool loadFailed = false;
     try {
       await _engine.load(track.id);
       // Success — isPlaying will be set via playingStream listener
     } catch (e) {
+      loadFailed = true;
       _errorMessage = 'Playback unavailable: ${e.toString().replaceFirst('Exception: ', '')}';
       _isLoadingTrack = false;
       _isPlaying = false;
       notifyListeners();
     } finally {
-      _isLoadingTrack = false;
-      // Don't call notifyListeners here — playingStream/durationStream will do it
+      // Only clear loading flag here if the catch block didn't already do it.
+      // This prevents a second notifyListeners() race when the error state
+      // has already been published above.
+      if (!loadFailed) {
+        _isLoadingTrack = false;
+        // Don't call notifyListeners here — playingStream/durationStream will do it
+      }
     }
   }
 
