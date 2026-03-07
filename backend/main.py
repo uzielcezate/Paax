@@ -606,9 +606,23 @@ _FORMAT_FALLBACKS = [
 ]
 
 
+def _safe_format_info(fmt: Dict) -> Dict:
+    """Return a sanitized summary of one yt-dlp format dict (no cookies/tokens)."""
+    return {
+        "format_id": fmt.get("format_id", ""),
+        "ext":       fmt.get("ext", ""),
+        "acodec":    fmt.get("acodec", "none"),
+        "vcodec":    fmt.get("vcodec", "none"),
+        "protocol":  fmt.get("protocol", ""),
+        "abr":       fmt.get("abr"),
+        "filesize":  fmt.get("filesize"),
+    }
+
+
 def _extract_with_format(video_id: str, label: str, fmt: str) -> Dict:
     """
     Single blocking yt-dlp extraction attempt for one format string.
+    Logs available format count + chosen format details for diagnostics.
     Raises on any failure so callers can try the next format.
     """
     import yt_dlp  # type: ignore  # noqa: PLC0415
@@ -621,6 +635,29 @@ def _extract_with_format(video_id: str, label: str, fmt: str) -> Dict:
 
     if not info:
         raise ValueError(f"[{label}] yt-dlp returned no info")
+
+    # ── Structured diagnostic log ──────────────────────────────────────────
+    all_formats: List[Dict] = info.get("formats") or []
+    audio_formats = [f for f in all_formats if f.get("acodec", "none") != "none"]
+    print(
+        f"[Resolver][{label}] {video_id}: "
+        f"total_formats={len(all_formats)} audio_formats={len(audio_formats)}"
+    )
+
+    # Log the format yt-dlp actually chose
+    chosen_fmt_id = info.get("format_id", "?")
+    chosen_ext    = info.get("ext", "?")
+    chosen_acodec = info.get("acodec", "?")
+    chosen_vcodec = info.get("vcodec", "?")
+    chosen_proto  = info.get("protocol", "?")
+    chosen_abr    = info.get("abr")
+    print(
+        f"[Resolver][{label}] {video_id}: chosen "
+        f"format_id={chosen_fmt_id} ext={chosen_ext} "
+        f"acodec={chosen_acodec} vcodec={chosen_vcodec} "
+        f"protocol={chosen_proto} abr={chosen_abr}"
+    )
+    # ── End diagnostic log ─────────────────────────────────────────────────
 
     stream_url: Optional[str] = info.get("url")
     if not stream_url:
@@ -635,8 +672,68 @@ def _extract_with_format(video_id: str, label: str, fmt: str) -> Dict:
     if not thumbnail:
         thumbnail = info.get("thumbnail", "")
 
-    return {"url": stream_url, "duration": duration, "thumbnail": thumbnail,
-            "format_label": label}
+    return {
+        "url":          stream_url,
+        "duration":     duration,
+        "thumbnail":    thumbnail,
+        "format_label": label,
+        # Carry chosen format metadata for debug endpoint
+        "_chosen_fmt": {
+            "format_id": chosen_fmt_id, "ext": chosen_ext,
+            "acodec": chosen_acodec, "vcodec": chosen_vcodec,
+            "protocol": chosen_proto, "abr": chosen_abr,
+        },
+        "_audio_format_count": len(audio_formats),
+    }
+
+
+def _extract_with_format_and_listing(video_id: str) -> Dict:
+    """
+    Like _extract_with_format_fallback but also returns the raw format list
+    for the debug endpoint. Fetches format list once, then tries fallbacks.
+    """
+    import yt_dlp  # type: ignore  # noqa: PLC0415
+
+    # ── Step 1: fetch full format listing ─────────────────────────────────
+    list_opts = {**_YDL_BASE_OPTS, "format": "bestaudio/best"}
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    raw_formats: List[Dict] = []
+    try:
+        with yt_dlp.YoutubeDL(list_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        raw_formats = info.get("formats") or [] if info else []
+    except Exception:
+        pass  # carry on to fallback attempts even if listing fails
+
+    safe_formats = [_safe_format_info(f) for f in raw_formats]
+
+    # ── Step 2: run normal fallback chain ─────────────────────────────────
+    last_exc: Exception = RuntimeError("no formats attempted")
+    permanent_codes = {"VIDEO_UNAVAILABLE", "BOT_CHECK", "GEO_BLOCKED"}
+    chosen_fmt: Optional[Dict] = None
+    error_code: str = "RESOLVE_FAILED"
+    fallback_log: List[Dict] = []
+
+    for label, fmt in _FORMAT_FALLBACKS:
+        try:
+            result = _extract_with_format(video_id, label, fmt)
+            chosen_fmt = result.get("_chosen_fmt")
+            fallback_log.append({"tier": label, "status": "success"})
+            return {
+                **result,
+                "_safe_formats": safe_formats,
+                "_fallback_log": fallback_log,
+            }
+        except Exception as exc:
+            last_exc = exc
+            code = _classify_yt_error(exc)
+            fallback_log.append({"tier": label, "status": "failed", "code": code})
+            if code in permanent_codes:
+                error_code = code
+                raise exc
+            continue
+
+    raise last_exc
 
 
 def _extract_with_format_fallback(video_id: str) -> Dict:
@@ -693,7 +790,7 @@ async def get_stream_url(videoId: str):
 
     print(f"[Stream] Resolving {videoId} via yt-dlp …")
     try:
-        result = await asyncio.to_thread(_extract_stream_url, videoId)
+        result = await asyncio.to_thread(_extract_with_format_fallback, videoId)
     except Exception as e:
         print(f"[Stream] ERROR resolving {videoId}: {e}")
         raise HTTPException(status_code=502, detail=f"Stream resolve failed: {e}")
@@ -935,6 +1032,87 @@ async def resolve_playback(videoId: str):
         "expiresAt": expires_iso,
         "cached": False,
     })
+
+
+@app.get("/playback/debug-resolve")
+async def debug_resolve_playback(videoId: str):
+    """
+    Diagnostic endpoint — returns the full format list, selected format details,
+    fallback attempt log, and final error code for a given videoId.
+
+    Only for debugging. Sanitized: no cookies, credentials, or raw stream URLs
+    are returned. Do not call this from the Flutter app in production.
+    """
+    if not videoId or not videoId.strip():
+        return JSONResponse(content={
+            "ok": False, "videoId": "",
+            "errorCode": "RESOLVE_FAILED", "message": "Missing videoId",
+        })
+
+    video_id = videoId.strip()
+    now = datetime.datetime.utcnow()
+
+    # ── Cache hit check ───────────────────────────────────────────────────
+    redis_key = f"{_RESOLVE_CACHE_PREFIX}:{video_id}"
+    cached_redis = await cache_get(redis_client, redis_key)
+    mem = _stream_cache.get(video_id)
+    cache_hit = bool(cached_redis) or bool(mem and mem["expires_at"] > now)
+    print(f"[DebugResolve] {video_id}: cache_hit={cache_hit}")
+
+    # ── Attempt resolution with full diagnostic data ──────────────────────
+    try:
+        result = await asyncio.to_thread(_extract_with_format_and_listing, video_id)
+        chosen_fmt = result.get("_chosen_fmt")
+        safe_formats = result.get("_safe_formats", [])
+        fallback_log = result.get("_fallback_log", [])
+
+        print(
+            f"[DebugResolve] {video_id}: OK "
+            f"cache_hit={cache_hit} "
+            f"format_used={result.get('format_label')} "
+            f"audio_formats_available={result.get('_audio_format_count', '?')}"
+        )
+
+        return JSONResponse(content={
+            "ok":              True,
+            "videoId":         video_id,
+            "cacheHit":        cache_hit,
+            "formatUsed":      result.get("format_label"),
+            "duration":        result.get("duration"),
+            "audioFormatsAvailable": result.get("_audio_format_count"),
+            "selectedFormat":  chosen_fmt,
+            "availableFormats": safe_formats,
+            "fallbackLog":     fallback_log,
+        })
+
+    except Exception as exc:
+        error_code = _classify_yt_error(exc)
+        print(f"[DebugResolve] {video_id}: FAILED {error_code} — {exc}")
+        # Try to get format listing even on failure
+        safe_formats: List[Dict] = []
+        try:
+            import yt_dlp  # type: ignore  # noqa: PLC0415
+            list_opts = {**_YDL_BASE_OPTS, "format": "bestaudio/best"}
+            with yt_dlp.YoutubeDL(list_opts) as ydl:
+                info = ydl.extract_info(
+                    f"https://www.youtube.com/watch?v={video_id}",
+                    download=False
+                )
+            if info:
+                safe_formats = [_safe_format_info(f) for f in (info.get("formats") or [])]
+        except Exception:
+            pass
+
+        return JSONResponse(content={
+            "ok":               False,
+            "videoId":          video_id,
+            "cacheHit":         cache_hit,
+            "errorCode":        error_code,
+            "message":          _PLAYBACK_ERROR_MESSAGES.get(error_code, "Playback unavailable"),
+            "availableFormats": safe_formats,
+            "selectedFormat":   None,
+            "fallbackLog":      [],
+        })
 
 
 @app.get("/library/liked")
