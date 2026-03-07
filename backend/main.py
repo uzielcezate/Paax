@@ -673,6 +673,171 @@ async def get_stream_url(videoId: str):
 
 # --- Library (Authenticated) ---
 
+# ---------------------------------------------------------------------------
+# Playback Resolution — centralized endpoint for Flutter mobile client
+# ---------------------------------------------------------------------------
+# Error code taxonomy returned to the frontend.
+_PLAYBACK_ERROR_MESSAGES: Dict[str, str] = {
+    "BOT_CHECK":      "Track temporarily unavailable",
+    "GEO_BLOCKED":    "Track not available in your region",
+    "UNAVAILABLE":    "Track is no longer available",
+    "RESOLVE_FAILED": "Playback is not available right now",
+    "NETWORK_ERROR":  "Check your connection and try again",
+}
+
+# Redis cache key prefix for resolved stream URLs.
+_RESOLVE_CACHE_PREFIX = "playback_resolve"
+_RESOLVE_TTL = 600  # 10 minutes (matching _STREAM_TTL_SECONDS)
+
+
+def _classify_yt_error(exc: Exception) -> str:
+    """
+    Map a raw yt-dlp / network exception to a stable frontend error code.
+    Never leaks raw error text — only returns one of the defined codes.
+    """
+    msg = str(exc).lower()
+    if any(p in msg for p in ("sign in to confirm", "confirm you're not a bot", "bot", "429")):
+        return "BOT_CHECK"
+    if any(p in msg for p in ("not available in your country", "geo", "country", "403")):
+        return "GEO_BLOCKED"
+    if any(p in msg for p in ("video unavailable", "removed", "private", "not available")):
+        return "UNAVAILABLE"
+    if any(p in msg for p in ("network", "connection", "timeout", "timed out")):
+        return "NETWORK_ERROR"
+    return "RESOLVE_FAILED"
+
+
+async def _resolve_stream_with_retry(video_id: str) -> Dict:
+    """
+    Run _extract_stream_url with up to 3 attempts and exponential backoff.
+    Raises a dict with {errorCode, message} on all-failure.
+    Returns {url, duration, thumbnail} on success.
+    """
+    delays = [1, 2]  # seconds between attempt 1→2 and 2→3
+    last_exc: Exception = RuntimeError("unknown")
+
+    for attempt in range(3):
+        try:
+            result = await asyncio.to_thread(_extract_stream_url, video_id)
+            return result
+        except Exception as exc:
+            last_exc = exc
+            code = _classify_yt_error(exc)
+            print(f"[Resolve] Attempt {attempt + 1}/3 failed for {video_id}: {code} — {exc}")
+
+            # Don't retry bot-checks or permanent unavailability
+            if code in ("BOT_CHECK", "GEO_BLOCKED", "UNAVAILABLE"):
+                raise exc  # skip remaining retries
+
+            if attempt < len(delays):
+                await asyncio.sleep(delays[attempt])
+
+    raise last_exc
+
+
+@app.get("/playback/resolve")
+async def resolve_playback(videoId: str):
+    """
+    Centralized stream resolution endpoint for the Flutter mobile client.
+
+    Returns a clean response contract so the client never has to handle
+    raw yt-dlp errors, YouTube anti-bot messages, or HTTP status codes.
+
+    Success:  { ok: true,  videoId, streamUrl, duration, expiresAt, cached }
+    Failure:  { ok: false, errorCode, message }
+    """
+    if not videoId or not videoId.strip():
+        return JSONResponse(content={
+            "ok": False,
+            "errorCode": "RESOLVE_FAILED",
+            "message": _PLAYBACK_ERROR_MESSAGES["RESOLVE_FAILED"],
+        })
+
+    video_id = videoId.strip()
+    redis_key = f"{_RESOLVE_CACHE_PREFIX}:{video_id}"
+    now = datetime.datetime.utcnow()
+
+    # ── 1. Redis cache ────────────────────────────────────────────────────────
+    cached_redis = await cache_get(redis_client, redis_key)
+    if cached_redis:
+        print(f"[Resolve] REDIS HIT {video_id}")
+        return JSONResponse(content={
+            "ok": True,
+            "videoId": video_id,
+            "streamUrl": cached_redis["url"],
+            "duration": cached_redis["duration"],
+            "expiresAt": cached_redis.get("expires_at", ""),
+            "cached": True,
+        })
+
+    # ── 2. In-memory cache fallback ───────────────────────────────────────────
+    mem = _stream_cache.get(video_id)
+    if mem and mem["expires_at"] > now:
+        print(f"[Resolve] MEM HIT {video_id}")
+        return JSONResponse(content={
+            "ok": True,
+            "videoId": video_id,
+            "streamUrl": mem["url"],
+            "duration": mem["duration"],
+            "expiresAt": mem["expires_at"].isoformat(),
+            "cached": True,
+        })
+
+    # ── 3. Resolve via yt-dlp (with retry + backoff) ─────────────────────────
+    print(f"[Resolve] Resolving {video_id} via yt-dlp …")
+    try:
+        result = await _resolve_stream_with_retry(video_id)
+    except Exception as exc:
+        error_code = _classify_yt_error(exc)
+        # Log full detail server-side only — never forward to client
+        print(f"[Resolve] FAILED {video_id}: {error_code} — {exc}")
+        return JSONResponse(content={
+            "ok": False,
+            "errorCode": error_code,
+            "message": _PLAYBACK_ERROR_MESSAGES.get(error_code, _PLAYBACK_ERROR_MESSAGES["RESOLVE_FAILED"]),
+        })
+
+    if not result.get("url"):
+        return JSONResponse(content={
+            "ok": False,
+            "errorCode": "RESOLVE_FAILED",
+            "message": _PLAYBACK_ERROR_MESSAGES["RESOLVE_FAILED"],
+        })
+
+    # ── 4. Prime both caches ──────────────────────────────────────────────────
+    expires_at = now + datetime.timedelta(seconds=_RESOLVE_TTL)
+    expires_iso = expires_at.isoformat()
+
+    # In-memory (always)
+    _stream_cache[video_id] = {
+        "url":        result["url"],
+        "duration":   result["duration"],
+        "thumbnail":  result.get("thumbnail", ""),
+        "expires_at": expires_at,
+    }
+    # Redis (if available) — cache_set handles jitter internally
+    await cache_set(redis_client, redis_key, {
+        "url":        result["url"],
+        "duration":   result["duration"],
+        "expires_at": expires_iso,
+    }, _RESOLVE_TTL)
+
+    # Prune stale in-memory entries
+    stale = [k for k, v in _stream_cache.items() if v["expires_at"] <= now]
+    for k in stale:
+        del _stream_cache[k]
+
+    print(f"[Resolve] OK {video_id}: duration={result['duration']}s")
+    return JSONResponse(content={
+        "ok": True,
+        "videoId": video_id,
+        "streamUrl": result["url"],
+        "duration":  result["duration"],
+        "expiresAt": expires_iso,
+        "cached": False,
+    })
+
+
 @app.get("/library/liked")
 def get_liked_songs(limit: int = 100):
     try:
