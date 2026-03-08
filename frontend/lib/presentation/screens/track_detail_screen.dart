@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import '../widgets/thumbnail.dart';
 import '../../core/theme/app_colors.dart';
@@ -10,6 +11,7 @@ import '../../domain/repositories/music_repository.dart';
 import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/music_card.dart';
 import '../widgets/add_to_playlist_sheet.dart';
+import '../../core/playback/playback_diagnostics.dart';
 
 class TrackDetailScreen extends StatefulWidget {
   final Track track;
@@ -177,7 +179,19 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
             ),
             
             const SizedBox(height: 40),
-            
+
+            // ── DEBUG-ONLY DIAGNOSTICS PANEL ─────────────────────────────
+            // TEMPORARY — remove before production release.
+            // Visible only in debug builds; zero cost in release.
+            if (kDebugMode)
+              ValueListenableBuilder<PlaybackDiagnostics?>(
+                valueListenable: PlaybackDiagnosticsNotifier,
+                builder: (context, diag, _) {
+                  if (diag == null) return const SizedBox.shrink();
+                  return _DebugDiagnosticsPanel(diag: diag);
+                },
+              ),
+
             // Recommended Section (Horizontal Rail)
             Align(
               alignment: Alignment.centerLeft,
@@ -249,6 +263,106 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
         const SizedBox(height: 8),
         Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
       ],
+    );
+  }
+}
+
+// =============================================================================
+// TEMPORARY DEBUG-ONLY WIDGET — remove before shipping to production.
+// =============================================================================
+class _DebugDiagnosticsPanel extends StatelessWidget {
+  final PlaybackDiagnostics diag;
+  const _DebugDiagnosticsPanel({required this.diag});
+
+  @override
+  Widget build(BuildContext context) {
+    final isResolving = diag.failedAt == null && !diag.succeeded
+        && diag.urlHost == '…';
+    final statusColor = diag.succeeded
+        ? Colors.greenAccent
+        : isResolving
+            ? Colors.amber
+            : Colors.redAccent;
+    final statusLabel = diag.succeeded
+        ? '✓ PLAYING'
+        : isResolving
+            ? '⧗ Resolving…'
+            : '✗ FAILED at ${diag.failedAt ?? 'resolve'}'
+            '${diag.shortReason != null ? '' : ''}';
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E).withOpacity(0.95),
+        border: Border.all(color: statusColor.withOpacity(0.6), width: 1),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bug_report, color: statusColor, size: 14),
+              const SizedBox(width: 6),
+              Text(
+                'DEBUG — Playback Diagnostics',
+                style: TextStyle(
+                  color: statusColor,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _row('Status', statusLabel, statusColor),
+          _row('videoId', diag.videoId),
+          _row('host', diag.urlHost),
+          _row('scheme', diag.urlScheme),
+          _row('mime', diag.mimeType),
+          _row('container', diag.container),
+          _row('bitrate', diag.bitrateKbps > 0 ? '${diag.bitrateKbps} kbps' : '?'),
+          _row('size known', diag.sizeKnown
+              ? '${(diag.totalBytes / 1024 / 1024).toStringAsFixed(2)} MB'
+              : '✗ unknown (duration inferred)'),
+          _row('headers', diag.headersAttached ? '✓ attached' : '✗ missing!'),
+          _row('direct stream', diag.directStream ? '✓ byte-pipe' : '✗ redirected URL'),
+          _row('is manifest', diag.isManifest ? '⚠ YES — not a direct stream!' : 'no'),
+          if (!diag.succeeded && diag.shortReason != null) ...[
+            const Divider(color: Colors.white24, height: 16),
+            _row('failed at', diag.failedAt ?? 'resolve', Colors.redAccent),
+            _row('reason', diag.shortReason!, Colors.orangeAccent),
+            if (diag.exceptionMessage != null)
+              _row('exception', diag.exceptionMessage!, Colors.white54),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _row(String label, String value, [Color valueColor = Colors.white70]) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(color: valueColor, fontSize: 10.5, fontFamily: 'monospace'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

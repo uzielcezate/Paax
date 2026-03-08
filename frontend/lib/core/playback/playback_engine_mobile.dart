@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
 /// Typed exception thrown when resolution or player setup fails.
@@ -335,6 +336,12 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Future<void> load(String videoId) async {
     if (videoId.isEmpty) return;
 
+    // Publish 'resolving' state immediately so the UI shows something
+    if (kDebugMode) {
+      PlaybackDiagnosticsNotifier.value =
+          PlaybackDiagnostics.resolving(videoId);
+    }
+
     // ── Step 1: Resolve ───────────────────────────────────────────────────
     final resolved = await _resolveStream(videoId);
 
@@ -347,8 +354,30 @@ class PlaybackEngineImpl implements PlaybackEngine {
     final source = _YtStreamAudioSource(resolved.info);
     _currentSource = source;
 
+    // Publish full source info before setAudioSource so UI can show it
+    // even if the call never returns (hangs or throws immediately).
     if (kDebugMode) {
       final totalBytes = resolved.info.size.totalBytes;
+      final uri = resolved.info.url;
+      final diag = _analyzeUrl(uri, resolved.info);
+      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
+        videoId: videoId,
+        urlHost: uri.host,
+        urlScheme: uri.scheme,
+        mimeType: resolved.codec,
+        container: resolved.container,
+        bitrateKbps: resolved.bitrateKbps,
+        sizeKnown: totalBytes > 0,
+        totalBytes: totalBytes,
+        headersAttached: true,
+        directStream: true,
+        isManifest: diag['is_manifest'] == 'true',
+        succeeded: false, // will be updated below
+        shortReason: 'Waiting for setAudioSource…',
+      );
+      final totalBytesLabel = totalBytes > 0
+          ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB'
+          : 'UNKNOWN — sourceLength=null';
       debugPrint(
         '[PlaybackEngine][Source] PRE-FLIGHT SUMMARY\n'
         '  videoId      : $videoId\n'
@@ -356,11 +385,11 @@ class PlaybackEngineImpl implements PlaybackEngine {
         '  codec        : ${resolved.codec}\n'
         '  container    : ${resolved.container}\n'
         '  bitrate      : ${resolved.bitrateKbps} kbps\n'
-        '  total_bytes  : ${totalBytes > 0 ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB' : 'UNKNOWN — sourceLength=null'}\n'
+        '  total_bytes  : $totalBytesLabel\n'
         '  headers      : User-Agent ✓  Referer ✓  Origin ✓  Range ✓\n'
         '  direct_stream: true (byte-pipe, not AudioSource.uri)\n'
-        '  url_host     : ${resolved.info.url.host}\n'
-        '  url_scheme   : ${resolved.info.url.scheme}',
+        '  url_host     : ${uri.host}\n'
+        '  url_scheme   : ${uri.scheme}',
       );
     }
 
@@ -376,11 +405,12 @@ class PlaybackEngineImpl implements PlaybackEngine {
     } catch (e) {
       _currentSource?.close();
       _currentSource = null;
+      final errStr = e.toString();
       // Always logged (debug + release) — critical failure path.
       debugPrint(
         '[PlaybackEngine][Error] setAudioSource() FAILED — $videoId\n'
         '  type   : ${e.runtimeType}\n'
-        '  value  : $e\n'
+        '  value  : $errStr\n'
         '  player : ${e is PlayerException ? 'code=${e.code}  msg=${e.message}' : 'n/a'}',
       );
       if (kDebugMode) {
@@ -389,9 +419,25 @@ class PlaybackEngineImpl implements PlaybackEngine {
           'container=${resolved.container}  codec=${resolved.codec}  '
           'stage=setAudioSource  headers=attached  result=REJECTED',
         );
+        // Update in-app diagnostics panel with failure details.
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
+          videoId: videoId,
+          urlHost: resolved.info.url.host,
+          urlScheme: resolved.info.url.scheme,
+          mimeType: resolved.codec,
+          container: resolved.container,
+          bitrateKbps: resolved.bitrateKbps,
+          sizeKnown: resolved.info.size.totalBytes > 0,
+          totalBytes: resolved.info.size.totalBytes,
+          headersAttached: true,
+          directStream: true,
+          isManifest: false,
+          succeeded: false,
+          failedAt: 'setAudioSource',
+          exceptionMessage: errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
+          shortReason: PlaybackDiagnostics.inferReason(errStr),
+        );
       }
-      // In debug builds append the failure stage so the snackbar shows exactly
-      // where playback broke. In release, keep the generic friendly message.
       const hint = kDebugMode ? ' (setAudioSource failed)' : '';
       throw _PlaybackResolveException(
         'Playback source rejected$hint: ${_friendlyPlayerError(e)}',
@@ -411,19 +457,51 @@ class PlaybackEngineImpl implements PlaybackEngine {
           'container=${resolved.container}  codec=${resolved.codec}  '
           'bitrate=${resolved.bitrateKbps} kbps  stage=play  result=ACCEPTED',
         );
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
+          videoId: videoId,
+          urlHost: resolved.info.url.host,
+          urlScheme: resolved.info.url.scheme,
+          mimeType: resolved.codec,
+          container: resolved.container,
+          bitrateKbps: resolved.bitrateKbps,
+          sizeKnown: resolved.info.size.totalBytes > 0,
+          totalBytes: resolved.info.size.totalBytes,
+          headersAttached: true,
+          directStream: true,
+          isManifest: false,
+          succeeded: true,
+        );
       }
     } catch (e) {
+      final errStr = e.toString();
       // Always logged — critical failure path.
       debugPrint(
         '[PlaybackEngine][Error] play() FAILED — $videoId\n'
         '  type   : ${e.runtimeType}\n'
-        '  value  : $e\n'
+        '  value  : $errStr\n'
         '  player : ${e is PlayerException ? 'code=${e.code}  msg=${e.message}' : 'n/a'}',
       );
       if (kDebugMode) {
         debugPrint(
           '[PlaybackEngine][Error] SUMMARY  videoId=$videoId  '
           'container=${resolved.container}  stage=play  result=REJECTED',
+        );
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
+          videoId: videoId,
+          urlHost: resolved.info.url.host,
+          urlScheme: resolved.info.url.scheme,
+          mimeType: resolved.codec,
+          container: resolved.container,
+          bitrateKbps: resolved.bitrateKbps,
+          sizeKnown: resolved.info.size.totalBytes > 0,
+          totalBytes: resolved.info.size.totalBytes,
+          headersAttached: true,
+          directStream: true,
+          isManifest: false,
+          succeeded: false,
+          failedAt: 'play()',
+          exceptionMessage: errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
+          shortReason: PlaybackDiagnostics.inferReason(errStr),
         );
       }
       const hint = kDebugMode ? ' (play() failed)' : '';
