@@ -180,18 +180,6 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
             
             const SizedBox(height: 40),
 
-            // ── DEBUG-ONLY DIAGNOSTICS PANEL ─────────────────────────────
-            // TEMPORARY — remove before production release.
-            // Visible only in debug builds; zero cost in release.
-            if (kDebugMode)
-              ValueListenableBuilder<PlaybackDiagnostics?>(
-                valueListenable: PlaybackDiagnosticsNotifier,
-                builder: (context, diag, _) {
-                  if (diag == null) return const SizedBox.shrink();
-                  return _DebugDiagnosticsPanel(diag: diag);
-                },
-              ),
-
             // Recommended Section (Horizontal Rail)
             Align(
               alignment: Alignment.centerLeft,
@@ -238,8 +226,24 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
       ),
     ),
   ],
-),
-        
+      ),
+
+        // ─────────────────────────────────────────────────────────────────
+        // DEBUG-ONLY OVERLAY — TEMPORARY, remove before production.
+        // Positioned at top of screen, overlaying all scrollable content.
+        // Always visible in debug mode regardless of scroll position or state.
+        // ─────────────────────────────────────────────────────────────────
+        if (kDebugMode)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + kToolbarHeight + 4,
+            left: 12,
+            right: 12,
+            child: ValueListenableBuilder<PlaybackDiagnostics?>(
+              valueListenable: PlaybackDiagnosticsNotifier,
+              builder: (context, diag, _) => _DebugDiagnosticsPanel(diag: diag),
+            ),
+          ),
+
         ],
       )
     );
@@ -269,44 +273,73 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
 
 // =============================================================================
 // TEMPORARY DEBUG-ONLY WIDGET — remove before shipping to production.
+// Positioned overlay at top of screen; always rendered in debug mode.
 // =============================================================================
 class _DebugDiagnosticsPanel extends StatelessWidget {
-  final PlaybackDiagnostics diag;
+  // Nullable: shows placeholder when no diagnostics have been published yet.
+  final PlaybackDiagnostics? diag;
   const _DebugDiagnosticsPanel({required this.diag});
 
   @override
   Widget build(BuildContext context) {
-    final isResolving = diag.failedAt == null && !diag.succeeded
-        && diag.urlHost == '…';
-    final statusColor = diag.succeeded
+    // ── Null state: no track has been played yet ──────────────────────────
+    if (diag == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A00).withOpacity(0.97),
+          border: Border.all(color: Colors.yellowAccent, width: 1.5),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.bug_report, color: Colors.yellowAccent, size: 14),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'DEBUG PLAYBACK INFO — no diagnostics yet. Tap Play to begin.',
+                style: TextStyle(
+                  color: Colors.yellowAccent,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final d = diag!;
+    final isResolving = d.failedAt == null && !d.succeeded && d.urlHost == '…';
+    final statusColor = d.succeeded
         ? Colors.greenAccent
         : isResolving
             ? Colors.amber
             : Colors.redAccent;
-    final statusLabel = diag.succeeded
+    final statusLabel = d.succeeded
         ? '✓ PLAYING'
         : isResolving
             ? '⧗ Resolving…'
-            : '✗ FAILED at ${diag.failedAt ?? 'resolve'}'
-            '${diag.shortReason != null ? '' : ''}';
+            : '✗ FAILED at ${d.failedAt ?? 'resolve'}';
 
     return Container(
-      margin: const EdgeInsets.only(top: 8, bottom: 16),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E).withOpacity(0.95),
-        border: Border.all(color: statusColor.withOpacity(0.6), width: 1),
+        color: const Color(0xEE0A0A1A),
+        border: Border.all(color: statusColor, width: 1.5),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
               Icon(Icons.bug_report, color: statusColor, size: 14),
               const SizedBox(width: 6),
               Text(
-                'DEBUG — Playback Diagnostics',
+                'DEBUG PLAYBACK INFO',
                 style: TextStyle(
                   color: statusColor,
                   fontSize: 11,
@@ -316,26 +349,26 @@ class _DebugDiagnosticsPanel extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          _row('Status', statusLabel, statusColor),
-          _row('videoId', diag.videoId),
-          _row('host', diag.urlHost),
-          _row('scheme', diag.urlScheme),
-          _row('mime', diag.mimeType),
-          _row('container', diag.container),
-          _row('bitrate', diag.bitrateKbps > 0 ? '${diag.bitrateKbps} kbps' : '?'),
-          _row('size known', diag.sizeKnown
-              ? '${(diag.totalBytes / 1024 / 1024).toStringAsFixed(2)} MB'
-              : '✗ unknown (duration inferred)'),
-          _row('headers', diag.headersAttached ? '✓ attached' : '✗ missing!'),
-          _row('direct stream', diag.directStream ? '✓ byte-pipe' : '✗ redirected URL'),
-          _row('is manifest', diag.isManifest ? '⚠ YES — not a direct stream!' : 'no'),
-          if (!diag.succeeded && diag.shortReason != null) ...[
-            const Divider(color: Colors.white24, height: 16),
-            _row('failed at', diag.failedAt ?? 'resolve', Colors.redAccent),
-            _row('reason', diag.shortReason!, Colors.orangeAccent),
-            if (diag.exceptionMessage != null)
-              _row('exception', diag.exceptionMessage!, Colors.white54),
+          const SizedBox(height: 6),
+          _row('status', statusLabel, statusColor),
+          _row('videoId', d.videoId),
+          _row('host', d.urlHost),
+          _row('scheme', d.urlScheme),
+          _row('mime', d.mimeType),
+          _row('container', d.container),
+          _row('bitrate', d.bitrateKbps > 0 ? '${d.bitrateKbps} kbps' : '?'),
+          _row('size', d.sizeKnown
+              ? '${(d.totalBytes / 1024 / 1024).toStringAsFixed(2)} MB'
+              : '✗ unknown'),
+          _row('headers', d.headersAttached ? '✓ attached' : '✗ MISSING'),
+          _row('direct', d.directStream ? '✓ byte-pipe' : '✗ URL redirect'),
+          _row('manifest', d.isManifest ? '⚠ YES — bad!' : 'no'),
+          if (!d.succeeded && d.shortReason != null) ...[
+            const Divider(color: Colors.white24, height: 12),
+            _row('failed at', d.failedAt ?? 'resolve', Colors.redAccent),
+            _row('reason', d.shortReason!, Colors.orangeAccent),
+            if (d.exceptionMessage != null)
+              _row('exception', d.exceptionMessage!, Colors.white54),
           ],
         ],
       ),
@@ -349,20 +382,20 @@ class _DebugDiagnosticsPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 96,
-            child: Text(
-              label,
-              style: const TextStyle(color: Colors.white38, fontSize: 10.5),
-            ),
+            width: 72,
+            child: Text(label,
+                style: const TextStyle(color: Colors.white38, fontSize: 10.5)),
           ),
           Expanded(
-            child: Text(
-              value,
-              style: TextStyle(color: valueColor, fontSize: 10.5, fontFamily: 'monospace'),
-            ),
+            child: Text(value,
+                style: TextStyle(
+                    color: valueColor,
+                    fontSize: 10.5,
+                    fontFamily: 'monospace')),
           ),
         ],
       ),
     );
   }
 }
+
