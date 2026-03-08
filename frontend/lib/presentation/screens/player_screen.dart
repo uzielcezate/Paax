@@ -334,12 +334,12 @@ class _PlayerControls extends StatelessWidget {
            width: 72, height: 72,
            decoration: const BoxDecoration(
              shape: BoxShape.circle,
-             gradient: AppColors.primaryGradient,
+             color: Colors.white,
            ),
            child: Selector<PlaybackController, bool>(
              selector: (_, c) => c.isPlaying,
              builder: (_, isPlaying, __) => IconButton(
-               icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 40),
+               icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 40, color: Colors.black),
                onPressed: () => controller.togglePlayPause(),
              ),
            ),
