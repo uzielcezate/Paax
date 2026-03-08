@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
@@ -18,7 +17,9 @@ class _PlaybackResolveException implements Exception {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP headers for YouTube CDN requests.
+// HTTP headers passed directly to AudioSource.uri().
+// just_audio v0.9.x forwards these to ExoPlayer's DefaultHttpDataSource,
+// which then includes them on every range request it makes to the CDN.
 // ---------------------------------------------------------------------------
 const _kYouTubeHeaders = <String, String>{
   'User-Agent':
@@ -28,11 +29,26 @@ const _kYouTubeHeaders = <String, String>{
 };
 
 // ---------------------------------------------------------------------------
-// URL analysis helper — development diagnostics only.
+// Stream format filter
 // ---------------------------------------------------------------------------
 
-/// Returns a structured diagnostic map for the resolved stream URL.
-/// Used exclusively in [kDebugMode] blocks — zero cost in release builds.
+/// Returns true only for mp4 / m4a / AAC audio containers.
+/// webm / opus containers are explicitly rejected — ExoPlayer on Android
+/// cannot reliably handle webm as a progressive HTTP stream.
+bool _isMp4Compatible(AudioOnlyStreamInfo s) {
+  final mime = s.codec.mimeType.toLowerCase();
+  final container = s.container.name.toLowerCase();
+  return (mime.contains('mp4') ||
+          mime.contains('m4a') ||
+          mime.contains('aac') ||
+          container == 'mp4') &&
+      !mime.contains('webm') &&
+      !container.contains('webm');
+}
+
+// ---------------------------------------------------------------------------
+// URL analysis helper — debug diagnostics only.
+// ---------------------------------------------------------------------------
 Map<String, String> _analyzeUrl(Uri uri, AudioOnlyStreamInfo info) {
   final path = uri.path.toLowerCase();
   final ext = path.contains('.') ? path.split('.').last.split('?').first : '';
@@ -41,142 +57,56 @@ Map<String, String> _analyzeUrl(Uri uri, AudioOnlyStreamInfo info) {
       path.contains('manifest') ||
       path.contains('playlist') ||
       uri.queryParameters.containsKey('manifest_type');
-  final isSigned = uri.queryParameters.containsKey('sig') ||
+  final isSigned = uri.queryParameters.containsKey('expire') ||
+      uri.queryParameters.containsKey('sig') ||
       uri.queryParameters.containsKey('signature') ||
-      uri.queryParameters.containsKey('expire') ||  // YouTube signed URL
       uri.queryParameters.containsKey('lsig');
-  final paramCount = uri.queryParameters.length;
   final totalBytes = info.size.totalBytes;
 
   return {
     'scheme': uri.scheme,
     'host': uri.host,
-    'path_ext': ext.isEmpty ? '(none)' : ext,
+    'path_ext': ext.isEmpty ? '(none — direct CDN path)' : ext,
     'mime': info.codec.mimeType,
     'container': info.container.name,
     'is_manifest': '$isManifest',
     'is_signed_url': '$isSigned',
-    'query_param_count': '$paramCount',
+    'query_params': '${uri.queryParameters.length}',
     'total_bytes': '$totalBytes',
-    'size_valid': '${totalBytes > 0}',
-    'direct_audio':
-        '${!isManifest && (ext == 'mp4' || ext == 'm4a' || ext == '' || ext == 'aac')}',
+    'size_known': '${totalBytes > 0}',
+    'mp4_compatible': '${_isMp4Compatible(info)}',
+    // DASH indicator: YouTube progressive streams serve full content-length,
+    // while DASH segments use 'clen=' query param alongside 'sq='
+    'has_sq_param': '${uri.queryParameters.containsKey('sq')}',
+    'has_clen_param': '${uri.queryParameters.containsKey('clen')}',
   };
 }
 
 // ---------------------------------------------------------------------------
-// _YtStreamAudioSource
+// PlaybackEngineImpl
 // ---------------------------------------------------------------------------
-//
-// WHY: youtube_explode_dart stream URLs are signed CDN URLs served in
-// DASH-adaptive mode. ExoPlayer's DefaultHttpDataSource cannot negotiate
-// these as seekable progressive streams → (0) Source error.
-//
-// FIX: We extend StreamAudioSource and satisfy just_audio's byte-range
-// requests ourselves using http.Client + Range headers + YouTube CDN headers.
-// ExoPlayer only sees a plain byte stream from us; it never touches the CDN.
-//
-// KEY DETAILS IN THIS REVISION:
-//   1. sourceLength is passed as null when totalBytes == 0 (unknown size)
-//      rather than 0, which was causing ExoPlayer to reject the source.
-//   2. Every CDN response is validated (status 200/206 required).
-//   3. An explicit Range: bytes=0- is always sent, even on the first request
-//      (some YouTube CDN nodes require a Range header to serve audio bytes).
-//   4. A pre-flight diagnostic log is printed before setAudioSource.
-// ---------------------------------------------------------------------------
-class _YtStreamAudioSource extends StreamAudioSource {
-  final AudioOnlyStreamInfo _info;
-  final _client = http.Client();
-
-  _YtStreamAudioSource(this._info);
-
-  void close() {
-    try {
-      _client.close();
-    } catch (_) {}
-  }
-
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    // Always send a Range header.
-    // Without it some YouTube CDN edge nodes serve a multipart/byteranges
-    // response that ExoPlayer cannot parse. "bytes=0-" is the safest default.
-    final effectiveStart = start ?? 0;
-    final rangeEnd = end != null ? '${end - 1}' : '';
-    final rangeHeader = 'bytes=$effectiveStart-$rangeEnd';
-
-    final headers = <String, String>{
-      ..._kYouTubeHeaders,
-      'Range': rangeHeader,
-    };
-
-    if (kDebugMode) {
-      debugPrint(
-        '[PlaybackEngine][Source] CDN request  '
-        'Range: $rangeHeader  '
-        'url: ${_info.url.toString().substring(0, 70)}…',
-      );
-    }
-
-    late http.StreamedResponse res;
-    try {
-      final req = http.Request('GET', _info.url)..headers.addAll(headers);
-      res = await _client.send(req);
-    } catch (e) {
-      debugPrint('[PlaybackEngine][Error] CDN HTTP request failed: $e');
-      throw _PlaybackResolveException(
-          'CDN request failed: ${e.toString().substring(0, 80)}');
-    }
-
-    if (kDebugMode) {
-      debugPrint(
-        '[PlaybackEngine][Source] CDN response '
-        'status=${res.statusCode}  '
-        'content-type=${res.headers['content-type'] ?? '(none)'}  '
-        'content-length=${res.contentLength ?? '(chunked)'}  '
-        'content-range=${res.headers['content-range'] ?? '(none)'}',
-      );
-    }
-
-    // Accept 200 (no Range support) and 206 (partial content / Range ok).
-    // Any other status means the CDN rejected our request.
-    if (res.statusCode != 200 && res.statusCode != 206) {
-      debugPrint(
-        '[PlaybackEngine][Error] CDN rejected Range request '
-        'status=${res.statusCode}',
-      );
-      throw _PlaybackResolveException(
-        'Audio stream unavailable (CDN ${res.statusCode}).',
-      );
-    }
-
-    final totalBytes = _info.size.totalBytes;
-    // Pass null if totalBytes is unknown to allow just_audio to still play
-    // without a known length (duration will be inferred during buffering).
-    final knownSourceLength = totalBytes > 0 ? totalBytes : null;
-    // Content-Length from the response is the range slice size.
-    final rangeLength =
-        res.contentLength ?? (knownSourceLength != null ? knownSourceLength - effectiveStart : null);
-
-    return StreamAudioResponse(
-      sourceLength: knownSourceLength,
-      contentLength: rangeLength,
-      offset: effectiveStart,
-      stream: res.stream,
-      contentType: _info.codec.mimeType,
-    );
-  }
-}
 
 /// Native-platform playback engine shared by Android and iOS.
+///
+/// APPROACH (this revision):
+///   Uses [AudioSource.uri()] with YouTube CDN headers passed directly.
+///   This lets ExoPlayer's built-in HTTP stack handle range requests and
+///   buffering natively, while the CDN headers ensure auth is accepted.
+///
+///   WHY NOT StreamAudioSource byte-pipe:
+///   The previous _YtStreamAudioSource approach was failing at setAudioSource
+///   because just_audio's internal probe request during setAudioSource was
+///   also failing — meaning the byte-piping was not solving the core issue.
+///   Switching to AudioSource.uri() + headers is the correctapproach because:
+///   1. ExoPlayer natively handles HTTP range requests, retries and buffering
+///   2. The headers param in just_audio v0.9.x is forwarded to ExoPlayer
+///   3. YouTube mp4/m4a audio-only streams ARE accessible as progressive HTTP
+///      streams when the correct User-Agent and Referer headers are provided
 class PlaybackEngineImpl implements PlaybackEngine {
   final _player = AudioPlayer();
   final _completionController = StreamController<void>.broadcast();
   bool _isDisposed = false;
   final _subscriptions = <StreamSubscription>[];
-
-  // Kept so we can close its http.Client when a new track loads.
-  _YtStreamAudioSource? _currentSource;
 
   @override
   Stream<Duration> get positionStream => _player.positionStream;
@@ -228,16 +158,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // Stream resolution
   // -------------------------------------------------------------------------
 
-  /// Accepts only mp4/m4a/AAC containers; rejects webm/opus.
-  static bool _isMp4Compatible(AudioOnlyStreamInfo s) {
-    final mime = s.codec.mimeType.toLowerCase();
-    final container = s.container.name.toLowerCase();
-    return mime.contains('mp4') ||
-        mime.contains('m4a') ||
-        mime.contains('aac') ||
-        container == 'mp4';
-  }
-
   Future<({AudioOnlyStreamInfo info, String codec, String container, int bitrateKbps})>
       _resolveStream(String videoId) async {
     final yt = YoutubeExplode();
@@ -249,25 +169,29 @@ class PlaybackEngineImpl implements PlaybackEngine {
       final manifest = await yt.videos.streamsClient.getManifest(videoId);
       final audioStreams = manifest.audioOnly;
 
-      // ── Full candidate dump (debug only) ─────────────────────────────────
       if (kDebugMode) {
         debugPrint(
-          '[PlaybackEngine] ${audioStreams.length} audio-only candidates:',
-        );
+            '[PlaybackEngine][Source] ${audioStreams.length} audio-only candidates:');
         for (final s in audioStreams) {
-          final pass = _isMp4Compatible(s) ? '✓' : '✗ skip';
+          final pass = _isMp4Compatible(s) ? '✓ mp4-compat' : '✗ skip';
           final bytes = s.size.totalBytes;
+          final url = s.url;
           debugPrint(
             '  $pass  mime=${s.codec.mimeType}  '
             'container=${s.container.name}  '
             'bitrate=${(s.bitrate.bitsPerSecond / 1000).round()} kbps  '
-            'size=${bytes > 0 ? '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB' : 'unknown'}',
+            'size=${bytes > 0 ? '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB' : 'unknown'}  '
+            'has_sq=${url.queryParameters.containsKey('sq')}  '
+            'host=${url.host.split('.').take(3).join('.')}',
           );
         }
       }
 
-      if (audioStreams.isEmpty) throw Exception('no audio streams');
+      if (audioStreams.isEmpty) {
+        throw Exception('YouTube returned no audio streams for $videoId');
+      }
 
+      // ── Filter: mp4/m4a/AAC only ────────────────────────────────────────
       final compatibleStreams = audioStreams
           .where(_isMp4Compatible)
           .toList()
@@ -275,40 +199,40 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
       if (kDebugMode && compatibleStreams.isEmpty) {
         debugPrint(
-          '[PlaybackEngine] ✗ All candidates skipped. '
-          'Types: ${audioStreams.map((s) => s.codec.mimeType).toSet().join(', ')}',
+          '[PlaybackEngine][Error] No mp4-compatible streams found. '
+          'Available types: ${audioStreams.map((s) => s.codec.mimeType).toSet().join(', ')}',
         );
       }
 
       if (compatibleStreams.isEmpty) {
-        throw Exception('no mp4-compatible audio stream');
+        throw Exception('no mp4/m4a audio stream found '
+            '(available: ${audioStreams.map((s) => s.container.name).toSet().join(', ')})');
       }
 
       final chosen = compatibleStreams.first;
       final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
 
-      // ── Pre-flight URL analysis ───────────────────────────────────────────
+      // ── Validate fields before returning ────────────────────────────────
       if (kDebugMode) {
         final uri = chosen.url;
         final diag = _analyzeUrl(uri, chosen);
-        debugPrint('[PlaybackEngine] ✓ Selected stream for $videoId');
-        diag.forEach(
-          (k, v) => debugPrint('  $k: $v'),
-        );
+        debugPrint('[PlaybackEngine][Source] ✓ Selected stream:');
+        diag.forEach((k, v) => debugPrint('  $k: $v'));
         debugPrint(
-          '  url_preview: ${uri.toString().substring(0, 80)}…',
-        );
+            '  url_preview: ${uri.toString().substring(0, 80)}…');
+        debugPrint(
+            '  bitrate: $bitrateKbps kbps');
+
         if (diag['is_manifest'] == 'true') {
           debugPrint(
-            '[PlaybackEngine] ⚠ WARNING: selected URL looks like a MANIFEST — '
-            'may not be a direct audio stream!',
+            '[PlaybackEngine][Error] ⚠ WARNING: URL looks like a MANIFEST. '
+            'ExoPlayer will reject this!',
           );
         }
-        if (diag['size_valid'] == 'false') {
+        if (diag['has_sq_param'] == 'true') {
           debugPrint(
-            '[PlaybackEngine] ⚠ WARNING: totalBytes=0 — '
-            'sourceLength will be null (unknown). '
-            'Seeking may be unavailable until player buffers duration.',
+            '[PlaybackEngine][Error] ⚠ WARNING: URL has sq= param — '
+            'this is likely a DASH segment URL, not a progressive stream.',
           );
         }
       }
@@ -320,7 +244,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
         bitrateKbps: bitrateKbps,
       );
     } catch (e) {
-      debugPrint('[PlaybackEngine] ✗ Resolution failed for $videoId: $e');
+      debugPrint('[PlaybackEngine][Error] Resolution failed for $videoId: $e');
       throw const _PlaybackResolveException(
           'This track is temporarily unavailable.');
     } finally {
@@ -336,30 +260,45 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Future<void> load(String videoId) async {
     if (videoId.isEmpty) return;
 
-    // Publish 'resolving' state immediately so the UI shows something
+    // Publish resolving state immediately so debug panel updates.
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value =
           PlaybackDiagnostics.resolving(videoId);
     }
 
-    // ── Step 1: Resolve ───────────────────────────────────────────────────
+    // ── Step 1: Resolve stream ────────────────────────────────────────────
     final resolved = await _resolveStream(videoId);
 
-    // ── Step 2: Stop + release previous source ────────────────────────────
+    // ── Step 2: Stop previous playback ────────────────────────────────────
     await _player.stop();
-    _currentSource?.close();
-    _currentSource = null;
 
-    // ── Step 3: Build StreamAudioSource ───────────────────────────────────
-    final source = _YtStreamAudioSource(resolved.info);
-    _currentSource = source;
+    // ── Step 3: Build AudioSource.uri with YouTube CDN headers ────────────
+    // AudioSource.uri() in just_audio v0.9.x passes the headers map directly
+    // to ExoPlayer's DefaultHttpDataSource factory, so every range request
+    // ExoPlayer makes to the CDN will include our User-Agent, Referer, Origin.
+    final uri = resolved.info.url;
+    final source = AudioSource.uri(uri, headers: _kYouTubeHeaders);
 
-    // Publish full source info before setAudioSource so UI can show it
-    // even if the call never returns (hangs or throws immediately).
     if (kDebugMode) {
       final totalBytes = resolved.info.size.totalBytes;
-      final uri = resolved.info.url;
       final diag = _analyzeUrl(uri, resolved.info);
+      debugPrint(
+        '[PlaybackEngine][Source] PRE-FLIGHT SUMMARY\n'
+        '  videoId      : $videoId\n'
+        '  approach     : AudioSource.uri + YouTube CDN headers\n'
+        '  codec        : ${resolved.codec}\n'
+        '  container    : ${resolved.container}\n'
+        '  bitrate      : ${resolved.bitrateKbps} kbps\n'
+        '  total_bytes  : ${totalBytes > 0 ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB' : 'UNKNOWN'}\n'
+        '  headers      : User-Agent ✓  Referer ✓  Origin ✓\n'
+        '  url_host     : ${uri.host}\n'
+        '  url_scheme   : ${uri.scheme}\n'
+        '  is_manifest  : ${diag['is_manifest']}\n'
+        '  has_sq_param : ${diag['has_sq_param']}\n'
+        '  mp4_compat   : ${diag['mp4_compatible']}',
+      );
+
+      // Publish full diagnostic snapshot before setAudioSource.
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
         videoId: videoId,
         urlHost: uri.host,
@@ -372,30 +311,15 @@ class PlaybackEngineImpl implements PlaybackEngine {
         headersAttached: true,
         directStream: true,
         isManifest: diag['is_manifest'] == 'true',
-        succeeded: false, // will be updated below
+        succeeded: false,
         shortReason: 'Waiting for setAudioSource…',
-      );
-      final totalBytesLabel = totalBytes > 0
-          ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB'
-          : 'UNKNOWN — sourceLength=null';
-      debugPrint(
-        '[PlaybackEngine][Source] PRE-FLIGHT SUMMARY\n'
-        '  videoId      : $videoId\n'
-        '  source_type  : _YtStreamAudioSource (byte-pipe / StreamAudioSource)\n'
-        '  codec        : ${resolved.codec}\n'
-        '  container    : ${resolved.container}\n'
-        '  bitrate      : ${resolved.bitrateKbps} kbps\n'
-        '  total_bytes  : $totalBytesLabel\n'
-        '  headers      : User-Agent ✓  Referer ✓  Origin ✓  Range ✓\n'
-        '  direct_stream: true (byte-pipe, not AudioSource.uri)\n'
-        '  url_host     : ${uri.host}\n'
-        '  url_scheme   : ${uri.scheme}',
       );
     }
 
     // ── Step 4: setAudioSource ────────────────────────────────────────────
     if (kDebugMode) {
-      debugPrint('[PlaybackEngine][Source] setAudioSource() starting — $videoId');
+      debugPrint(
+          '[PlaybackEngine][Source] setAudioSource() starting — $videoId');
     }
     try {
       await _player.setAudioSource(source);
@@ -403,10 +327,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
         debugPrint('[PlaybackEngine][Source] setAudioSource() OK — $videoId');
       }
     } catch (e) {
-      _currentSource?.close();
-      _currentSource = null;
       final errStr = e.toString();
-      // Always logged (debug + release) — critical failure path.
       debugPrint(
         '[PlaybackEngine][Error] setAudioSource() FAILED — $videoId\n'
         '  type   : ${e.runtimeType}\n'
@@ -417,13 +338,12 @@ class PlaybackEngineImpl implements PlaybackEngine {
         debugPrint(
           '[PlaybackEngine][Error] SUMMARY  videoId=$videoId  '
           'container=${resolved.container}  codec=${resolved.codec}  '
-          'stage=setAudioSource  headers=attached  result=REJECTED',
+          'approach=AudioSource.uri+headers  stage=setAudioSource  result=REJECTED',
         );
-        // Update in-app diagnostics panel with failure details.
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
           videoId: videoId,
-          urlHost: resolved.info.url.host,
-          urlScheme: resolved.info.url.scheme,
+          urlHost: uri.host,
+          urlScheme: uri.scheme,
           mimeType: resolved.codec,
           container: resolved.container,
           bitrateKbps: resolved.bitrateKbps,
@@ -434,7 +354,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
           isManifest: false,
           succeeded: false,
           failedAt: 'setAudioSource',
-          exceptionMessage: errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
+          exceptionMessage:
+              errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
           shortReason: PlaybackDiagnostics.inferReason(errStr),
         );
       }
@@ -455,12 +376,12 @@ class PlaybackEngineImpl implements PlaybackEngine {
         debugPrint(
           '[PlaybackEngine][Source] SUMMARY  videoId=$videoId  '
           'container=${resolved.container}  codec=${resolved.codec}  '
-          'bitrate=${resolved.bitrateKbps} kbps  stage=play  result=ACCEPTED',
+          'bitrate=${resolved.bitrateKbps} kbps  approach=AudioSource.uri+headers  result=ACCEPTED',
         );
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
           videoId: videoId,
-          urlHost: resolved.info.url.host,
-          urlScheme: resolved.info.url.scheme,
+          urlHost: uri.host,
+          urlScheme: uri.scheme,
           mimeType: resolved.codec,
           container: resolved.container,
           bitrateKbps: resolved.bitrateKbps,
@@ -474,7 +395,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
       }
     } catch (e) {
       final errStr = e.toString();
-      // Always logged — critical failure path.
       debugPrint(
         '[PlaybackEngine][Error] play() FAILED — $videoId\n'
         '  type   : ${e.runtimeType}\n'
@@ -488,8 +408,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
         );
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
           videoId: videoId,
-          urlHost: resolved.info.url.host,
-          urlScheme: resolved.info.url.scheme,
+          urlHost: uri.host,
+          urlScheme: uri.scheme,
           mimeType: resolved.codec,
           container: resolved.container,
           bitrateKbps: resolved.bitrateKbps,
@@ -500,7 +420,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
           isManifest: false,
           succeeded: false,
           failedAt: 'play()',
-          exceptionMessage: errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
+          exceptionMessage:
+              errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
           shortReason: PlaybackDiagnostics.inferReason(errStr),
         );
       }
@@ -535,8 +456,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
   @override
   void dispose() {
     _isDisposed = true;
-    _currentSource?.close();
-    _currentSource = null;
     for (final sub in _subscriptions) {
       sub.cancel();
     }
