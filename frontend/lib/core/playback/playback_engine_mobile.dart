@@ -7,8 +7,8 @@ import 'package:audio_session/audio_session.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'playback_engine.dart';
 
-/// Typed exception thrown when on-device stream resolution or player setup fails.
-/// [message] is already a safe, user-friendly string — never exposes raw errors.
+/// Typed exception thrown when resolution or player setup fails.
+/// Already a safe, user-friendly string — never exposes raw errors.
 class _PlaybackResolveException implements Exception {
   final String message;
   const _PlaybackResolveException(this.message);
@@ -17,13 +17,9 @@ class _PlaybackResolveException implements Exception {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP headers sent with every CDN audio request.
-//
-// WHY: YouTube CDN streams require a valid browser-like User-Agent and a
-// recognized Referer/Origin to serve the audio bytes. Without them the CDN
-// responds with 403 / connection-reset.
+// HTTP headers for YouTube CDN requests.
 // ---------------------------------------------------------------------------
-const _kYouTubeHeaders = {
+const _kYouTubeHeaders = <String, String>{
   'User-Agent':
       'com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip',
   'Referer': 'https://www.youtube.com/',
@@ -31,36 +27,64 @@ const _kYouTubeHeaders = {
 };
 
 // ---------------------------------------------------------------------------
-// YtStreamAudioSource
+// URL analysis helper — development diagnostics only.
 // ---------------------------------------------------------------------------
-// WHY WE NEED THIS:
+
+/// Returns a structured diagnostic map for the resolved stream URL.
+/// Used exclusively in [kDebugMode] blocks — zero cost in release builds.
+Map<String, String> _analyzeUrl(Uri uri, AudioOnlyStreamInfo info) {
+  final path = uri.path.toLowerCase();
+  final ext = path.contains('.') ? path.split('.').last.split('?').first : '';
+  final isManifest = ext == 'm3u8' ||
+      ext == 'mpd' ||
+      path.contains('manifest') ||
+      path.contains('playlist') ||
+      uri.queryParameters.containsKey('manifest_type');
+  final isSigned = uri.queryParameters.containsKey('sig') ||
+      uri.queryParameters.containsKey('signature') ||
+      uri.queryParameters.containsKey('expire') ||  // YouTube signed URL
+      uri.queryParameters.containsKey('lsig');
+  final paramCount = uri.queryParameters.length;
+  final totalBytes = info.size.totalBytes;
+
+  return {
+    'scheme': uri.scheme,
+    'host': uri.host,
+    'path_ext': ext.isEmpty ? '(none)' : ext,
+    'mime': info.codec.mimeType,
+    'container': info.container.name,
+    'is_manifest': '$isManifest',
+    'is_signed_url': '$isSigned',
+    'query_param_count': '$paramCount',
+    'total_bytes': '$totalBytes',
+    'size_valid': '${totalBytes > 0}',
+    'direct_audio':
+        '${!isManifest && (ext == 'mp4' || ext == 'm4a' || ext == '' || ext == 'aac')}',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// _YtStreamAudioSource
+// ---------------------------------------------------------------------------
 //
-// youtube_explode_dart stream URLs are signed DASH-mode CDN URLs. When handed
-// directly to AudioSource.uri(), ExoPlayer (Android) tries to open them as a
-// seekable progressive HTTP stream. The CDN serves the bytes in DASH-segment
-// mode and does NOT respond to ExoPlayer's byte-range negotiation in the way
-// ExoPlayer expects. This surfaces as:
-//   "(0) Source error" on Android ExoPlayer
-//   "Connection aborted" on iOS AVPlayer
+// WHY: youtube_explode_dart stream URLs are signed CDN URLs served in
+// DASH-adaptive mode. ExoPlayer's DefaultHttpDataSource cannot negotiate
+// these as seekable progressive streams → (0) Source error.
 //
-// This affects all tracks — it is a transport-level issue, not a codec issue.
+// FIX: We extend StreamAudioSource and satisfy just_audio's byte-range
+// requests ourselves using http.Client + Range headers + YouTube CDN headers.
+// ExoPlayer only sees a plain byte stream from us; it never touches the CDN.
 //
-// FIX: Implement StreamAudioSource ourselves. just_audio calls our request()
-// method with a [start, end] byte range whenever it needs data (initial load,
-// seeks, buffer refills). We satisfy each request by making a standard HTTP
-// GET with a Range header against the YouTube CDN URL, using our own
-// http.Client — which sends the correct User-Agent + Referer headers that the
-// CDN accepts. The response stream is then fed directly to just_audio.
-//
-// This completely sidesteps ExoPlayer's HTTP stack for CDN access while still
-// letting ExoPlayer handle all decoding, buffering, and state management.
+// KEY DETAILS IN THIS REVISION:
+//   1. sourceLength is passed as null when totalBytes == 0 (unknown size)
+//      rather than 0, which was causing ExoPlayer to reject the source.
+//   2. Every CDN response is validated (status 200/206 required).
+//   3. An explicit Range: bytes=0- is always sent, even on the first request
+//      (some YouTube CDN nodes require a Range header to serve audio bytes).
+//   4. A pre-flight diagnostic log is printed before setAudioSource.
 // ---------------------------------------------------------------------------
 class _YtStreamAudioSource extends StreamAudioSource {
   final AudioOnlyStreamInfo _info;
-
-  // One http.Client per source — reused across Range requests for the same
-  // track to benefit from keep-alive connections. Closed via close() when
-  // the track is replaced or the engine is disposed.
   final _client = http.Client();
 
   _YtStreamAudioSource(this._info);
@@ -73,76 +97,89 @@ class _YtStreamAudioSource extends StreamAudioSource {
 
   @override
   Future<StreamAudioResponse> request([int? start, int? end]) async {
-    final headers = Map<String, String>.from(_kYouTubeHeaders);
+    // Always send a Range header.
+    // Without it some YouTube CDN edge nodes serve a multipart/byteranges
+    // response that ExoPlayer cannot parse. "bytes=0-" is the safest default.
+    final effectiveStart = start ?? 0;
+    final rangeEnd = end != null ? '${end - 1}' : '';
+    final rangeHeader = 'bytes=$effectiveStart-$rangeEnd';
 
-    // Build Range header when just_audio requests a specific byte slice
-    // (initial buffering, seeks, preloading). HTTP Range is inclusive on
-    // both ends; just_audio's [end] is exclusive, so subtract 1.
-    if (start != null) {
-      final last = end != null ? '${end - 1}' : '';
-      headers['Range'] = 'bytes=$start-$last';
+    final headers = <String, String>{
+      ..._kYouTubeHeaders,
+      'Range': rangeHeader,
+    };
+
+    if (kDebugMode) {
+      debugPrint(
+        '[YtStreamAudioSource] → request  '
+        'Range: $rangeHeader  '
+        'url: ${_info.url.toString().substring(0, 70)}…',
+      );
+    }
+
+    late http.StreamedResponse res;
+    try {
+      final req = http.Request('GET', _info.url)..headers.addAll(headers);
+      res = await _client.send(req);
+    } catch (e) {
+      debugPrint('[YtStreamAudioSource] ✗ HTTP request failed: $e');
+      throw _PlaybackResolveException(
+          'CDN request failed: ${e.toString().substring(0, 80)}');
     }
 
     if (kDebugMode) {
       debugPrint(
-        '[YtStreamAudioSource] request '
-        'range=${start ?? 0}-${end ?? "end"} '
-        'url=${_info.url.toString().substring(0, 60)}…',
+        '[YtStreamAudioSource] ← response '
+        'status=${res.statusCode}  '
+        'content-type=${res.headers['content-type'] ?? '(none)'}  '
+        'content-length=${res.contentLength ?? '(chunked)'}  '
+        'content-range=${res.headers['content-range'] ?? '(none)'}',
       );
     }
 
-    final req = http.Request('GET', _info.url)..headers.addAll(headers);
-    final res = await _client.send(req);
+    // Accept 200 (no Range support) and 206 (partial content / Range ok).
+    // Any other status means the CDN rejected our request.
+    if (res.statusCode != 200 && res.statusCode != 206) {
+      debugPrint(
+        '[YtStreamAudioSource] ✗ CDN rejected Range request '
+        'status=${res.statusCode}',
+      );
+      throw _PlaybackResolveException(
+        'Audio stream unavailable (CDN ${res.statusCode}).',
+      );
+    }
 
     final totalBytes = _info.size.totalBytes;
-    // res.contentLength is the size of this range slice, not the total.
-    final rangeLength = res.contentLength ?? (totalBytes - (start ?? 0));
-
-    if (kDebugMode) {
-      debugPrint(
-        '[YtStreamAudioSource] CDN responded '
-        'status=${res.statusCode} '
-        'rangeLen=$rangeLength '
-        'total=$totalBytes',
-      );
-    }
+    // Pass null if totalBytes is unknown to allow just_audio to still play
+    // without a known length (duration will be inferred during buffering).
+    final knownSourceLength = totalBytes > 0 ? totalBytes : null;
+    // Content-Length from the response is the range slice size.
+    final rangeLength =
+        res.contentLength ?? (knownSourceLength != null ? knownSourceLength - effectiveStart : null);
 
     return StreamAudioResponse(
-      sourceLength: totalBytes,
+      sourceLength: knownSourceLength,
       contentLength: rangeLength,
-      offset: start ?? 0,
+      offset: effectiveStart,
       stream: res.stream,
       contentType: _info.codec.mimeType,
     );
   }
 }
 
-/// Native-platform playback engine shared by **Android and iOS**.
-///
-/// Selected by [playback_factory.dart] when `dart.library.io` is available,
-/// which is true on both Android and iOS (false only on web).
-///
-/// Uses:
-/// - `just_audio` for audio playback (supports Android/iOS/macOS natively)
-/// - `audio_session` for AVAudioSession management on iOS and
-///   AudioFocus management on Android
+/// Native-platform playback engine shared by Android and iOS.
 class PlaybackEngineImpl implements PlaybackEngine {
   final _player = AudioPlayer();
-
-  // Broadcast controllers to match interface contract
   final _completionController = StreamController<void>.broadcast();
   bool _isDisposed = false;
-
-  // Subscriptions managed during lifecycle
   final _subscriptions = <StreamSubscription>[];
 
-  // Current stream source — kept so we can close it when loading a new track.
+  // Kept so we can close its http.Client when a new track loads.
   _YtStreamAudioSource? _currentSource;
 
   @override
   Stream<Duration> get positionStream => _player.positionStream;
 
-  // Only emit when the player has determined a real (positive) duration.
   @override
   Stream<Duration> get durationStream => _player.durationStream
       .where((d) => d != null && d > Duration.zero)
@@ -159,30 +196,23 @@ class PlaybackEngineImpl implements PlaybackEngine {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
 
-    // iOS interruption handling (phone calls, Siri, alarms)
     _subscriptions.add(
       session.interruptionEventStream.listen((event) {
         if (_isDisposed) return;
         if (event.begin) {
           _player.pause();
-        } else {
-          if (event.type == AudioInterruptionType.pause ||
-              event.type == AudioInterruptionType.duck) {
-            _player.play();
-          }
+        } else if (event.type == AudioInterruptionType.pause ||
+            event.type == AudioInterruptionType.duck) {
+          _player.play();
         }
       }),
     );
-
-    // Becoming noisy: headphone unplug / Bluetooth disconnect
     _subscriptions.add(
       session.becomingNoisyEventStream.listen((_) {
         if (_isDisposed) return;
         _player.pause();
       }),
     );
-
-    // Track completion
     _subscriptions.add(
       _player.playerStateStream.listen((state) {
         if (_isDisposed) return;
@@ -197,9 +227,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // Stream resolution
   // -------------------------------------------------------------------------
 
-  // ── Playable container whitelist ─────────────────────────────────────────
-  // Only mp4/m4a/AAC containers. webm/Opus excluded — even though ExoPlayer
-  // supports Opus in theory, the CDN delivery mode causes source errors.
+  /// Accepts only mp4/m4a/AAC containers; rejects webm/opus.
   static bool _isMp4Compatible(AudioOnlyStreamInfo s) {
     final mime = s.codec.mimeType.toLowerCase();
     final container = s.container.name.toLowerCase();
@@ -209,11 +237,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
         container == 'mp4';
   }
 
-  /// Resolves a YouTube [videoId] to a compatible [AudioOnlyStreamInfo].
-  ///
-  /// Only mp4/m4a/AAC streams pass the whitelist filter — see [_isMp4Compatible].
-  /// The highest-bitrate compatible stream is selected.
-  /// Throws [_PlaybackResolveException] on any failure.
   Future<({AudioOnlyStreamInfo info, String codec, String container, int bitrateKbps})>
       _resolveStream(String videoId) async {
     final yt = YoutubeExplode();
@@ -225,49 +248,68 @@ class PlaybackEngineImpl implements PlaybackEngine {
       final manifest = await yt.videos.streamsClient.getManifest(videoId);
       final audioStreams = manifest.audioOnly;
 
+      // ── Full candidate dump (debug only) ─────────────────────────────────
       if (kDebugMode) {
         debugPrint(
-          '[PlaybackEngine] Found ${audioStreams.length} audio-only streams for $videoId',
+          '[PlaybackEngine] ${audioStreams.length} audio-only candidates:',
         );
         for (final s in audioStreams) {
-          final compat = _isMp4Compatible(s) ? '✓' : '✗ skip';
+          final pass = _isMp4Compatible(s) ? '✓' : '✗ skip';
+          final bytes = s.size.totalBytes;
           debugPrint(
-            '  $compat  ${s.codec.mimeType} | ${s.container.name} | '
-            '${(s.bitrate.bitsPerSecond / 1000).round()} kbps | '
-            '${s.size.totalBytes} bytes',
+            '  $pass  mime=${s.codec.mimeType}  '
+            'container=${s.container.name}  '
+            'bitrate=${(s.bitrate.bitsPerSecond / 1000).round()} kbps  '
+            'size=${bytes > 0 ? '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB' : 'unknown'}',
           );
         }
       }
 
-      if (audioStreams.isEmpty) {
-        throw Exception('no audio streams found');
-      }
+      if (audioStreams.isEmpty) throw Exception('no audio streams');
 
       final compatibleStreams = audioStreams
           .where(_isMp4Compatible)
           .toList()
         ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
 
-      if (compatibleStreams.isEmpty) {
+      if (kDebugMode && compatibleStreams.isEmpty) {
         debugPrint(
-          '[PlaybackEngine] ✗ No mp4-compatible stream for $videoId. '
-          'Available: ${audioStreams.map((s) => s.codec.mimeType).join(', ')}',
+          '[PlaybackEngine] ✗ All candidates skipped. '
+          'Types: ${audioStreams.map((s) => s.codec.mimeType).toSet().join(', ')}',
         );
-        throw Exception('no compatible audio format available');
+      }
+
+      if (compatibleStreams.isEmpty) {
+        throw Exception('no mp4-compatible audio stream');
       }
 
       final chosen = compatibleStreams.first;
       final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
 
+      // ── Pre-flight URL analysis ───────────────────────────────────────────
       if (kDebugMode) {
-        debugPrint(
-          '[PlaybackEngine] ✓ Chose stream for $videoId\n'
-          '  codec    : ${chosen.codec.mimeType}\n'
-          '  container: ${chosen.container.name}\n'
-          '  bitrate  : $bitrateKbps kbps\n'
-          '  size     : ${chosen.size.totalBytes} bytes\n'
-          '  url      : ${chosen.url.toString().substring(0, 60)}…',
+        final uri = chosen.url;
+        final diag = _analyzeUrl(uri, chosen);
+        debugPrint('[PlaybackEngine] ✓ Selected stream for $videoId');
+        diag.forEach(
+          (k, v) => debugPrint('  $k: $v'),
         );
+        debugPrint(
+          '  url_preview: ${uri.toString().substring(0, 80)}…',
+        );
+        if (diag['is_manifest'] == 'true') {
+          debugPrint(
+            '[PlaybackEngine] ⚠ WARNING: selected URL looks like a MANIFEST — '
+            'may not be a direct audio stream!',
+          );
+        }
+        if (diag['size_valid'] == 'false') {
+          debugPrint(
+            '[PlaybackEngine] ⚠ WARNING: totalBytes=0 — '
+            'sourceLength will be null (unknown). '
+            'Seeking may be unavailable until player buffers duration.',
+          );
+        }
       }
 
       return (
@@ -281,8 +323,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
       throw const _PlaybackResolveException(
           'This track is temporarily unavailable.');
     } finally {
-      // Manifest fetch is done — close the yt instance.
-      // The AudioOnlyStreamInfo already holds the URL; we no longer need yt.
       yt.close();
     }
   }
@@ -295,78 +335,91 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Future<void> load(String videoId) async {
     if (videoId.isEmpty) return;
 
-    // ── Step 1: Resolve — get AudioOnlyStreamInfo (not a raw URL) ───────────
+    // ── Step 1: Resolve ───────────────────────────────────────────────────
     final resolved = await _resolveStream(videoId);
 
-    // ── Step 2: Stop current playback & release previous source ─────────────
+    // ── Step 2: Stop + release previous source ────────────────────────────
     await _player.stop();
     _currentSource?.close();
     _currentSource = null;
 
-    // ── Step 3: Create the byte-pipe source ─────────────────────────────────
-    // _YtStreamAudioSource satisfies just_audio's byte-range requests using
-    // our own http.Client with YouTube CDN headers — bypasses ExoPlayer HTTP.
+    // ── Step 3: Build StreamAudioSource ───────────────────────────────────
     final source = _YtStreamAudioSource(resolved.info);
     _currentSource = source;
 
     if (kDebugMode) {
+      final totalBytes = resolved.info.size.totalBytes;
       debugPrint(
-        '[PlaybackEngine] setAudioSource (StreamAudioSource) → $videoId\n'
-        '  type     : YtStreamAudioSource (byte-pipe, NOT AudioSource.uri)\n'
-        '  codec    : ${resolved.codec}\n'
-        '  container: ${resolved.container}\n'
-        '  bitrate  : ${resolved.bitrateKbps} kbps\n'
-        '  size     : ${resolved.info.size.totalBytes} bytes',
+        '[PlaybackEngine] ── PRE-FLIGHT SOURCE SUMMARY ─────────────────\n'
+        '  videoId      : $videoId\n'
+        '  source_type  : _YtStreamAudioSource (StreamAudioSource byte-pipe)\n'
+        '  codec        : ${resolved.codec}\n'
+        '  container    : ${resolved.container}\n'
+        '  bitrate      : ${resolved.bitrateKbps} kbps\n'
+        '  total_bytes  : ${totalBytes > 0 ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB ($totalBytes B)' : 'UNKNOWN (0)'}\n'
+        '  source_length: ${totalBytes > 0 ? '$totalBytes' : 'null (will be inferred)'}\n'
+        '  headers      : User-Agent + Referer + Origin + Range\n'
+        '  url_host     : ${resolved.info.url.host}\n'
+        '  url_scheme   : ${resolved.info.url.scheme}\n'
+        '────────────────────────────────────────────────────────────────',
       );
     }
 
-    // ── Step 4: Load into player ─────────────────────────────────────────────
+    // ── Step 4: setAudioSource ────────────────────────────────────────────
+    if (kDebugMode) {
+      debugPrint('[PlaybackEngine] setAudioSource → $videoId …');
+    }
     try {
       await _player.setAudioSource(source);
       if (kDebugMode) {
-        debugPrint('[PlaybackEngine] ✓ setAudioSource OK for $videoId');
+        debugPrint('[PlaybackEngine] ✓ setAudioSource OK — $videoId');
       }
     } catch (e) {
       _currentSource?.close();
       _currentSource = null;
       debugPrint(
-        '[PlaybackEngine] ✗ setAudioSource FAILED for $videoId: $e '
-        '(type: ${e.runtimeType})',
+        '[PlaybackEngine] ✗ setAudioSource FAILED — $videoId\n'
+        '  exception type : ${e.runtimeType}\n'
+        '  exception value: $e\n'
+        '  player_error   : ${e is PlayerException ? 'code=${e.code} msg=${e.message}' : 'n/a'}',
       );
       if (kDebugMode) {
         debugPrint(
           '[PlaybackEngine][DEBUG SUMMARY] videoId=$videoId '
-          'ext=${resolved.container} codec=${resolved.codec} source=REJECTED at setAudioSource',
+          'container=${resolved.container} codec=${resolved.codec} '
+          'REJECTED at setAudioSource — see above for exact exception',
         );
       }
       throw _PlaybackResolveException(
-        'Playback source rejected by player: ${_friendlyPlayerError(e)}',
+        'Playback source rejected: ${_friendlyPlayerError(e)}',
       );
     }
 
-    // ── Step 5: Start playback ────────────────────────────────────────────────
+    // ── Step 5: play ──────────────────────────────────────────────────────
     if (kDebugMode) {
       debugPrint('[PlaybackEngine] play() → $videoId …');
     }
     try {
       await _player.play();
       if (kDebugMode) {
-        debugPrint('[PlaybackEngine] ✓ play() OK for $videoId');
+        debugPrint('[PlaybackEngine] ✓ play() OK — $videoId');
         debugPrint(
-          '[PlaybackEngine][DEBUG SUMMARY] videoId=$videoId | '
-          'ext=${resolved.container} | codec=${resolved.codec} | '
-          'bitrate=${resolved.bitrateKbps} kbps | source=ACCEPTED',
+          '[PlaybackEngine][DEBUG SUMMARY] videoId=$videoId '
+          'container=${resolved.container} codec=${resolved.codec} '
+          'bitrate=${resolved.bitrateKbps} kbps ACCEPTED',
         );
       }
     } catch (e) {
       debugPrint(
-        '[PlaybackEngine] ✗ play() FAILED for $videoId: '
-        '$e (type: ${e.runtimeType})',
+        '[PlaybackEngine] ✗ play() FAILED — $videoId\n'
+        '  exception type : ${e.runtimeType}\n'
+        '  exception value: $e\n'
+        '  player_error   : ${e is PlayerException ? 'code=${e.code} msg=${e.message}' : 'n/a'}',
       );
       if (kDebugMode) {
         debugPrint(
           '[PlaybackEngine][DEBUG SUMMARY] videoId=$videoId '
-          'ext=${resolved.container} source=REJECTED at play()',
+          'container=${resolved.container} REJECTED at play()',
         );
       }
       throw _PlaybackResolveException(
@@ -375,7 +428,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
   }
 
-  /// Converts a raw just_audio / platform exception into a short friendly string.
   String _friendlyPlayerError(Object e) {
     if (e is PlayerException) {
       return '(${e.code}) ${e.message ?? 'Unknown player error'}';
@@ -410,7 +462,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
     _completionController.close();
   }
 
-  /// just_audio is headless on Android and iOS — no widget needed.
   @override
   Widget buildPlayerView(BuildContext context) => const SizedBox.shrink();
 }
