@@ -111,7 +111,7 @@ class _YtStreamAudioSource extends StreamAudioSource {
 
     if (kDebugMode) {
       debugPrint(
-        '[YtStreamAudioSource] → request  '
+        '[PlaybackEngine][Source] CDN request  '
         'Range: $rangeHeader  '
         'url: ${_info.url.toString().substring(0, 70)}…',
       );
@@ -122,14 +122,14 @@ class _YtStreamAudioSource extends StreamAudioSource {
       final req = http.Request('GET', _info.url)..headers.addAll(headers);
       res = await _client.send(req);
     } catch (e) {
-      debugPrint('[YtStreamAudioSource] ✗ HTTP request failed: $e');
+      debugPrint('[PlaybackEngine][Error] CDN HTTP request failed: $e');
       throw _PlaybackResolveException(
           'CDN request failed: ${e.toString().substring(0, 80)}');
     }
 
     if (kDebugMode) {
       debugPrint(
-        '[YtStreamAudioSource] ← response '
+        '[PlaybackEngine][Source] CDN response '
         'status=${res.statusCode}  '
         'content-type=${res.headers['content-type'] ?? '(none)'}  '
         'content-length=${res.contentLength ?? '(chunked)'}  '
@@ -141,7 +141,7 @@ class _YtStreamAudioSource extends StreamAudioSource {
     // Any other status means the CDN rejected our request.
     if (res.statusCode != 200 && res.statusCode != 206) {
       debugPrint(
-        '[YtStreamAudioSource] ✗ CDN rejected Range request '
+        '[PlaybackEngine][Error] CDN rejected Range request '
         'status=${res.statusCode}',
       );
       throw _PlaybackResolveException(
@@ -350,80 +350,85 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (kDebugMode) {
       final totalBytes = resolved.info.size.totalBytes;
       debugPrint(
-        '[PlaybackEngine] ── PRE-FLIGHT SOURCE SUMMARY ─────────────────\n'
+        '[PlaybackEngine][Source] PRE-FLIGHT SUMMARY\n'
         '  videoId      : $videoId\n'
-        '  source_type  : _YtStreamAudioSource (StreamAudioSource byte-pipe)\n'
+        '  source_type  : _YtStreamAudioSource (byte-pipe / StreamAudioSource)\n'
         '  codec        : ${resolved.codec}\n'
         '  container    : ${resolved.container}\n'
         '  bitrate      : ${resolved.bitrateKbps} kbps\n'
-        '  total_bytes  : ${totalBytes > 0 ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB ($totalBytes B)' : 'UNKNOWN (0)'}\n'
-        '  source_length: ${totalBytes > 0 ? '$totalBytes' : 'null (will be inferred)'}\n'
-        '  headers      : User-Agent + Referer + Origin + Range\n'
+        '  total_bytes  : ${totalBytes > 0 ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB' : 'UNKNOWN — sourceLength=null'}\n'
+        '  headers      : User-Agent ✓  Referer ✓  Origin ✓  Range ✓\n'
+        '  direct_stream: true (byte-pipe, not AudioSource.uri)\n'
         '  url_host     : ${resolved.info.url.host}\n'
-        '  url_scheme   : ${resolved.info.url.scheme}\n'
-        '────────────────────────────────────────────────────────────────',
+        '  url_scheme   : ${resolved.info.url.scheme}',
       );
     }
 
     // ── Step 4: setAudioSource ────────────────────────────────────────────
     if (kDebugMode) {
-      debugPrint('[PlaybackEngine] setAudioSource → $videoId …');
+      debugPrint('[PlaybackEngine][Source] setAudioSource() starting — $videoId');
     }
     try {
       await _player.setAudioSource(source);
       if (kDebugMode) {
-        debugPrint('[PlaybackEngine] ✓ setAudioSource OK — $videoId');
+        debugPrint('[PlaybackEngine][Source] setAudioSource() OK — $videoId');
       }
     } catch (e) {
       _currentSource?.close();
       _currentSource = null;
+      // Always logged (debug + release) — critical failure path.
       debugPrint(
-        '[PlaybackEngine] ✗ setAudioSource FAILED — $videoId\n'
-        '  exception type : ${e.runtimeType}\n'
-        '  exception value: $e\n'
-        '  player_error   : ${e is PlayerException ? 'code=${e.code} msg=${e.message}' : 'n/a'}',
+        '[PlaybackEngine][Error] setAudioSource() FAILED — $videoId\n'
+        '  type   : ${e.runtimeType}\n'
+        '  value  : $e\n'
+        '  player : ${e is PlayerException ? 'code=${e.code}  msg=${e.message}' : 'n/a'}',
       );
       if (kDebugMode) {
         debugPrint(
-          '[PlaybackEngine][DEBUG SUMMARY] videoId=$videoId '
-          'container=${resolved.container} codec=${resolved.codec} '
-          'REJECTED at setAudioSource — see above for exact exception',
+          '[PlaybackEngine][Error] SUMMARY  videoId=$videoId  '
+          'container=${resolved.container}  codec=${resolved.codec}  '
+          'stage=setAudioSource  headers=attached  result=REJECTED',
         );
       }
+      // In debug builds append the failure stage so the snackbar shows exactly
+      // where playback broke. In release, keep the generic friendly message.
+      const hint = kDebugMode ? ' (setAudioSource failed)' : '';
       throw _PlaybackResolveException(
-        'Playback source rejected: ${_friendlyPlayerError(e)}',
+        'Playback source rejected$hint: ${_friendlyPlayerError(e)}',
       );
     }
 
     // ── Step 5: play ──────────────────────────────────────────────────────
     if (kDebugMode) {
-      debugPrint('[PlaybackEngine] play() → $videoId …');
+      debugPrint('[PlaybackEngine][Source] play() starting — $videoId');
     }
     try {
       await _player.play();
       if (kDebugMode) {
-        debugPrint('[PlaybackEngine] ✓ play() OK — $videoId');
+        debugPrint('[PlaybackEngine][Source] play() OK — $videoId');
         debugPrint(
-          '[PlaybackEngine][DEBUG SUMMARY] videoId=$videoId '
-          'container=${resolved.container} codec=${resolved.codec} '
-          'bitrate=${resolved.bitrateKbps} kbps ACCEPTED',
+          '[PlaybackEngine][Source] SUMMARY  videoId=$videoId  '
+          'container=${resolved.container}  codec=${resolved.codec}  '
+          'bitrate=${resolved.bitrateKbps} kbps  stage=play  result=ACCEPTED',
         );
       }
     } catch (e) {
+      // Always logged — critical failure path.
       debugPrint(
-        '[PlaybackEngine] ✗ play() FAILED — $videoId\n'
-        '  exception type : ${e.runtimeType}\n'
-        '  exception value: $e\n'
-        '  player_error   : ${e is PlayerException ? 'code=${e.code} msg=${e.message}' : 'n/a'}',
+        '[PlaybackEngine][Error] play() FAILED — $videoId\n'
+        '  type   : ${e.runtimeType}\n'
+        '  value  : $e\n'
+        '  player : ${e is PlayerException ? 'code=${e.code}  msg=${e.message}' : 'n/a'}',
       );
       if (kDebugMode) {
         debugPrint(
-          '[PlaybackEngine][DEBUG SUMMARY] videoId=$videoId '
-          'container=${resolved.container} REJECTED at play()',
+          '[PlaybackEngine][Error] SUMMARY  videoId=$videoId  '
+          'container=${resolved.container}  stage=play  result=REJECTED',
         );
       }
+      const hint = kDebugMode ? ' (play() failed)' : '';
       throw _PlaybackResolveException(
-        'Playback failed to start: ${_friendlyPlayerError(e)}',
+        'Playback failed to start$hint: ${_friendlyPlayerError(e)}',
       );
     }
   }
