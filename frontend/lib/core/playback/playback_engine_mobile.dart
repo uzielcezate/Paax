@@ -16,14 +16,14 @@ class _PlaybackResolveException implements Exception {
   String toString() => message;
 }
 
-// ---------------------------------------------------------------------------
-// HTTP headers passed directly to AudioSource.uri().
-// just_audio v0.9.x forwards these to ExoPlayer's DefaultHttpDataSource,
-// which then includes them on every range request it makes to the CDN.
-// ---------------------------------------------------------------------------
+// User-Agent: standard browser UA.
+// The YouTube mobile app UA was causing CDN to treat the request as an
+// adaptive/DASH client; a browser UA signals progressive HTTP download intent.
 const _kYouTubeHeaders = <String, String>{
   'User-Agent':
-      'com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+      'AppleWebKit/537.36 (KHTML, like Gecko) '
+      'Chrome/122.0.0.0 Safari/537.36',
   'Referer': 'https://www.youtube.com/',
   'Origin': 'https://www.youtube.com',
 };
@@ -32,18 +32,44 @@ const _kYouTubeHeaders = <String, String>{
 // Stream format filter
 // ---------------------------------------------------------------------------
 
-/// Returns true only for mp4 / m4a / AAC audio containers.
-/// webm / opus containers are explicitly rejected — ExoPlayer on Android
-/// cannot reliably handle webm as a progressive HTTP stream.
-bool _isMp4Compatible(AudioOnlyStreamInfo s) {
+/// Returns true only when a stream is safe for direct progressive playback.
+///
+/// Acceptance criteria (ALL must be true):
+///   1. Container is mp4 / m4a / AAC (not webm, not opus).
+///   2. URL does NOT contain `sq=`  — presence of `sq` means the URL is a
+///      DASH segment (one chunk of many), not a full progressive file.
+///   3. URL does not look like a manifest (.m3u8, .mpd, manifest_type=).
+///
+/// Preference (used in sort, not hard rejection):
+///   Streams with `clen=` in their URL have a known byte length declared by
+///   the CDN, indicating the server will serve a complete seekable file.
+bool _isDirectPlayable(AudioOnlyStreamInfo s) {
   final mime = s.codec.mimeType.toLowerCase();
   final container = s.container.name.toLowerCase();
-  return (mime.contains('mp4') ||
-          mime.contains('m4a') ||
-          mime.contains('aac') ||
-          container == 'mp4') &&
-      !mime.contains('webm') &&
-      !container.contains('webm');
+  final url = s.url;
+  final path = url.path.toLowerCase();
+  final params = url.queryParameters;
+
+  // ── Container check ──────────────────────────────────────────────────────
+  final isMp4Mime = mime.contains('mp4') ||
+      mime.contains('m4a') ||
+      mime.contains('aac') ||
+      container == 'mp4';
+  if (!isMp4Mime) return false;
+  if (mime.contains('webm') || container.contains('webm')) return false;
+  if (mime.contains('opus')) return false;
+
+  // ── URL-level DASH indicators ─────────────────────────────────────────────
+  // sq= identifies a DASH segment chunk — ExoPlayer cannot use it as a
+  // progressive source; it would need the full DASH manifest instead.
+  if (params.containsKey('sq')) return false;
+
+  // manifest_type, .m3u8, .mpd  → definitely a manifest, not a stream.
+  if (params.containsKey('manifest_type')) return false;
+  if (path.endsWith('.m3u8') || path.endsWith('.mpd')) return false;
+  if (path.contains('manifest') || path.contains('playlist')) return false;
+
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +100,7 @@ Map<String, String> _analyzeUrl(Uri uri, AudioOnlyStreamInfo info) {
     'query_params': '${uri.queryParameters.length}',
     'total_bytes': '$totalBytes',
     'size_known': '${totalBytes > 0}',
-    'mp4_compatible': '${_isMp4Compatible(info)}',
+    'direct_playable': '${_isDirectPlayable(info)}',
     // DASH indicator: YouTube progressive streams serve full content-length,
     // while DASH segments use 'clen=' query param alongside 'sq='
     'has_sq_param': '${uri.queryParameters.containsKey('sq')}',
@@ -173,7 +199,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
         debugPrint(
             '[PlaybackEngine][Source] ${audioStreams.length} audio-only candidates:');
         for (final s in audioStreams) {
-          final pass = _isMp4Compatible(s) ? '✓ mp4-compat' : '✗ skip';
+          final pass = _isDirectPlayable(s) ? '✓ direct' : '✗ skip';
           final bytes = s.size.totalBytes;
           final url = s.url;
           debugPrint(
@@ -191,48 +217,79 @@ class PlaybackEngineImpl implements PlaybackEngine {
         throw Exception('YouTube returned no audio streams for $videoId');
       }
 
-      // ── Filter: mp4/m4a/AAC only ────────────────────────────────────────
-      final compatibleStreams = audioStreams
-          .where(_isMp4Compatible)
-          .toList()
-        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      // ── Filter: direct-playable only (no sq=, no manifest, mp4/m4a) ──────
+      final directStreams =
+          audioStreams.where(_isDirectPlayable).toList();
 
-      if (kDebugMode && compatibleStreams.isEmpty) {
-        debugPrint(
-          '[PlaybackEngine][Error] No mp4-compatible streams found. '
-          'Available types: ${audioStreams.map((s) => s.codec.mimeType).toSet().join(', ')}',
+      if (kDebugMode) {
+        // Log why each stream was accepted or rejected.
+        for (final s in audioStreams) {
+          final accepted = _isDirectPlayable(s);
+          final url = s.url;
+          final hasSq = url.queryParameters.containsKey('sq');
+          final hasClen = url.queryParameters.containsKey('clen');
+          final verdict = accepted ? '✓ direct' : '✗ skip';
+          final reason = !accepted
+              ? (hasSq ? 'sq=DASH-segment'
+                  : (!_isDirectPlayable(s) ? 'container/mime'
+                      : 'manifest-url'))
+              : (hasClen ? 'clen=known-size' : 'no-clen');
+          debugPrint(
+            '  $verdict  ${s.codec.mimeType}/${s.container.name}  '
+            '${(s.bitrate.bitsPerSecond / 1000).round()} kbps  '
+            'sq=$hasSq  clen=$hasClen  → $reason',
+          );
+        }
+      }
+
+      if (directStreams.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            '[PlaybackEngine][Error] No direct-playable streams found after filtering. '
+            'All ${audioStreams.length} candidates were DASH segments or incompatible. '
+            'mimes: ${audioStreams.map((s) => '${s.codec.mimeType}(sq=${s.url.queryParameters.containsKey('sq')})').join(', ')}',
+          );
+        }
+        throw Exception(
+          'no direct-playable audio stream found '
+          '(${audioStreams.length} candidates all had sq= or incompatible container)',
         );
       }
 
-      if (compatibleStreams.isEmpty) {
-        throw Exception('no mp4/m4a audio stream found '
-            '(available: ${audioStreams.map((s) => s.container.name).toSet().join(', ')})');
-      }
+      // ── Sort: clen= streams first (full known-length file), then by bitrate
+      directStreams.sort((a, b) {
+        final aClen = a.url.queryParameters.containsKey('clen') ? 1 : 0;
+        final bClen = b.url.queryParameters.containsKey('clen') ? 1 : 0;
+        if (bClen != aClen) return bClen - aClen; // clen= wins
+        return b.bitrate.compareTo(a.bitrate);     // then highest bitrate
+      });
 
-      final chosen = compatibleStreams.first;
+      final chosen = directStreams.first;
       final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
 
       // ── Validate fields before returning ────────────────────────────────
       if (kDebugMode) {
         final uri = chosen.url;
         final diag = _analyzeUrl(uri, chosen);
-        debugPrint('[PlaybackEngine][Source] ✓ Selected stream:');
+        final hasClen = uri.queryParameters.containsKey('clen');
+        debugPrint('[PlaybackEngine][Source] ✓ Selected direct-playable stream:');
         diag.forEach((k, v) => debugPrint('  $k: $v'));
+        debugPrint('  bitrate    : $bitrateKbps kbps');
+        debugPrint('  clen_known : $hasClen');
         debugPrint(
             '  url_preview: ${uri.toString().substring(0, 80)}…');
-        debugPrint(
-            '  bitrate: $bitrateKbps kbps');
 
         if (diag['is_manifest'] == 'true') {
           debugPrint(
-            '[PlaybackEngine][Error] ⚠ WARNING: URL looks like a MANIFEST. '
-            'ExoPlayer will reject this!',
+            '[PlaybackEngine][Error] ⚠ UNEXPECTED: selected URL still looks '
+            'like a MANIFEST — filter may have missed this case!',
           );
         }
+        // sq= should now be impossible here since _isDirectPlayable rejects it.
         if (diag['has_sq_param'] == 'true') {
           debugPrint(
-            '[PlaybackEngine][Error] ⚠ WARNING: URL has sq= param — '
-            'this is likely a DASH segment URL, not a progressive stream.',
+            '[PlaybackEngine][Error] ⚠ UNEXPECTED: selected URL still has sq= '
+            '— _isDirectPlayable filter may have a bug!',
           );
         }
       }
