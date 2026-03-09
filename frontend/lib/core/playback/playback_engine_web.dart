@@ -63,6 +63,11 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // ... (rest of methods)
 
   @override
+  void prefetchNext(String videoId) {
+    // No-op on web — stream resolution is handled by the YouTube iframe API.
+  }
+
+  @override
   void dispose() {
     _isDisposed = true;
     _stopPositionTimer();
