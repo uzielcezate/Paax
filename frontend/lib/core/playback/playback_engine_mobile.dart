@@ -72,6 +72,30 @@ bool _isDirectPlayable(AudioOnlyStreamInfo s) {
   return true;
 }
 
+/// Returns true only when a MuxedStreamInfo is safe for direct progressive
+/// playback by ExoPlayer. ExoPlayer will discard the video track and play
+/// only the embedded audio — this is the fallback when all audio-only streams
+/// are DASH-segmented.
+///
+/// Acceptance criteria:
+///   1. Container is mp4 (not webm).
+///   2. URL does NOT contain `sq=` (DASH segment indicator).
+///   3. URL is not a manifest (.m3u8, .mpd, manifest_type=).
+bool _isDirectPlayableMuxed(MuxedStreamInfo s) {
+  final container = s.container.name.toLowerCase();
+  final url = s.url;
+  final path = url.path.toLowerCase();
+  final params = url.queryParameters;
+
+  if (container != 'mp4') return false;
+  if (params.containsKey('sq')) return false;
+  if (params.containsKey('manifest_type')) return false;
+  if (path.endsWith('.m3u8') || path.endsWith('.mpd')) return false;
+  if (path.contains('manifest') || path.contains('playlist')) return false;
+
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // URL analysis helper — debug diagnostics only.
 // ---------------------------------------------------------------------------
@@ -184,8 +208,20 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // Stream resolution
   // -------------------------------------------------------------------------
 
-  Future<({AudioOnlyStreamInfo info, String codec, String container, int bitrateKbps})>
-      _resolveStream(String videoId) async {
+  // ── Typed resolution result ────────────────────────────────────────────────
+  // isMuxedFallback = true  → chosen from manifest.muxed (video+audio container)
+  // isMuxedFallback = false → chosen from manifest.audioOnly (preferred)
+
+  /// Resolves the best playable stream for [videoId].
+  ///
+  /// Resolution order:
+  ///   1. [AUDIO STREAM]  — audioOnly, direct-playable mp4/m4a (no sq=).
+  ///   2. [MUXED FALLBACK] — muxed mp4 when all audio-only are DASH-segmented.
+  ///
+  /// The YoutubeExplode session is opened and closed inside this method.
+  Future<
+    ({Uri url, String codec, String container, int bitrateKbps, bool isMuxedFallback})
+  > _resolveStream(String videoId) async {
     final yt = YoutubeExplode();
     try {
       if (kDebugMode) {
@@ -193,11 +229,13 @@ class PlaybackEngineImpl implements PlaybackEngine {
       }
 
       final manifest = await yt.videos.streamsClient.getManifest(videoId);
+
+      // ── PATH 1: audio-only ───────────────────────────────────────────────
       final audioStreams = manifest.audioOnly;
 
       if (kDebugMode) {
         debugPrint(
-            '[PlaybackEngine][Source] ${audioStreams.length} audio-only candidates:');
+            '[AUDIO STREAM] ${audioStreams.length} audio-only candidates:');
         for (final s in audioStreams) {
           final pass = _isDirectPlayable(s) ? '✓ direct' : '✗ skip';
           final bytes = s.size.totalBytes;
@@ -213,16 +251,9 @@ class PlaybackEngineImpl implements PlaybackEngine {
         }
       }
 
-      if (audioStreams.isEmpty) {
-        throw Exception('YouTube returned no audio streams for $videoId');
-      }
-
-      // ── Filter: direct-playable only (no sq=, no manifest, mp4/m4a) ──────
-      final directStreams =
-          audioStreams.where(_isDirectPlayable).toList();
+      final directStreams = audioStreams.where(_isDirectPlayable).toList();
 
       if (kDebugMode) {
-        // Log why each stream was accepted or rejected.
         for (final s in audioStreams) {
           final accepted = _isDirectPlayable(s);
           final url = s.url;
@@ -230,9 +261,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
           final hasClen = url.queryParameters.containsKey('clen');
           final verdict = accepted ? '✓ direct' : '✗ skip';
           final reason = !accepted
-              ? (hasSq ? 'sq=DASH-segment'
-                  : (!_isDirectPlayable(s) ? 'container/mime'
-                      : 'manifest-url'))
+              ? (hasSq ? 'sq=DASH-segment' : 'container/mime')
               : (hasClen ? 'clen=known-size' : 'no-clen');
           debugPrint(
             '  $verdict  ${s.codec.mimeType}/${s.container.name}  '
@@ -242,71 +271,118 @@ class PlaybackEngineImpl implements PlaybackEngine {
         }
       }
 
-      if (directStreams.isEmpty) {
+      if (directStreams.isNotEmpty) {
+        // Sort: clen= streams first (known-length file), then highest bitrate.
+        directStreams.sort((a, b) {
+          final aClen = a.url.queryParameters.containsKey('clen') ? 1 : 0;
+          final bClen = b.url.queryParameters.containsKey('clen') ? 1 : 0;
+          if (bClen != aClen) return bClen - aClen;
+          return b.bitrate.compareTo(a.bitrate);
+        });
+        final chosen = directStreams.first;
+        final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
+        final uri = chosen.url;
+
         if (kDebugMode) {
-          debugPrint(
-            '[PlaybackEngine][Error] No direct-playable streams found after filtering. '
-            'All ${audioStreams.length} candidates were DASH segments or incompatible. '
-            'mimes: ${audioStreams.map((s) => '${s.codec.mimeType}(sq=${s.url.queryParameters.containsKey('sq')})').join(', ')}',
-          );
+          final diag = _analyzeUrl(uri, chosen);
+          debugPrint('[AUDIO STREAM] ✓ Selected direct-playable audio-only stream:');
+          diag.forEach((k, v) => debugPrint('  $k: $v'));
+          debugPrint('  bitrate    : $bitrateKbps kbps');
+          debugPrint('  clen_known : ${uri.queryParameters.containsKey('clen')}');
+          debugPrint('  url_preview: ${uri.toString().substring(0, uri.toString().length.clamp(0, 80))}…');
+          if (diag['has_sq_param'] == 'true') {
+            debugPrint('[AUDIO STREAM] ⚠ UNEXPECTED: selected URL still has sq= — filter bug?');
+          }
         }
-        throw Exception(
-          'no direct-playable audio stream found '
-          '(${audioStreams.length} candidates all had sq= or incompatible container)',
+
+        return (
+          url: uri,
+          codec: chosen.codec.mimeType,
+          container: chosen.container.name,
+          bitrateKbps: bitrateKbps,
+          isMuxedFallback: false,
         );
       }
 
-      // ── Sort: clen= streams first (full known-length file), then by bitrate
-      directStreams.sort((a, b) {
-        final aClen = a.url.queryParameters.containsKey('clen') ? 1 : 0;
-        final bClen = b.url.queryParameters.containsKey('clen') ? 1 : 0;
-        if (bClen != aClen) return bClen - aClen; // clen= wins
-        return b.bitrate.compareTo(a.bitrate);     // then highest bitrate
-      });
-
-      final chosen = directStreams.first;
-      final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
-
-      // ── Validate fields before returning ────────────────────────────────
+      // ── PATH 2: muxed fallback ───────────────────────────────────────────
+      // All audio-only streams were DASH-segmented (sq=) or incompatible.
+      // Try muxed mp4: ExoPlayer plays only the audio track from the container.
       if (kDebugMode) {
-        final uri = chosen.url;
-        final diag = _analyzeUrl(uri, chosen);
-        final hasClen = uri.queryParameters.containsKey('clen');
-        debugPrint('[PlaybackEngine][Source] ✓ Selected direct-playable stream:');
-        diag.forEach((k, v) => debugPrint('  $k: $v'));
-        debugPrint('  bitrate    : $bitrateKbps kbps');
-        debugPrint('  clen_known : $hasClen');
         debugPrint(
-            '  url_preview: ${uri.toString().substring(0, 80)}…');
-
-        if (diag['is_manifest'] == 'true') {
-          debugPrint(
-            '[PlaybackEngine][Error] ⚠ UNEXPECTED: selected URL still looks '
-            'like a MANIFEST — filter may have missed this case!',
-          );
-        }
-        // sq= should now be impossible here since _isDirectPlayable rejects it.
-        if (diag['has_sq_param'] == 'true') {
-          debugPrint(
-            '[PlaybackEngine][Error] ⚠ UNEXPECTED: selected URL still has sq= '
-            '— _isDirectPlayable filter may have a bug!',
-          );
-        }
+          '[MUXED FALLBACK] No direct audio-only streams — '
+          'all ${audioStreams.length} candidates had sq= or incompatible container. '
+          'Trying muxed mp4 streams…',
+        );
       }
 
-      return (
-        info: chosen,
-        codec: chosen.codec.mimeType,
-        container: chosen.container.name,
-        bitrateKbps: bitrateKbps,
-      );
+      return await _resolveMuxedFallback(videoId, manifest);
     } catch (e) {
       debugPrint('[PlaybackEngine][Error] Resolution failed for $videoId: $e');
-      throw const _PlaybackResolveException(
-          'This track is temporarily unavailable.');
+      rethrow;
     } finally {
       yt.close();
     }
+  }
+
+  /// Selects the best progressive mp4 muxed stream from [manifest].
+  ///
+  /// Sort order: clen= first (known-length), then **lowest** bitrate — we only
+  /// need the audio track, so smallest file is preferable.
+  Future<
+    ({Uri url, String codec, String container, int bitrateKbps, bool isMuxedFallback})
+  > _resolveMuxedFallback(String videoId, StreamManifest manifest) async {
+    final muxedStreams = manifest.muxed;
+
+    if (kDebugMode) {
+      debugPrint('[MUXED FALLBACK] ${muxedStreams.length} muxed candidates:');
+      for (final s in muxedStreams) {
+        final pass = _isDirectPlayableMuxed(s) ? '✓' : '✗';
+        debugPrint(
+          '  $pass  container=${s.container.name}  '
+          'bitrate=${(s.bitrate.bitsPerSecond / 1000).round()} kbps  '
+          'has_sq=${s.url.queryParameters.containsKey('sq')}',
+        );
+      }
+    }
+
+    final direct = muxedStreams.where(_isDirectPlayableMuxed).toList();
+
+    if (direct.isEmpty) {
+      debugPrint('[MUXED FALLBACK] No muxed streams found either — giving up.');
+      throw const _PlaybackResolveException(
+        'This track is temporarily unavailable.',
+      );
+    }
+
+    // Sort: clen= streams first, then lowest bitrate (smallest download).
+    direct.sort((a, b) {
+      final aClen = a.url.queryParameters.containsKey('clen') ? 1 : 0;
+      final bClen = b.url.queryParameters.containsKey('clen') ? 1 : 0;
+      if (bClen != aClen) return bClen - aClen;
+      return a.bitrate.compareTo(b.bitrate); // lowest bitrate = smallest file
+    });
+
+    final chosen = direct.first;
+    final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
+    final uri = chosen.url;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[MUXED FALLBACK] ✓ Selected muxed stream:\n'
+        '  container  : ${chosen.container.name}\n'
+        '  bitrate    : $bitrateKbps kbps\n'
+        '  clen_known : ${uri.queryParameters.containsKey('clen')}\n'
+        '  url_preview: ${uri.toString().substring(0, uri.toString().length.clamp(0, 80))}…',
+      );
+    }
+
+    return (
+      url: uri,
+      codec: chosen.codec.mimeType,
+      container: chosen.container.name,
+      bitrateKbps: bitrateKbps,
+      isMuxedFallback: true,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -319,43 +395,42 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
     // Publish resolving state immediately so debug panel updates.
     if (kDebugMode) {
-      PlaybackDiagnosticsNotifier.value =
-          PlaybackDiagnostics.resolving(videoId);
+      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(videoId);
     }
 
-    // ── Step 1: Resolve stream ────────────────────────────────────────────
-    final resolved = await _resolveStream(videoId);
+    // ── Step 1: Resolve stream (audio-only preferred, muxed fallback) ──────
+    late ({Uri url, String codec, String container, int bitrateKbps, bool isMuxedFallback}) resolved;
+    try {
+      resolved = await _resolveStream(videoId);
+    } on _PlaybackResolveException {
+      rethrow;
+    } catch (e) {
+      debugPrint('[PlaybackEngine][Error] Unexpected resolution error for $videoId: $e');
+      throw const _PlaybackResolveException('This track is temporarily unavailable.');
+    }
+
+    final pathTag = resolved.isMuxedFallback ? '[MUXED FALLBACK]' : '[AUDIO STREAM]';
 
     // ── Step 2: Stop previous playback ────────────────────────────────────
     await _player.stop();
 
     // ── Step 3: Build AudioSource.uri with YouTube CDN headers ────────────
-    // AudioSource.uri() in just_audio v0.9.x passes the headers map directly
-    // to ExoPlayer's DefaultHttpDataSource factory, so every range request
-    // ExoPlayer makes to the CDN will include our User-Agent, Referer, Origin.
-    final uri = resolved.info.url;
+    final uri = resolved.url;
     final source = AudioSource.uri(uri, headers: _kYouTubeHeaders);
 
     if (kDebugMode) {
-      final totalBytes = resolved.info.size.totalBytes;
-      final diag = _analyzeUrl(uri, resolved.info);
       debugPrint(
-        '[PlaybackEngine][Source] PRE-FLIGHT SUMMARY\n'
+        '$pathTag PRE-FLIGHT SUMMARY\n'
         '  videoId      : $videoId\n'
-        '  approach     : AudioSource.uri + YouTube CDN headers\n'
+        '  path         : ${resolved.isMuxedFallback ? 'muxed mp4 (audio-only DASH fallback)' : 'audio-only direct stream'}\n'
         '  codec        : ${resolved.codec}\n'
         '  container    : ${resolved.container}\n'
         '  bitrate      : ${resolved.bitrateKbps} kbps\n'
-        '  total_bytes  : ${totalBytes > 0 ? '${(totalBytes / 1024 / 1024).toStringAsFixed(2)} MB' : 'UNKNOWN'}\n'
         '  headers      : User-Agent ✓  Referer ✓  Origin ✓\n'
         '  url_host     : ${uri.host}\n'
-        '  url_scheme   : ${uri.scheme}\n'
-        '  is_manifest  : ${diag['is_manifest']}\n'
-        '  has_sq_param : ${diag['has_sq_param']}\n'
-        '  mp4_compat   : ${diag['mp4_compatible']}',
+        '  url_scheme   : ${uri.scheme}',
       );
 
-      // Publish full diagnostic snapshot before setAudioSource.
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
         videoId: videoId,
         urlHost: uri.host,
@@ -363,115 +438,195 @@ class PlaybackEngineImpl implements PlaybackEngine {
         mimeType: resolved.codec,
         container: resolved.container,
         bitrateKbps: resolved.bitrateKbps,
-        sizeKnown: totalBytes > 0,
-        totalBytes: totalBytes,
+        sizeKnown: false,
+        totalBytes: 0,
         headersAttached: true,
         directStream: true,
-        isManifest: diag['is_manifest'] == 'true',
+        isManifest: false,
         succeeded: false,
-        shortReason: 'Waiting for setAudioSource…',
+        shortReason: 'Waiting for setAudioSource… ($pathTag)',
       );
     }
 
-    // ── Step 4: setAudioSource ────────────────────────────────────────────
+    // ── Step 4: setAudioSource — with muxed retry on failure ──────────────
     if (kDebugMode) {
-      debugPrint(
-          '[PlaybackEngine][Source] setAudioSource() starting — $videoId');
+      debugPrint('$pathTag setAudioSource() starting — $videoId');
     }
     try {
       await _player.setAudioSource(source);
       if (kDebugMode) {
-        debugPrint('[PlaybackEngine][Source] setAudioSource() OK — $videoId');
+        debugPrint('$pathTag setAudioSource() OK — $videoId');
       }
     } catch (e) {
       final errStr = e.toString();
       debugPrint(
-        '[PlaybackEngine][Error] setAudioSource() FAILED — $videoId\n'
+        '$pathTag setAudioSource() FAILED — $videoId\n'
         '  type   : ${e.runtimeType}\n'
-        '  value  : $errStr\n'
-        '  player : ${e is PlayerException ? 'code=${e.code}  msg=${e.message}' : 'n/a'}',
+        '  value  : $errStr',
       );
-      if (kDebugMode) {
-        debugPrint(
-          '[PlaybackEngine][Error] SUMMARY  videoId=$videoId  '
-          'container=${resolved.container}  codec=${resolved.codec}  '
-          'approach=AudioSource.uri+headers  stage=setAudioSource  result=REJECTED',
-        );
-        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
-          videoId: videoId,
-          urlHost: uri.host,
-          urlScheme: uri.scheme,
-          mimeType: resolved.codec,
-          container: resolved.container,
-          bitrateKbps: resolved.bitrateKbps,
-          sizeKnown: resolved.info.size.totalBytes > 0,
-          totalBytes: resolved.info.size.totalBytes,
-          headersAttached: true,
-          directStream: true,
-          isManifest: false,
-          succeeded: false,
-          failedAt: 'setAudioSource',
-          exceptionMessage:
-              errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
-          shortReason: PlaybackDiagnostics.inferReason(errStr),
+
+      // ── Muxed retry (only if the primary path was audio-only) ────────────
+      // Do NOT retry if we're already on the muxed fallback path — that
+      // would just loop. Also skip retry if this is a network/auth error;
+      // only retry for ExoPlayer source-rejection (PlayerException code 1000
+      // or "Source error" in the message).
+      if (!resolved.isMuxedFallback) {
+        final isSourceError = e is PlayerException ||
+            errStr.toLowerCase().contains('source error') ||
+            errStr.contains('(1000)');
+        if (isSourceError) {
+          debugPrint(
+            '[MUXED FALLBACK] Audio-only setAudioSource rejected by ExoPlayer. '
+            'Attempting muxed mp4 fallback for $videoId…',
+          );
+          try {
+            // Re-open a fresh manifest session for the muxed attempt.
+            final yt = YoutubeExplode();
+            late ({Uri url, String codec, String container, int bitrateKbps, bool isMuxedFallback}) muxed;
+            try {
+              final muxedManifest = await yt.videos.streamsClient.getManifest(videoId);
+              muxed = await _resolveMuxedFallback(videoId, muxedManifest);
+            } finally {
+              yt.close();
+            }
+            final muxedSource = AudioSource.uri(muxed.url, headers: _kYouTubeHeaders);
+            await _player.setAudioSource(muxedSource);
+            debugPrint('[MUXED FALLBACK] setAudioSource() OK — $videoId');
+            // Update resolved binding so play() diagnostics are accurate.
+            resolved = muxed;
+          } catch (muxedErr) {
+            debugPrint('[MUXED FALLBACK] Also failed: $muxedErr');
+            // Fall through to the original error path below.
+            if (kDebugMode) {
+              PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
+                videoId: videoId,
+                urlHost: uri.host,
+                urlScheme: uri.scheme,
+                mimeType: resolved.codec,
+                container: resolved.container,
+                bitrateKbps: resolved.bitrateKbps,
+                sizeKnown: false,
+                totalBytes: 0,
+                headersAttached: true,
+                directStream: true,
+                isManifest: false,
+                succeeded: false,
+                failedAt: 'setAudioSource+muxedFallback',
+                exceptionMessage: muxedErr.toString().length > 200
+                    ? '${muxedErr.toString().substring(0, 200)}…'
+                    : muxedErr.toString(),
+                shortReason: PlaybackDiagnostics.inferReason(muxedErr.toString()),
+              );
+            }
+            throw _PlaybackResolveException(
+              'Playback source rejected (both audio-only and muxed failed): '
+              '${_friendlyPlayerError(muxedErr)}',
+            );
+          }
+          // Muxed retry succeeded — skip the throw below, continue to play().
+        } else {
+          // Non-source error (network, auth, etc.) — don't retry.
+          if (kDebugMode) {
+            PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
+              videoId: videoId,
+              urlHost: uri.host,
+              urlScheme: uri.scheme,
+              mimeType: resolved.codec,
+              container: resolved.container,
+              bitrateKbps: resolved.bitrateKbps,
+              sizeKnown: false,
+              totalBytes: 0,
+              headersAttached: true,
+              directStream: true,
+              isManifest: false,
+              succeeded: false,
+              failedAt: 'setAudioSource',
+              exceptionMessage:
+                  errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
+              shortReason: PlaybackDiagnostics.inferReason(errStr),
+            );
+          }
+          const hint = kDebugMode ? ' (setAudioSource failed)' : '';
+          throw _PlaybackResolveException(
+            'Playback source rejected$hint: ${_friendlyPlayerError(e)}',
+          );
+        }
+      } else {
+        // Already on muxed path and it still failed.
+        if (kDebugMode) {
+          PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
+            videoId: videoId,
+            urlHost: uri.host,
+            urlScheme: uri.scheme,
+            mimeType: resolved.codec,
+            container: resolved.container,
+            bitrateKbps: resolved.bitrateKbps,
+            sizeKnown: false,
+            totalBytes: 0,
+            headersAttached: true,
+            directStream: true,
+            isManifest: false,
+            succeeded: false,
+            failedAt: 'setAudioSource (muxed)',
+            exceptionMessage:
+                errStr.length > 200 ? '${errStr.substring(0, 200)}…' : errStr,
+            shortReason: PlaybackDiagnostics.inferReason(errStr),
+          );
+        }
+        const hint = kDebugMode ? ' (muxed setAudioSource failed)' : '';
+        throw _PlaybackResolveException(
+          'Playback source rejected$hint: ${_friendlyPlayerError(e)}',
         );
       }
-      const hint = kDebugMode ? ' (setAudioSource failed)' : '';
-      throw _PlaybackResolveException(
-        'Playback source rejected$hint: ${_friendlyPlayerError(e)}',
-      );
     }
 
     // ── Step 5: play ──────────────────────────────────────────────────────
+    final finalUri = resolved.url;
+    final finalPathTag = resolved.isMuxedFallback ? '[MUXED FALLBACK]' : '[AUDIO STREAM]';
     if (kDebugMode) {
-      debugPrint('[PlaybackEngine][Source] play() starting — $videoId');
+      debugPrint('$finalPathTag play() starting — $videoId');
     }
     try {
       await _player.play();
       if (kDebugMode) {
-        debugPrint('[PlaybackEngine][Source] play() OK — $videoId');
         debugPrint(
-          '[PlaybackEngine][Source] SUMMARY  videoId=$videoId  '
-          'container=${resolved.container}  codec=${resolved.codec}  '
-          'bitrate=${resolved.bitrateKbps} kbps  approach=AudioSource.uri+headers  result=ACCEPTED',
+          '$finalPathTag play() OK — $videoId\n'
+          '  container : ${resolved.container}  codec : ${resolved.codec}  '
+          'bitrate : ${resolved.bitrateKbps} kbps  result : ACCEPTED',
         );
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
           videoId: videoId,
-          urlHost: uri.host,
-          urlScheme: uri.scheme,
+          urlHost: finalUri.host,
+          urlScheme: finalUri.scheme,
           mimeType: resolved.codec,
           container: resolved.container,
           bitrateKbps: resolved.bitrateKbps,
-          sizeKnown: resolved.info.size.totalBytes > 0,
-          totalBytes: resolved.info.size.totalBytes,
+          sizeKnown: false,
+          totalBytes: 0,
           headersAttached: true,
           directStream: true,
           isManifest: false,
           succeeded: true,
+          shortReason: resolved.isMuxedFallback ? 'Muxed mp4 fallback' : 'Audio-only direct stream',
         );
       }
     } catch (e) {
       final errStr = e.toString();
       debugPrint(
-        '[PlaybackEngine][Error] play() FAILED — $videoId\n'
+        '$finalPathTag play() FAILED — $videoId\n'
         '  type   : ${e.runtimeType}\n'
-        '  value  : $errStr\n'
-        '  player : ${e is PlayerException ? 'code=${e.code}  msg=${e.message}' : 'n/a'}',
+        '  value  : $errStr',
       );
       if (kDebugMode) {
-        debugPrint(
-          '[PlaybackEngine][Error] SUMMARY  videoId=$videoId  '
-          'container=${resolved.container}  stage=play  result=REJECTED',
-        );
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
           videoId: videoId,
-          urlHost: uri.host,
-          urlScheme: uri.scheme,
+          urlHost: finalUri.host,
+          urlScheme: finalUri.scheme,
           mimeType: resolved.codec,
           container: resolved.container,
           bitrateKbps: resolved.bitrateKbps,
-          sizeKnown: resolved.info.size.totalBytes > 0,
-          totalBytes: resolved.info.size.totalBytes,
+          sizeKnown: false,
+          totalBytes: 0,
           headersAttached: true,
           directStream: true,
           isManifest: false,
