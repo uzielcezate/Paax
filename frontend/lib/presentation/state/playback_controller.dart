@@ -190,7 +190,11 @@ class PlaybackController extends ChangeNotifier {
     bool loadFailed = false;
     try {
       await _engine.load(track.id);
-      // Success — isPlaying will be set via playingStream listener
+      // Success — isPlaying will be set via playingStream listener.
+      // Kick off background prefetch for the next track so its stream URL
+      // is warm in the CDN cache when the user hits next.
+      final next = _nextTrackInQueue();
+      if (next != null) _engine.prefetchNext(next.id);
     } catch (e) {
       loadFailed = true;
       _errorMessage = 'Playback unavailable: ${e.toString().replaceFirst('Exception: ', '')}';
@@ -220,6 +224,22 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> playTrack(Track track) async {
     await playQueue([track]);
+  }
+
+  /// Returns the next track that would play after the current one,
+  /// respecting shuffle and loop mode. Returns null if there is no next track.
+  Track? _nextTrackInQueue() {
+    if (_queue.isEmpty) return null;
+    if (_isShuffle) {
+      // In shuffle mode we can't predict the random pick, but we can warm up
+      // any track that isn't the current one as a best-effort hint.
+      // Skip prefetch in shuffle to avoid wasting bandwidth on the wrong track.
+      return null;
+    }
+    final nextIdx = _currentIndex + 1;
+    if (nextIdx < _queue.length) return _queue[nextIdx];
+    if (_loopMode == LoopMode.all && _queue.isNotEmpty) return _queue[0];
+    return null;
   }
 
   void addToQueue(Track track) {

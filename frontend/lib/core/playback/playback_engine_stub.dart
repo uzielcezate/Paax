@@ -40,6 +40,9 @@ class PlaybackEngineImpl implements PlaybackEngine {
   }
   
   @override
+  void prefetchNext(String videoId) {}
+
+  @override
   void dispose() {}
   
   @override

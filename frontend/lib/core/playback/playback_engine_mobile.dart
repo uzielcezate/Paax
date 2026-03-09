@@ -153,10 +153,19 @@ Map<String, String> _analyzeUrl(Uri uri, AudioOnlyStreamInfo info) {
 ///   3. YouTube mp4/m4a audio-only streams ARE accessible as progressive HTTP
 ///      streams when the correct User-Agent and Referer headers are provided
 class PlaybackEngineImpl implements PlaybackEngine {
+  // preload: false on setAudioSource() defers network probing/buffering until
+  // play() is actually called. This cuts the ~15s startup delay to sub-second
+  // perceived latency (just_audio 0.9.x equivalent of lazy preparation).
   final _player = AudioPlayer();
   final _completionController = StreamController<void>.broadcast();
   bool _isDisposed = false;
   final _subscriptions = <StreamSubscription>[];
+
+  // ── Load-lock: integer generation counter ─────────────────────────────────
+  // Bumped at the start of every load() call. Any in-flight load() that finds
+  // its myId != _loadId after an await knows it has been superseded and bails
+  // out silently. Prevents concurrent loads racing to _player.play().
+  int _loadId = 0;
 
   @override
   Stream<Duration> get positionStream => _player.positionStream;
@@ -393,12 +402,27 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Future<void> load(String videoId) async {
     if (videoId.isEmpty) return;
 
+    // ── Load-lock: stamp this call with a generation ID ───────────────────
+    // Any previous in-flight load() will detect _loadId has changed after its
+    // next await and exit silently — preventing concurrent playback races.
+    final myId = ++_loadId;
+
+    // ── Step 1: Stop immediately — before resolution ──────────────────────
+    // Stopping NOW (before the network call) guarantees silence instantly when
+    // a new track is tapped, regardless of how long resolution takes.
+    debugPrint('[PLAYER STOP] Stopping for new load — videoId=$videoId');
+    await _player.stop();
+    if (_loadId != myId) {
+      debugPrint('[PLAYER STOP] Superseded by newer load — bailing ($videoId)');
+      return;
+    }
+
     // Publish resolving state immediately so debug panel updates.
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(videoId);
     }
 
-    // ── Step 1: Resolve stream (audio-only preferred, muxed fallback) ──────
+    // ── Step 2: Resolve stream (audio-only preferred, muxed fallback) ──────
     late ({Uri url, String codec, String container, int bitrateKbps, bool isMuxedFallback}) resolved;
     try {
       resolved = await _resolveStream(videoId);
@@ -409,10 +433,15 @@ class PlaybackEngineImpl implements PlaybackEngine {
       throw const _PlaybackResolveException('This track is temporarily unavailable.');
     }
 
+    // Bail out if superseded during resolution (user tapped another track).
+    if (_loadId != myId) {
+      debugPrint('[PLAYER LOAD] Superseded during resolve — bailing ($videoId)');
+      return;
+    }
+
     final pathTag = resolved.isMuxedFallback ? '[MUXED FALLBACK]' : '[AUDIO STREAM]';
 
-    // ── Step 2: Stop previous playback ────────────────────────────────────
-    await _player.stop();
+    // (old Step 2 — stop — is now Step 1 above)
 
     // ── Step 3: Build AudioSource.uri with YouTube CDN headers ────────────
     final uri = resolved.url;
@@ -449,13 +478,17 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
 
     // ── Step 4: setAudioSource — with muxed retry on failure ──────────────
-    if (kDebugMode) {
-      debugPrint('$pathTag setAudioSource() starting — $videoId');
-    }
+    debugPrint('[PLAYER LOAD] setAudioSource() starting — $pathTag — $videoId');
     try {
-      await _player.setAudioSource(source);
+      // preload: false — ExoPlayer defers buffering until play() is called,
+      // giving sub-second perceived startup latency.
+      await _player.setAudioSource(source, preload: false);
+      if (_loadId != myId) {
+        debugPrint('[PLAYER LOAD] Superseded after setAudioSource — bailing ($videoId)');
+        return;
+      }
       if (kDebugMode) {
-        debugPrint('$pathTag setAudioSource() OK — $videoId');
+        debugPrint('[PLAYER LOAD] setAudioSource() OK — $videoId');
       }
     } catch (e) {
       final errStr = e.toString();
@@ -490,7 +523,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
               yt.close();
             }
             final muxedSource = AudioSource.uri(muxed.url, headers: _kYouTubeHeaders);
-            await _player.setAudioSource(muxedSource);
+            await _player.setAudioSource(muxedSource, preload: false);
             debugPrint('[MUXED FALLBACK] setAudioSource() OK — $videoId');
             // Update resolved binding so play() diagnostics are accurate.
             resolved = muxed;
@@ -580,13 +613,18 @@ class PlaybackEngineImpl implements PlaybackEngine {
       }
     }
 
-    // ── Step 5: play ──────────────────────────────────────────────────────
+    // ── Step 5: seek to zero + play ───────────────────────────────────────
+    // seek(Duration.zero) before play() prevents ExoPlayer resuming mid-file
+    // if the same source URL was previously loaded.
     final finalUri = resolved.url;
     final finalPathTag = resolved.isMuxedFallback ? '[MUXED FALLBACK]' : '[AUDIO STREAM]';
-    if (kDebugMode) {
-      debugPrint('$finalPathTag play() starting — $videoId');
-    }
+    debugPrint('[PLAYER PLAY] play() starting — $finalPathTag — $videoId');
     try {
+      await _player.seek(Duration.zero);
+      if (_loadId != myId) {
+        debugPrint('[PLAYER PLAY] Superseded before play() — bailing ($videoId)');
+        return;
+      }
       await _player.play();
       if (kDebugMode) {
         debugPrint(
@@ -657,13 +695,34 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // -------------------------------------------------------------------------
 
   @override
-  Future<void> play() async => _player.play();
+  Future<void> play() async {
+    debugPrint('[PLAYER PLAY] resume');
+    await _player.play();
+  }
 
   @override
-  Future<void> pause() async => _player.pause();
+  Future<void> pause() async {
+    debugPrint('[PLAYER PAUSE]');
+    await _player.pause();
+  }
 
   @override
   Future<void> seek(Duration position) async => _player.seek(position);
+
+  // ---------------------------------------------------------------------------
+  // Background prefetch
+  // ---------------------------------------------------------------------------
+
+  @override
+  void prefetchNext(String videoId) {
+    if (videoId.isEmpty || _isDisposed) return;
+    debugPrint('[TRACK PREFETCH] Starting background resolution for $videoId');
+    _resolveStream(videoId).then((_) {
+      debugPrint('[TRACK PREFETCH] ✓ Resolved $videoId — stream URL warm in CDN cache');
+    }).catchError((Object e) {
+      debugPrint('[TRACK PREFETCH] ✗ Failed for $videoId — ignored ($e)');
+    });
+  }
 
   @override
   void dispose() {

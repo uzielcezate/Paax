@@ -28,6 +28,10 @@ abstract class PlaybackEngine {
   /// Seek
   Future<void> seek(Duration position);
   
+  /// Prefetch the next track's stream URL in the background (fire-and-forget).
+  /// Errors are silently ignored — this is a best-effort optimisation only.
+  void prefetchNext(String videoId);
+
   /// Dispose resources
   void dispose();
   
