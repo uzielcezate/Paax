@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import '../config/api_config.dart';
 import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
@@ -230,6 +233,29 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // Stream resolution
   // -------------------------------------------------------------------------
 
+  /// Tries to resolve a playable stream URL from the backend cache.
+  ///
+  /// Calls GET /playback/resolve?videoId=… with a 3-second timeout.
+  /// Returns the stream URL if the backend returned ok=true, null otherwise.
+  /// Errors are swallowed — callers fall through to youtube_explode_dart.
+  Future<Uri?> _tryBackendResolve(String videoId) async {
+    try {
+      final uri = Uri.parse('${ApiConfig.baseUrl}/playback/resolve')
+          .replace(queryParameters: {'videoId': videoId});
+      final response = await http.get(uri).timeout(const Duration(seconds: 3));
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (body['ok'] != true) return null;
+      final streamUrl = body['streamUrl'] as String?;
+      if (streamUrl == null || streamUrl.isEmpty) return null;
+      debugPrint('[RESOLVE CACHE HIT] Backend returned cached stream for $videoId');
+      return Uri.parse(streamUrl);
+    } catch (e) {
+      debugPrint('[RESOLVE] Backend check failed ($e) — falling back to youtube_explode_dart');
+      return null;
+    }
+  }
+
   // ── Typed resolution result ────────────────────────────────────────────────
   // isMuxedFallback = true  → chosen from manifest.muxed (video+audio container)
   // isMuxedFallback = false → chosen from manifest.audioOnly (preferred)
@@ -246,8 +272,22 @@ class PlaybackEngineImpl implements PlaybackEngine {
   > _resolveStream(String videoId) async {
     final yt = YoutubeExplode();
     try {
+      // ── PATH 0: backend Redis cache ──────────────────────────────────
+      // Check the backend first. If it has a cached URL, we avoid running
+      // youtube_explode_dart entirely (saves ~10–60 seconds on repeat plays).
+      final backendUrl = await _tryBackendResolve(videoId);
+      if (backendUrl != null) {
+        return (
+          url: backendUrl,
+          codec: 'audio/mp4',
+          container: 'mp4',
+          bitrateKbps: 0,         // unknown from cache — not needed for playback
+          isMuxedFallback: false, // backend resolved; type logged server-side
+        );
+      }
+
       if (kDebugMode) {
-        debugPrint('[PlaybackEngine] ▶ Resolving stream for $videoId');
+        debugPrint('[RESOLVE CACHE MISS] No backend cache — resolving via youtube_explode_dart for $videoId');
       }
 
       final manifest = await yt.videos.streamsClient.getManifest(videoId);
@@ -793,11 +833,15 @@ class PlaybackEngineImpl implements PlaybackEngine {
   @override
   void prefetchNext(String videoId) {
     if (videoId.isEmpty || _isDisposed) return;
-    debugPrint('[TRACK PREFETCH] Starting background resolution for $videoId');
-    _resolveStream(videoId).then((_) {
-      debugPrint('[TRACK PREFETCH] ✓ Resolved $videoId — stream URL warm in CDN cache');
+    // Call the backend prefetch endpoint — it runs yt-dlp in the background
+    // and primes Redis so the next load() call can skip youtube_explode_dart.
+    debugPrint('[TRACK PREFETCH] [PREFETCH START] Triggering backend warm-up for $videoId');
+    final prefetchUri = Uri.parse('${ApiConfig.baseUrl}/playback/prefetch')
+        .replace(queryParameters: {'videoId': videoId});
+    http.get(prefetchUri).then((_) {
+      debugPrint('[TRACK PREFETCH] [PREFETCH DONE] Backend acknowledged prefetch for $videoId');
     }).catchError((Object e) {
-      debugPrint('[TRACK PREFETCH] ✗ Failed for $videoId — ignored ($e)');
+      debugPrint('[TRACK PREFETCH] [PREFETCH DONE] Backend prefetch failed for $videoId — ignored ($e)');
     });
   }
 
