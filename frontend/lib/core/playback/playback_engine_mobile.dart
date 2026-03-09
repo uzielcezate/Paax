@@ -206,8 +206,21 @@ class PlaybackEngineImpl implements PlaybackEngine {
     _subscriptions.add(
       _player.playerStateStream.listen((state) {
         if (_isDisposed) return;
+        debugPrint(
+          '[PLAYER STATE] playing=${state.playing}  '
+          'processingState=${state.processingState.name}',
+        );
         if (state.processingState == ProcessingState.completed) {
           _completionController.add(null);
+        }
+      }),
+    );
+    _subscriptions.add(
+      _player.positionStream.listen((pos) {
+        if (_isDisposed) return;
+        // Only log every 2 seconds to avoid flooding logcat.
+        if (pos.inMilliseconds % 2000 < 250) {
+          debugPrint('[PLAYER POSITION] ${pos.inSeconds}s');
         }
       }),
     );
@@ -408,10 +421,18 @@ class PlaybackEngineImpl implements PlaybackEngine {
     final myId = ++_loadId;
 
     // ── Step 1: Stop immediately — before resolution ──────────────────────
-    // Stopping NOW (before the network call) guarantees silence instantly when
-    // a new track is tapped, regardless of how long resolution takes.
-    debugPrint('[PLAYER STOP] Stopping for new load — videoId=$videoId');
+    debugPrint(
+      '[PLAYER STOP] >>> before stop()  '
+      'playing=${_player.playing}  '
+      'state=${_player.processingState.name}  '
+      'videoId=$videoId',
+    );
     await _player.stop();
+    debugPrint(
+      '[PLAYER STOP] <<< after stop()  '
+      'playing=${_player.playing}  '
+      'state=${_player.processingState.name}',
+    );
     if (_loadId != myId) {
       debugPrint('[PLAYER STOP] Superseded by newer load — bailing ($videoId)');
       return;
@@ -478,17 +499,27 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
 
     // ── Step 4: setAudioSource — with muxed retry on failure ──────────────
-    debugPrint('[PLAYER LOAD] setAudioSource() starting — $pathTag — $videoId');
+    debugPrint(
+      '[PLAYER LOAD] >>> before setAudioSource()  '
+      'playing=${_player.playing}  '
+      'state=${_player.processingState.name}  '
+      '$pathTag  videoId=$videoId',
+    );
     try {
       // preload: false — ExoPlayer defers buffering until play() is called,
       // giving sub-second perceived startup latency.
       await _player.setAudioSource(source, preload: false);
+      debugPrint(
+        '[PLAYER LOAD] <<< after setAudioSource()  '
+        'playing=${_player.playing}  '
+        'state=${_player.processingState.name}  '
+        'duration=${_player.duration}  '
+        'position=${_player.position}  '
+        'buffered=${_player.bufferedPosition}',
+      );
       if (_loadId != myId) {
         debugPrint('[PLAYER LOAD] Superseded after setAudioSource — bailing ($videoId)');
         return;
-      }
-      if (kDebugMode) {
-        debugPrint('[PLAYER LOAD] setAudioSource() OK — $videoId');
       }
     } catch (e) {
       final errStr = e.toString();
@@ -614,24 +645,70 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
 
     // ── Step 5: seek to zero + play ───────────────────────────────────────
-    // seek(Duration.zero) before play() prevents ExoPlayer resuming mid-file
-    // if the same source URL was previously loaded.
+    // CRITICAL: No _loadId guard between seek() and play().
+    // The seek+play pair must be atomic — inserting an async bail point here
+    // was the root cause of silent playback (play() was being skipped).
     final finalUri = resolved.url;
     final finalPathTag = resolved.isMuxedFallback ? '[MUXED FALLBACK]' : '[AUDIO STREAM]';
-    debugPrint('[PLAYER PLAY] play() starting — $finalPathTag — $videoId');
     try {
+      debugPrint(
+        '[PLAYER PLAY] >>> before seek(0)  '
+        'playing=${_player.playing}  '
+        'state=${_player.processingState.name}  '
+        'videoId=$videoId',
+      );
       await _player.seek(Duration.zero);
-      if (_loadId != myId) {
-        debugPrint('[PLAYER PLAY] Superseded before play() — bailing ($videoId)');
-        return;
-      }
+      debugPrint(
+        '[PLAYER PLAY] <<< after seek(0)  '
+        'playing=${_player.playing}  '
+        'state=${_player.processingState.name}  '
+        'position=${_player.position}',
+      );
+
+      debugPrint(
+        '[PLAYER PLAY] >>> before play()  '
+        'playing=${_player.playing}  '
+        'state=${_player.processingState.name}',
+      );
       await _player.play();
+      debugPrint(
+        '[PLAYER PLAY] <<< after play()  '
+        'playing=${_player.playing}  '
+        'state=${_player.processingState.name}  '
+        'duration=${_player.duration}  '
+        'position=${_player.position}  '
+        'buffered=${_player.bufferedPosition}  '
+        '$finalPathTag  videoId=$videoId',
+      );
+
+      // ── 2-second stall detector ────────────────────────────────────────
+      // After play() returns, schedule a check: if the position hasn't
+      // advanced after 2 seconds, something is stalled.
+      final posAtPlayStart = _player.position;
+      final stallCheckId = myId; // capture so we can detect superseded loads
+      Future.delayed(const Duration(seconds: 2), () {
+        if (_isDisposed || _loadId != stallCheckId) return;
+        final currentPos = _player.position;
+        if (currentPos <= posAtPlayStart) {
+          debugPrint(
+            '[PLAYBACK STALLED] Position has not advanced after 2s!  '
+            'playing=${_player.playing}  '
+            'state=${_player.processingState.name}  '
+            'posAtStart=$posAtPlayStart  '
+            'posNow=$currentPos  '
+            'duration=${_player.duration}  '
+            'buffered=${_player.bufferedPosition}  '
+            'videoId=$videoId',
+          );
+        } else {
+          debugPrint(
+            '[PLAYBACK STALLED] OK — position advanced from '
+            '${posAtPlayStart.inMilliseconds}ms to ${currentPos.inMilliseconds}ms',
+          );
+        }
+      });
+
       if (kDebugMode) {
-        debugPrint(
-          '$finalPathTag play() OK — $videoId\n'
-          '  container : ${resolved.container}  codec : ${resolved.codec}  '
-          'bitrate : ${resolved.bitrateKbps} kbps  result : ACCEPTED',
-        );
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
           videoId: videoId,
           urlHost: finalUri.host,
