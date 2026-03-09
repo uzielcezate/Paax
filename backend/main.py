@@ -833,8 +833,8 @@ _PLAYBACK_ERROR_MESSAGES: Dict[str, str] = {
 }
 
 # Redis cache key prefix for resolved stream URLs.
-_RESOLVE_CACHE_PREFIX = "playback_resolve"
-_RESOLVE_TTL = 600  # 10 minutes
+_RESOLVE_CACHE_PREFIX = "stream"  # key format: stream:{videoId}
+_RESOLVE_TTL = 1800  # 30 minutes
 
 
 def _classify_yt_error(exc: Exception) -> str:
@@ -956,12 +956,13 @@ async def resolve_playback(videoId: str):
     # ── 1. Redis cache ────────────────────────────────────────────────────────
     cached_redis = await cache_get(redis_client, redis_key)
     if cached_redis:
-        print(f"[Resolve] REDIS HIT {video_id}")
+        print(f"[RESOLVE CACHE HIT] {video_id}")
         return JSONResponse(content={
             "ok": True,
             "videoId": video_id,
             "streamUrl": cached_redis["url"],
             "duration": cached_redis["duration"],
+            "sourceType": cached_redis.get("sourceType", "audioOnly"),
             "expiresAt": cached_redis.get("expires_at", ""),
             "cached": True,
         })
@@ -969,18 +970,19 @@ async def resolve_playback(videoId: str):
     # ── 2. In-memory cache fallback ───────────────────────────────────────────
     mem = _stream_cache.get(video_id)
     if mem and mem["expires_at"] > now:
-        print(f"[Resolve] MEM HIT {video_id}")
+        print(f"[RESOLVE CACHE HIT] {video_id} (mem)")
         return JSONResponse(content={
             "ok": True,
             "videoId": video_id,
             "streamUrl": mem["url"],
             "duration": mem["duration"],
+            "sourceType": mem.get("sourceType", "audioOnly"),
             "expiresAt": mem["expires_at"].isoformat(),
             "cached": True,
         })
 
     # ── 3. Resolve via yt-dlp (with retry + backoff) ─────────────────────────
-    print(f"[Resolve] Resolving {video_id} via yt-dlp …")
+    print(f"[RESOLVE CACHE MISS] {video_id}")
     try:
         result = await _resolve_stream_with_retry(video_id)
     except Exception as exc:
@@ -1004,19 +1006,31 @@ async def resolve_playback(videoId: str):
     expires_at = now + datetime.timedelta(seconds=_RESOLVE_TTL)
     expires_iso = expires_at.isoformat()
 
+    # Determine sourceType from the chosen format
+    chosen_fmt = result.get("_chosen_fmt", {})
+    vcodec = chosen_fmt.get("vcodec", "none") or "none"
+    source_type = "audioOnly" if vcodec.lower() in ("none", "", "null") else "muxed"
+    print(f"[STREAM TYPE {source_type}] {video_id}")
+    if source_type == "muxed":
+        print(f"[MUXED SELECTED] {video_id} via {chosen_fmt.get('ext', '?')} "
+              f"abr={chosen_fmt.get('abr')}")
+
     # In-memory (always)
     _stream_cache[video_id] = {
         "url":        result["url"],
         "duration":   result["duration"],
         "thumbnail":  result.get("thumbnail", ""),
+        "sourceType": source_type,
         "expires_at": expires_at,
     }
     # Redis (if available) — cache_set handles jitter internally
     await cache_set(redis_client, redis_key, {
         "url":        result["url"],
         "duration":   result["duration"],
+        "sourceType": source_type,
         "expires_at": expires_iso,
     }, _RESOLVE_TTL)
+    print(f"[STREAM CACHE SET] {video_id} sourceType={source_type} ttl={_RESOLVE_TTL}s")
 
     # Prune stale in-memory entries
     stale = [k for k, v in _stream_cache.items() if v["expires_at"] <= now]
@@ -1029,9 +1043,59 @@ async def resolve_playback(videoId: str):
         "videoId": video_id,
         "streamUrl": result["url"],
         "duration":  result["duration"],
+        "sourceType": source_type,
         "expiresAt": expires_iso,
         "cached": False,
     })
+
+
+async def _warm_cache(video_id: str) -> None:
+    """
+    Background task: resolve stream and prime Redis.
+    Silently swallows all errors — prefetch is best-effort only.
+    """
+    try:
+        print(f"[PREFETCH START] {video_id}")
+        redis_key = f"{_RESOLVE_CACHE_PREFIX}:{video_id}"
+        now = datetime.datetime.utcnow()
+        # If already cached, nothing to do.
+        existing = await cache_get(redis_client, redis_key)
+        if existing:
+            print(f"[PREFETCH DONE] {video_id} (already cached)")
+            return
+        result = await _resolve_stream_with_retry(video_id)
+        if result.get("url"):
+            chosen_fmt = result.get("_chosen_fmt", {})
+            vcodec = chosen_fmt.get("vcodec", "none") or "none"
+            source_type = "audioOnly" if vcodec.lower() in ("none", "", "null") else "muxed"
+            expires_at = now + datetime.timedelta(seconds=_RESOLVE_TTL)
+            _stream_cache[video_id] = {
+                "url": result["url"], "duration": result["duration"],
+                "thumbnail": result.get("thumbnail", ""),
+                "sourceType": source_type, "expires_at": expires_at,
+            }
+            await cache_set(redis_client, redis_key, {
+                "url": result["url"], "duration": result["duration"],
+                "sourceType": source_type, "expires_at": expires_at.isoformat(),
+            }, _RESOLVE_TTL)
+        print(f"[PREFETCH DONE] {video_id}")
+    except Exception as exc:
+        print(f"[PREFETCH DONE] {video_id} failed silently: {exc}")
+
+
+@app.get("/playback/prefetch")
+async def prefetch_playback(videoId: str):
+    """
+    Fire-and-forget stream resolution to warm the Redis cache.
+    Returns immediately — resolution runs in background.
+    Called by the Flutter client after successful playback starts.
+    """
+    if not videoId or not videoId.strip():
+        return JSONResponse(content={"ok": False, "reason": "missing videoId"})
+    video_id = videoId.strip()
+    import asyncio as _asyncio
+    _asyncio.create_task(_warm_cache(video_id))
+    return JSONResponse(content={"ok": True, "queued": True, "videoId": video_id})
 
 
 @app.get("/playback/debug-resolve")
