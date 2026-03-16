@@ -575,48 +575,258 @@ _stream_cache: Dict[str, Dict] = {}
 _STREAM_TTL_SECONDS = 600  # 10 minutes
 
 
-# Common yt-dlp options reused across all format attempts.
+# ---------------------------------------------------------------------------
+# Browser UA — matches Flutter client; signals progressive download intent.
+# ---------------------------------------------------------------------------
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+
 _YDL_BASE_OPTS: Dict = {
     "quiet": True,
     "no_warnings": True,
     "skip_download": True,
     "noplaylist": True,
-    # Browser-like User-Agent reduces YouTube bot detection.
-    "http_headers": {
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 10; K) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Mobile Safari/537.36"
-        ),
-    },
+    "http_headers": {"User-Agent": _BROWSER_UA},
 }
 
-# Format fallback chain — tried in order from most-preferred to least.
-# Each entry is (label, format_string) so logs identify which tier succeeded.
-_FORMAT_FALLBACKS = [
-    # Tier 1: m4a / AAC — best Android ExoPlayer / iOS AVPlayer compatibility.
-    ("m4a",      "bestaudio[ext=m4a]/bestaudio[ext=mp4][vcodec=none]"),
-    # Tier 2: webm / Opus — widely available; slightly more bot-checked.
-    ("webm",     "bestaudio[ext=webm]/bestaudio[ext=opus]"),
-    # Tier 3: any bestaudio — lets yt-dlp pick the highest-quality audio track.
-    ("bestaudio","bestaudio"),
-    # Tier 4: dynamic scan — inspect all formats and pick best audio-capable stream.
-    # acodec != none filters out video-only streams.
-    ("dynamic",  "bestaudio[acodec!=none]/best[acodec!=none]"),
-]
+
+# ---------------------------------------------------------------------------
+# Stream format filters
+# (mirrors Flutter _isDirectPlayable / _isDirectPlayableMuxed)
+# ---------------------------------------------------------------------------
+
+def _url_is_dash(url_str: str) -> bool:
+    """Return True if the URL looks like a DASH segment or manifest."""
+    try:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(url_str)
+        params = parse_qs(parsed.query)
+        # sq= identifies a DASH segment chunk (not a full progressive file)
+        if "sq" in params or "manifest_type" in params:
+            return True
+        path = parsed.path.lower()
+        if path.endswith(".m3u8") or path.endswith(".mpd"):
+            return True
+        if "manifest" in path or "playlist" in path:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _has_clen(url_str: str) -> bool:
+    """Return True if the CDN URL declares a known content-length (clen=)."""
+    try:
+        from urllib.parse import urlparse, parse_qs
+        return "clen" in parse_qs(urlparse(url_str).query)
+    except Exception:
+        return False
+
+
+def _is_direct_playable_audio(fmt: Dict) -> bool:
+    """
+    Accept a yt-dlp format dict as a direct, progressive audio-only stream.
+
+    Mirrors Flutter _isDirectPlayable:
+      - Container mp4 / m4a or AAC codec
+      - vcodec must be absent (audio-only, no video track)
+      - URL must NOT contain sq= (DASH segment) or manifest indicators
+      - Protocol must be plain HTTP(S), not m3u8/dash adaptive
+    """
+    ext      = (fmt.get("ext")      or "").lower()
+    acodec   = (fmt.get("acodec")   or "none").lower()
+    vcodec   = (fmt.get("vcodec")   or "none").lower()
+    protocol = (fmt.get("protocol") or "").lower()
+    url      = fmt.get("url") or ""
+
+    # Must carry audio
+    if acodec in ("none", "", "null"):
+        return False
+    # Must be audio-only (no video track)
+    if vcodec not in ("none", "", "null"):
+        return False
+    # Container / codec: mp4 / m4a / AAC only — reject webm, opus, vorbis
+    is_mp4 = ext in ("mp4", "m4a") or "mp4a" in acodec or "aac" in acodec
+    if not is_mp4:
+        return False
+    if "webm" in ext or "opus" in acodec or "vorbis" in acodec:
+        return False
+    # Adaptive streaming protocols are not direct progressive URLs
+    if protocol in ("m3u8", "m3u8_native", "dash"):
+        return False
+    # URL-level DASH / manifest check
+    if _url_is_dash(url):
+        return False
+    return True
+
+
+def _is_direct_playable_muxed(fmt: Dict) -> bool:
+    """
+    Accept a yt-dlp format dict as a direct, progressive muxed (video+audio) stream.
+
+    Mirrors Flutter _isDirectPlayableMuxed:
+      - Container must be mp4
+      - Must carry BOTH audio AND video tracks
+      - URL must NOT contain sq= or manifest indicators
+      - No adaptive protocols
+    """
+    ext      = (fmt.get("ext")      or "").lower()
+    acodec   = (fmt.get("acodec")   or "none").lower()
+    vcodec   = (fmt.get("vcodec")   or "none").lower()
+    protocol = (fmt.get("protocol") or "").lower()
+    url      = fmt.get("url") or ""
+
+    # Must carry both audio and video (muxed)
+    if acodec in ("none", "", "null") or vcodec in ("none", "", "null"):
+        return False
+    # Container must be mp4
+    if ext != "mp4":
+        return False
+    # No adaptive protocols
+    if protocol in ("m3u8", "m3u8_native", "dash"):
+        return False
+    # URL-level DASH / manifest check
+    if _url_is_dash(url):
+        return False
+    return True
+
+
+def _infer_mime(fmt: Dict, source_type: str) -> str:
+    """Infer a MIME type string from a yt-dlp format dict."""
+    if source_type == "muxed":
+        return "video/mp4"
+    acodec = (fmt.get("acodec") or "").lower()
+    ext    = (fmt.get("ext")    or "").lower()
+    if ext == "m4a" or "mp4a" in acodec or "aac" in acodec:
+        return "audio/mp4"
+    return "audio/mp4"  # default for mp4-container audio
 
 
 def _safe_format_info(fmt: Dict) -> Dict:
     """Return a sanitized summary of one yt-dlp format dict (no cookies/tokens)."""
     return {
-        "format_id": fmt.get("format_id", ""),
-        "ext":       fmt.get("ext", ""),
-        "acodec":    fmt.get("acodec", "none"),
-        "vcodec":    fmt.get("vcodec", "none"),
-        "protocol":  fmt.get("protocol", ""),
-        "abr":       fmt.get("abr"),
-        "filesize":  fmt.get("filesize"),
+        "format_id":      fmt.get("format_id", ""),
+        "ext":            fmt.get("ext", ""),
+        "acodec":         fmt.get("acodec", "none"),
+        "vcodec":         fmt.get("vcodec", "none"),
+        "protocol":       fmt.get("protocol", ""),
+        "abr":            fmt.get("abr"),
+        "filesize":       fmt.get("filesize"),
+        "direct_audio":   _is_direct_playable_audio(fmt),
+        "direct_muxed":   _is_direct_playable_muxed(fmt),
+        "has_clen":       _has_clen(fmt.get("url", "")),
     }
+
+
+# ---------------------------------------------------------------------------
+# Core native resolver  (mirrors Flutter _resolveStream / _resolveMuxedFallback)
+# ---------------------------------------------------------------------------
+
+def _resolve_stream_native(video_id: str) -> Dict:
+    """
+    Resolve the best direct, progressive stream for a YouTube video ID.
+
+    Mirrors the Flutter mobile two-path strategy:
+      PATH 1 (preferred): audio-only mp4/m4a, no DASH segments.
+        Sort: clen= URL param first (known content-length), then highest abr.
+      PATH 2 (fallback):  muxed mp4 (video+audio), no DASH segments.
+        ExoPlayer / AVPlayer / CF Worker proxy can use the audio track.
+        Sort: clen= first, then lowest abr (smallest download).
+
+    Raises ValueError when both paths are exhausted.
+    """
+    import yt_dlp  # type: ignore  # noqa: PLC0415
+
+    yt_url = f"https://www.youtube.com/watch?v={video_id}"
+    opts   = {**_YDL_BASE_OPTS, "format": "bestaudio/best"}
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(yt_url, download=False)
+
+    if not info:
+        raise ValueError("yt-dlp returned no info")
+
+    all_formats: List[Dict] = info.get("formats") or []
+    duration: int = int(info.get("duration") or 0)
+
+    thumbnail: str = ""
+    thumbnails = info.get("thumbnails") or []
+    if thumbnails:
+        thumbnail = thumbnails[-1].get("url", "")
+    if not thumbnail:
+        thumbnail = info.get("thumbnail", "")
+
+    # ── PATH 1: audio-only ───────────────────────────────────────────────────
+    audio_candidates = [f for f in all_formats if _is_direct_playable_audio(f)]
+    print(
+        f"[Resolver] {video_id}: total_formats={len(all_formats)} "
+        f"audio_only_direct={len(audio_candidates)}"
+    )
+
+    if audio_candidates:
+        # clen= first (known-length progressive file), then highest bitrate
+        audio_candidates.sort(key=lambda f: (
+            -int(_has_clen(f.get("url", ""))),
+            -(f.get("abr") or 0),
+        ))
+        chosen = audio_candidates[0]
+        abr  = chosen.get("abr") or 0
+        mime = _infer_mime(chosen, "audioOnly")
+        print(
+            f"[STREAM TYPE audioOnly] {video_id}: "
+            f"{len(audio_candidates)} candidates -> "
+            f"ext={chosen.get('ext')} abr={abr}kbps "
+            f"clen={_has_clen(chosen.get('url', ''))}"
+        )
+        return {
+            "url":        chosen["url"],
+            "duration":   duration,
+            "thumbnail":  thumbnail,
+            "sourceType": "audioOnly",
+            "mimeType":   mime,
+            "ext":        chosen.get("ext", ""),
+            "abr":        abr,
+        }
+
+    # ── PATH 2: muxed fallback ───────────────────────────────────────────────
+    muxed_candidates = [f for f in all_formats if _is_direct_playable_muxed(f)]
+    print(
+        f"[Resolver] {video_id}: no direct audio-only streams — "
+        f"trying muxed ({len(muxed_candidates)} candidates)"
+    )
+
+    if muxed_candidates:
+        # clen= first, then lowest abr (smallest file — only audio track is needed)
+        muxed_candidates.sort(key=lambda f: (
+            -int(_has_clen(f.get("url", ""))),
+            (f.get("abr") or 9999),
+        ))
+        chosen = muxed_candidates[0]
+        abr  = chosen.get("abr") or 0
+        mime = _infer_mime(chosen, "muxed")
+        print(
+            f"[STREAM TYPE muxed] {video_id}: "
+            f"{len(muxed_candidates)} candidates -> "
+            f"ext={chosen.get('ext')} abr={abr}kbps "
+            f"clen={_has_clen(chosen.get('url', ''))}"
+        )
+        return {
+            "url":        chosen["url"],
+            "duration":   duration,
+            "thumbnail":  thumbnail,
+            "sourceType": "muxed",
+            "mimeType":   mime,
+            "ext":        chosen.get("ext", ""),
+            "abr":        abr,
+        }
+
+    raise ValueError(
+        f"No direct playable stream found for {video_id}: "
+        f"all {len(all_formats)} formats are DASH-segmented or incompatible"
+    )
 
 
 def _extract_with_format(video_id: str, label: str, fmt: str) -> Dict:
@@ -892,18 +1102,13 @@ def _classify_yt_error(exc: Exception) -> str:
 
 async def _resolve_stream_with_retry(video_id: str) -> Dict:
     """
-    Drive the multi-format fallback chain (_extract_with_format_fallback)
-    with up to 2 full retries on transient / format errors.
+    Run _resolve_stream_native with up to 2 full retries on transient errors.
 
     Retry policy:
       - Permanent errors (VIDEO_UNAVAILABLE, BOT_CHECK, GEO_BLOCKED):
         abort immediately — retrying never helps.
       - Transient errors (FORMAT_UNAVAILABLE, NETWORK_ERROR, RESOLVE_FAILED):
         retry with exponential backoff (1 s, 2 s).
-
-    The format-fallback chain inside _extract_with_format_fallback already
-    tries m4a → webm → bestaudio → dynamic before raising, so a single call
-    here represents a full multi-format attempt.
     """
     permanent_codes = {"VIDEO_UNAVAILABLE", "BOT_CHECK", "GEO_BLOCKED"}
     delays = [1, 2]  # seconds between attempt 1→2 and 2→3
@@ -911,7 +1116,7 @@ async def _resolve_stream_with_retry(video_id: str) -> Dict:
 
     for attempt in range(3):
         try:
-            result = await asyncio.to_thread(_extract_with_format_fallback, video_id)
+            result = await asyncio.to_thread(_resolve_stream_native, video_id)
             return result
         except Exception as exc:
             last_exc = exc
@@ -956,33 +1161,35 @@ async def resolve_playback(videoId: str):
     # ── 1. Redis cache ────────────────────────────────────────────────────────
     cached_redis = await cache_get(redis_client, redis_key)
     if cached_redis:
-        print(f"[RESOLVE CACHE HIT] {video_id}")
+        print(f"[STREAM CACHE HIT] {video_id} (redis)")
         return JSONResponse(content={
-            "ok": True,
-            "videoId": video_id,
-            "streamUrl": cached_redis["url"],
-            "duration": cached_redis["duration"],
+            "ok":         True,
+            "videoId":    video_id,
+            "streamUrl":  cached_redis["url"],
+            "duration":   cached_redis["duration"],
             "sourceType": cached_redis.get("sourceType", "audioOnly"),
-            "expiresAt": cached_redis.get("expires_at", ""),
-            "cached": True,
+            "mimeType":   cached_redis.get("mimeType", "audio/mp4"),
+            "expiresAt":  cached_redis.get("expires_at", ""),
+            "cached":     True,
         })
 
     # ── 2. In-memory cache fallback ───────────────────────────────────────────
     mem = _stream_cache.get(video_id)
     if mem and mem["expires_at"] > now:
-        print(f"[RESOLVE CACHE HIT] {video_id} (mem)")
+        print(f"[STREAM CACHE HIT] {video_id} (mem)")
         return JSONResponse(content={
-            "ok": True,
-            "videoId": video_id,
-            "streamUrl": mem["url"],
-            "duration": mem["duration"],
+            "ok":         True,
+            "videoId":    video_id,
+            "streamUrl":  mem["url"],
+            "duration":   mem["duration"],
             "sourceType": mem.get("sourceType", "audioOnly"),
-            "expiresAt": mem["expires_at"].isoformat(),
-            "cached": True,
+            "mimeType":   mem.get("mimeType", "audio/mp4"),
+            "expiresAt":  mem["expires_at"].isoformat(),
+            "cached":     True,
         })
 
     # ── 3. Resolve via yt-dlp (with retry + backoff) ─────────────────────────
-    print(f"[RESOLVE CACHE MISS] {video_id}")
+    print(f"[STREAM CACHE MISS] {video_id}")
     try:
         result = await _resolve_stream_with_retry(video_id)
     except Exception as exc:
@@ -1003,17 +1210,12 @@ async def resolve_playback(videoId: str):
         })
 
     # ── 4. Prime both caches ──────────────────────────────────────────────────
-    expires_at = now + datetime.timedelta(seconds=_RESOLVE_TTL)
+    expires_at  = now + datetime.timedelta(seconds=_RESOLVE_TTL)
     expires_iso = expires_at.isoformat()
 
-    # Determine sourceType from the chosen format
-    chosen_fmt = result.get("_chosen_fmt", {})
-    vcodec = chosen_fmt.get("vcodec", "none") or "none"
-    source_type = "audioOnly" if vcodec.lower() in ("none", "", "null") else "muxed"
-    print(f"[STREAM TYPE {source_type}] {video_id}")
-    if source_type == "muxed":
-        print(f"[MUXED SELECTED] {video_id} via {chosen_fmt.get('ext', '?')} "
-              f"abr={chosen_fmt.get('abr')}")
+    # sourceType and mimeType come directly from _resolve_stream_native
+    source_type = result.get("sourceType", "audioOnly")
+    mime_type   = result.get("mimeType", "audio/mp4")
 
     # In-memory (always)
     _stream_cache[video_id] = {
@@ -1021,6 +1223,7 @@ async def resolve_playback(videoId: str):
         "duration":   result["duration"],
         "thumbnail":  result.get("thumbnail", ""),
         "sourceType": source_type,
+        "mimeType":   mime_type,
         "expires_at": expires_at,
     }
     # Redis (if available) — cache_set handles jitter internally
@@ -1028,24 +1231,26 @@ async def resolve_playback(videoId: str):
         "url":        result["url"],
         "duration":   result["duration"],
         "sourceType": source_type,
+        "mimeType":   mime_type,
         "expires_at": expires_iso,
     }, _RESOLVE_TTL)
-    print(f"[STREAM CACHE SET] {video_id} sourceType={source_type} ttl={_RESOLVE_TTL}s")
+    print(f"[STREAM CACHE SET] {video_id} sourceType={source_type} mimeType={mime_type} ttl={_RESOLVE_TTL}s")
 
     # Prune stale in-memory entries
     stale = [k for k, v in _stream_cache.items() if v["expires_at"] <= now]
     for k in stale:
         del _stream_cache[k]
 
-    print(f"[Resolve] OK {video_id}: duration={result['duration']}s")
+    print(f"[Resolve] OK {video_id}: sourceType={source_type} duration={result['duration']}s")
     return JSONResponse(content={
-        "ok": True,
-        "videoId": video_id,
-        "streamUrl": result["url"],
-        "duration":  result["duration"],
+        "ok":         True,
+        "videoId":    video_id,
+        "streamUrl":  result["url"],
+        "duration":   result["duration"],
         "sourceType": source_type,
-        "expiresAt": expires_iso,
-        "cached": False,
+        "mimeType":   mime_type,
+        "expiresAt":  expires_iso,
+        "cached":     False,
     })
 
 
@@ -1065,18 +1270,23 @@ async def _warm_cache(video_id: str) -> None:
             return
         result = await _resolve_stream_with_retry(video_id)
         if result.get("url"):
-            chosen_fmt = result.get("_chosen_fmt", {})
-            vcodec = chosen_fmt.get("vcodec", "none") or "none"
-            source_type = "audioOnly" if vcodec.lower() in ("none", "", "null") else "muxed"
-            expires_at = now + datetime.timedelta(seconds=_RESOLVE_TTL)
+            source_type = result.get("sourceType", "audioOnly")
+            mime_type   = result.get("mimeType", "audio/mp4")
+            expires_at  = now + datetime.timedelta(seconds=_RESOLVE_TTL)
             _stream_cache[video_id] = {
-                "url": result["url"], "duration": result["duration"],
-                "thumbnail": result.get("thumbnail", ""),
-                "sourceType": source_type, "expires_at": expires_at,
+                "url":        result["url"],
+                "duration":   result["duration"],
+                "thumbnail":  result.get("thumbnail", ""),
+                "sourceType": source_type,
+                "mimeType":   mime_type,
+                "expires_at": expires_at,
             }
             await cache_set(redis_client, redis_key, {
-                "url": result["url"], "duration": result["duration"],
-                "sourceType": source_type, "expires_at": expires_at.isoformat(),
+                "url":        result["url"],
+                "duration":   result["duration"],
+                "sourceType": source_type,
+                "mimeType":   mime_type,
+                "expires_at": expires_at.isoformat(),
             }, _RESOLVE_TTL)
         print(f"[PREFETCH DONE] {video_id}")
     except Exception as exc:
@@ -1102,10 +1312,10 @@ async def prefetch_playback(videoId: str):
 async def debug_resolve_playback(videoId: str):
     """
     Diagnostic endpoint — returns the full format list, selected format details,
-    fallback attempt log, and final error code for a given videoId.
+    and final error code for a given videoId.
 
-    Only for debugging. Sanitized: no cookies, credentials, or raw stream URLs
-    are returned. Do not call this from the Flutter app in production.
+    Only for debugging. Sanitized: no cookies or credentials are returned.
+    Do not call this from the Flutter app in production.
     """
     if not videoId or not videoId.strip():
         return JSONResponse(content={
@@ -1123,47 +1333,56 @@ async def debug_resolve_playback(videoId: str):
     cache_hit = bool(cached_redis) or bool(mem and mem["expires_at"] > now)
     print(f"[DebugResolve] {video_id}: cache_hit={cache_hit}")
 
-    # ── Attempt resolution with full diagnostic data ──────────────────────
+    # ── Attempt resolution + format listing for diagnostics ──────────────
     try:
-        result = await asyncio.to_thread(_extract_with_format_and_listing, video_id)
-        chosen_fmt = result.get("_chosen_fmt")
-        safe_formats = result.get("_safe_formats", [])
-        fallback_log = result.get("_fallback_log", [])
+        import yt_dlp  # type: ignore  # noqa: PLC0415
+        # Fetch full format listing for diagnostics
+        list_opts = {**_YDL_BASE_OPTS, "format": "bestaudio/best"}
+        with yt_dlp.YoutubeDL(list_opts) as ydl:
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}",
+                download=False,
+            )
+        safe_formats: List[Dict] = []
+        if info:
+            safe_formats = [_safe_format_info(f) for f in (info.get("formats") or [])]
+
+        # Now run the native resolver
+        result = await asyncio.to_thread(_resolve_stream_native, video_id)
 
         print(
-            f"[DebugResolve] {video_id}: OK "
-            f"cache_hit={cache_hit} "
-            f"format_used={result.get('format_label')} "
-            f"audio_formats_available={result.get('_audio_format_count', '?')}"
+            f"[DebugResolve] {video_id}: OK cache_hit={cache_hit} "
+            f"sourceType={result.get('sourceType')} mimeType={result.get('mimeType')}"
         )
-
         return JSONResponse(content={
-            "ok":              True,
-            "videoId":         video_id,
-            "cacheHit":        cache_hit,
-            "formatUsed":      result.get("format_label"),
-            "duration":        result.get("duration"),
-            "audioFormatsAvailable": result.get("_audio_format_count"),
-            "selectedFormat":  chosen_fmt,
+            "ok":             True,
+            "videoId":        video_id,
+            "cacheHit":       cache_hit,
+            "sourceType":     result.get("sourceType"),
+            "mimeType":       result.get("mimeType"),
+            "duration":       result.get("duration"),
+            "ext":            result.get("ext"),
+            "abr":            result.get("abr"),
+            "audioFormatsAvailable": sum(1 for f in safe_formats if f.get("direct_audio")),
+            "muxedFormatsAvailable": sum(1 for f in safe_formats if f.get("direct_muxed")),
             "availableFormats": safe_formats,
-            "fallbackLog":     fallback_log,
         })
 
     except Exception as exc:
         error_code = _classify_yt_error(exc)
         print(f"[DebugResolve] {video_id}: FAILED {error_code} — {exc}")
-        # Try to get format listing even on failure
-        safe_formats: List[Dict] = []
+        # Try to get format listing even on resolution failure
+        safe_formats_err: List[Dict] = []
         try:
             import yt_dlp  # type: ignore  # noqa: PLC0415
             list_opts = {**_YDL_BASE_OPTS, "format": "bestaudio/best"}
             with yt_dlp.YoutubeDL(list_opts) as ydl:
                 info = ydl.extract_info(
                     f"https://www.youtube.com/watch?v={video_id}",
-                    download=False
+                    download=False,
                 )
             if info:
-                safe_formats = [_safe_format_info(f) for f in (info.get("formats") or [])]
+                safe_formats_err = [_safe_format_info(f) for f in (info.get("formats") or [])]
         except Exception:
             pass
 
@@ -1173,9 +1392,7 @@ async def debug_resolve_playback(videoId: str):
             "cacheHit":         cache_hit,
             "errorCode":        error_code,
             "message":          _PLAYBACK_ERROR_MESSAGES.get(error_code, "Playback unavailable"),
-            "availableFormats": safe_formats,
-            "selectedFormat":   None,
-            "fallbackLog":      [],
+            "availableFormats": safe_formats_err,
         })
 
 
