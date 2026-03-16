@@ -29,21 +29,22 @@
 
 const CACHE_TTL_SECONDS = 1800; // 30 minutes
 
-// Innertube endpoint — no API key required for public videos
+// ---------------------------------------------------------------------------
+// Client profiles
+// ---------------------------------------------------------------------------
+
+// ANDROID client (clientName id = 3) is the most stable Innertube client for
+// getting pre-signed CDN URLs without JS signature deciphering in 2025.
+// ANDROID_EMBEDDED_PLAYER (id 55) and IOS (id 5) are alternatives if this
+// breaks, but ANDROID has the widest track record.
+const INNERTUBE_CLIENT_NAME = 'ANDROID';
+const INNERTUBE_CLIENT_ID = '3';          // numeric id sent in X-YouTube-Client-Name
+const INNERTUBE_CLIENT_VERSION = '20.10.38';   // recent stable Android app version
+const INNERTUBE_USER_AGENT =
+    `com.google.android.youtube/${INNERTUBE_CLIENT_VERSION} (Linux; U; Android 12; GB) gzip`;
+
 const INNERTUBE_PLAYER_URL =
     'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-
-// ANDROID_EMBEDDED_PLAYER client returns pre-signed CDN URLs —
-// no JS signature deciphering required.
-const INNERTUBE_CLIENT = {
-    clientName: 'ANDROID_EMBEDDED_PLAYER',
-    clientVersion: '17.36.4',
-    androidSdkVersion: 31,
-    userAgent:
-        'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip',
-    hl: 'en',
-    gl: 'US',
-};
 
 // Headers forwarded to the YouTube CDN when proxying.
 const PROXY_REQUEST_HEADERS = [
@@ -68,33 +69,78 @@ const PROXY_RESPONSE_HEADERS = [
 
 /**
  * Call YouTube's internal Innertube /player endpoint.
- * Returns the raw playerResponse JSON.
+ * Returns the raw playerResponse JSON, or throws a typed Error with .code set.
  */
 async function fetchPlayerResponse(videoId) {
+    // Build a clean context identical to what the YouTube Android app sends.
+    const clientContext = {
+        clientName: INNERTUBE_CLIENT_NAME,
+        clientVersion: INNERTUBE_CLIENT_VERSION,
+        androidSdkVersion: 30,
+        hl: 'en',
+        gl: 'US',
+        utcOffsetMinutes: 0,
+    };
+
     const body = {
         videoId,
+        contentCheckOk: true,   // required — suppresses content-check gatekeeping
+        racyCheckOk: true,   // required — suppresses age-gate for edge-resolved calls
         context: {
-            client: INNERTUBE_CLIENT,
+            client: clientContext,
         },
     };
+
+    console.log(
+        `[WORKER RESOLVE] client=${INNERTUBE_CLIENT_NAME}@${INNERTUBE_CLIENT_VERSION}` +
+        ` id=${INNERTUBE_CLIENT_ID} endpoint=${INNERTUBE_PLAYER_URL}`
+    );
 
     const response = await fetch(INNERTUBE_PLAYER_URL, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'User-Agent': INNERTUBE_CLIENT.userAgent,
-            'X-YouTube-Client-Name': '56', // ANDROID_EMBEDDED_PLAYER numeric id
-            'X-YouTube-Client-Version': INNERTUBE_CLIENT.clientVersion,
-            Origin: 'https://www.youtube.com',
+            'User-Agent': INNERTUBE_USER_AGENT,
+            'X-YouTube-Client-Name': INNERTUBE_CLIENT_ID,
+            'X-YouTube-Client-Version': INNERTUBE_CLIENT_VERSION,
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://www.youtube.com',
+            'Referer': 'https://www.youtube.com/',
         },
         body: JSON.stringify(body),
     });
 
+    console.log(`[WORKER RESOLVE] Innertube HTTP status: ${response.status}`);
+
     if (!response.ok) {
-        throw new Error(`Innertube ${response.status}: ${await response.text()}`);
+        const text = await response.text();
+        console.error(
+            `[WORKER ERROR] Innertube ${response.status} for ${videoId}: ` +
+            text.substring(0, 200)
+        );
+        const code = response.status === 403 ? 'INNERTUBE_HTTP_403'
+            : response.status === 404 ? 'INNERTUBE_HTTP_404'
+                : 'INNERTUBE_HTTP_ERROR';
+        const err = new Error(`Innertube HTTP ${response.status}`);
+        err.code = code;
+        throw err;
     }
 
-    return response.json();
+    const data = await response.json();
+
+    // Log diagnostic fields — visible in CF Workers tail logs
+    const playStatus = data?.playabilityStatus?.status ?? 'MISSING';
+    const playReason = data?.playabilityStatus?.reason ?? '';
+    const hasSD = !!data?.streamingData;
+    const adaptCount = (data?.streamingData?.adaptiveFormats ?? []).length;
+    const fmtCount = (data?.streamingData?.formats ?? []).length;
+
+    console.log(
+        `[WORKER RESOLVE] playabilityStatus=${playStatus} ${playReason} ` +
+        `| streamingData=${hasSD} adaptiveFormats=${adaptCount} formats=${fmtCount}`
+    );
+
+    return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,17 +191,22 @@ function isDirectMuxed(fmt) {
 
 /**
  * Given a parsed playerResponse, select the best direct stream URL.
- * Returns { url, sourceType, mimeType } or throws if nothing is playable.
+ * Returns { url, sourceType, mimeType } or throws a typed Error with .code set.
  */
 function selectBestFormat(playerResponse) {
     const status = playerResponse?.playabilityStatus?.status;
     if (status && status !== 'OK') {
-        throw new Error(`Video not playable: ${status}`);
+        const reason = playerResponse?.playabilityStatus?.reason ?? status;
+        const err = new Error(`Video not playable: ${reason}`);
+        err.code = 'PLAYABILITY_FAILED';
+        throw err;
     }
 
     const streamingData = playerResponse?.streamingData;
     if (!streamingData) {
-        throw new Error('No streamingData in playerResponse');
+        const err = new Error('Innertube returned no streamingData');
+        err.code = 'NO_STREAMING_DATA';
+        throw err;
     }
 
     // adaptiveFormats → audio-only tracks
@@ -191,7 +242,12 @@ function selectBestFormat(playerResponse) {
         return { url: chosen.url, sourceType: 'muxed', mimeType: mime };
     }
 
-    throw new Error('No direct playable stream found — all formats are DASH-segmented or incompatible');
+    const err = new Error(
+        `No direct playable stream found (${adaptive.length} adaptive, ${muxed.length} muxed ` +
+        `— all DASH-segmented or incompatible mimeTypes)`
+    );
+    err.code = 'NO_AUDIO_FORMAT';
+    throw err;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,15 +385,31 @@ async function handleRequest(request) {
         const playerResponse = await fetchPlayerResponse(videoId);
         resolved = selectBestFormat(playerResponse);
     } catch (err) {
+        const code = err?.code || 'RESOLVE_FAILED';
         const msg = err?.message || String(err);
-        console.error(`[WORKER ERROR] resolve failed for ${videoId}: ${msg}`);
+        console.error(`[WORKER ERROR] resolve failed for ${videoId}: code=${code} msg=${msg}`);
 
-        const isUnavailable = msg.toLowerCase().includes('not playable') ||
-            msg.toLowerCase().includes('no streamingdata');
+        // Map typed codes to appropriate HTTP status and user messages
+        const HTTP_STATUS = {
+            INNERTUBE_HTTP_403: 503,
+            INNERTUBE_HTTP_404: 404,
+            INNERTUBE_HTTP_ERROR: 502,
+            PLAYABILITY_FAILED: 404,
+            NO_STREAMING_DATA: 502,
+            NO_AUDIO_FORMAT: 502,
+        };
+        const USER_MESSAGE = {
+            INNERTUBE_HTTP_403: 'Stream service temporarily unavailable — try again',
+            INNERTUBE_HTTP_404: 'This track is no longer available',
+            INNERTUBE_HTTP_ERROR: 'Playback is not available right now',
+            PLAYABILITY_FAILED: 'This track is no longer available',
+            NO_STREAMING_DATA: 'Playback is not available right now',
+            NO_AUDIO_FORMAT: 'No compatible audio stream found for this track',
+        };
         return jsonError(
-            502,
-            isUnavailable ? 'VIDEO_UNAVAILABLE' : 'RESOLVE_FAILED',
-            isUnavailable ? 'This track is no longer available' : 'Playback is not available right now'
+            HTTP_STATUS[code] || 502,
+            code,
+            USER_MESSAGE[code] || 'Playback is not available right now'
         );
     }
 
