@@ -70,7 +70,7 @@ const INNERTUBE_CLIENTS = [
 ];
 
 const INNERTUBE_PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-const CACHE_TTL_SECONDS = 1800; // 30 min
+const CACHE_TTL_SECONDS = 300;  // 5 min — short TTL to avoid serving expired signed CDN URLs
 
 // Signals that a retry with a different client might help
 const BOT_CHECK_SIGNALS = [
@@ -296,7 +296,8 @@ async function serveStream(streamUrl, request) {
 
     if (!upstream.ok && upstream.status !== 206) {
         const err = new Error(`CDN ${upstream.status}`);
-        err.code = 'STREAM_PROXY_FAILED';
+        // Tag 403 distinctly so handleRequest can decide to re-resolve
+        err.code = upstream.status === 403 ? 'CDN_403' : 'STREAM_PROXY_FAILED';
         throw err;
     }
 
@@ -343,6 +344,10 @@ async function cacheWrite(videoId, data) {
         },
     });
     await caches.default.put(cacheKey(videoId), res);
+}
+
+async function cacheDelete(videoId) {
+    await caches.default.delete(cacheKey(videoId));
 }
 
 // ---------------------------------------------------------------------------
@@ -414,11 +419,26 @@ async function handleRequest(request) {
     // --- 1. CF Cache lookup --------------------------------------------------
     const cached = await cacheRead(videoId);
     if (cached?.url) {
-        console.log(`[WORKER CACHE HIT] ${videoId} sourceType=${cached.sourceType}`);
-        // Proxy the cached URL directly — no redirect (ExoPlayer needs bytes)
-        return serveStream(cached.url, request);
+        console.log(`[WORKER CACHE URL HIT] ${videoId} sourceType=${cached.sourceType}`);
+        try {
+            return await serveStream(cached.url, request);
+        } catch (err) {
+            if (err?.code === 'CDN_403') {
+                // Signed URL has expired or been invalidated — discard and re-resolve
+                console.log(`[WORKER CACHE URL INVALIDATED] ${videoId} — cached URL returned 403`);
+                await cacheDelete(videoId);
+                // Fall through to fresh resolution below
+            } else {
+                // Non-403 proxy failure — surface immediately
+                const code = err?.code || 'STREAM_PROXY_FAILED';
+                console.error(`[WORKER FINAL ERROR] ${videoId} cached proxy failed: code=${code}`);
+                return jsonError(code);
+            }
+        }
+        console.log(`[WORKER RE-RESOLVE AFTER 403] ${videoId} — fetching fresh stream URL`);
+    } else {
+        console.log(`[WORKER CACHE MISS] ${videoId}`);
     }
-    console.log(`[WORKER CACHE MISS] ${videoId}`);
 
     // --- 2. Resolve via Innertube client waterfall ---------------------------
     console.log(`[WORKER RESOLVE] Starting multi-client resolution for ${videoId}`);
@@ -439,6 +459,11 @@ async function handleRequest(request) {
     });
 
     // --- 4. Serve the stream -------------------------------------------------
+    // If we got here via cache-invalidation, log the retry clearly.
+    const isCacheRetry = cached?.url != null;
+    if (isCacheRetry) {
+        console.log(`[WORKER RETRY CDN FETCH] ${videoId} — using fresh URL after 403 invalidation`);
+    }
     let response;
     try {
         response = await serveStream(resolved.url, request);
