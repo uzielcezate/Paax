@@ -70,7 +70,7 @@ const INNERTUBE_CLIENTS = [
 ];
 
 const INNERTUBE_PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-const CACHE_TTL_SECONDS = 1800; // 30 min
+const CACHE_TTL_SECONDS = 300;  // 5 min — short TTL to avoid serving expired signed CDN URLs
 
 // Signals that a retry with a different client might help
 const BOT_CHECK_SIGNALS = [
@@ -81,12 +81,7 @@ const BOT_CHECK_SIGNALS = [
     'please sign in',
 ];
 
-// ---------------------------------------------------------------------------
-// Helpers forwarded to / from the YouTube CDN
-// ---------------------------------------------------------------------------
-const PROXY_REQ_HEADERS = ['range', 'if-range'];
-const PROXY_RESP_HEADERS = ['content-type', 'content-length', 'content-range',
-    'accept-ranges', 'last-modified', 'etag'];
+
 
 // ---------------------------------------------------------------------------
 // Innertube — single client attempt
@@ -264,52 +259,66 @@ async function resolveStream(videoId) {
 }
 
 // ---------------------------------------------------------------------------
-// Serving — redirect-first, proxy fallback
+// Serving — proxy streaming (ExoPlayer needs bytes, not a 302 redirect)
 // ---------------------------------------------------------------------------
-async function serveStream(streamUrl, request, videoId) {
-    // Redirect-first: client hits CDN directly with its own headers.
-    // This avoids Worker bandwidth and bypasses CDN 403s caused by
-    // server-side proxying from a known datacenter IP range.
-    console.log(`[WORKER REDIRECT MODE] ${videoId} -> ${streamUrl.substring(0, 80)}...`);
-    return Response.redirect(streamUrl, 302);
-}
 
-/** Proxy fallback — used only if the caller explicitly requests it via ?proxy=1. */
-async function proxyStream(streamUrl, clientRequest) {
-    console.log(`[WORKER PROXY MODE] ${streamUrl.substring(0, 80)}...`);
+/**
+ * Fetch audio bytes from the YouTube CDN and pipe them directly to the client.
+ * Forwards Range headers so ExoPlayer can seek within the track.
+ */
+async function serveStream(streamUrl, request) {
+    const rangeHeader = request.headers.get('range') || '';
 
-    const reqHeaders = new Headers();
-    for (const k of PROXY_REQ_HEADERS) {
-        const v = clientRequest.headers.get(k);
-        if (v) reqHeaders.set(k, v);
+    console.log(`[WORKER PROXY MODE] Starting CDN fetch`);
+    if (rangeHeader) {
+        console.log(`[WORKER RANGE] Forwarding Range: ${rangeHeader}`);
     }
-    reqHeaders.set('User-Agent',
+
+    // Build outbound CDN request — only forward range + standard browser headers
+    const cdnHeaders = new Headers();
+    if (rangeHeader) cdnHeaders.set('Range', rangeHeader);
+    cdnHeaders.set(
+        'User-Agent',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
         '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     );
-    reqHeaders.set('Referer', 'https://www.youtube.com/');
-    reqHeaders.set('Origin', 'https://www.youtube.com');
+    cdnHeaders.set('Referer', 'https://www.youtube.com/');
+    cdnHeaders.set('Origin', 'https://www.youtube.com');
 
-    const cdnRes = await fetch(new Request(streamUrl, { method: 'GET', headers: reqHeaders }));
-    console.log(`[WORKER CDN STATUS] ${cdnRes.status}`);
+    console.log(`[WORKER CDN FETCH] ${streamUrl.substring(0, 90)}...`);
 
-    if (!cdnRes.ok && cdnRes.status !== 206) {
-        const err = new Error(`CDN ${cdnRes.status}`);
-        err.code = 'STREAM_PROXY_FAILED';
+    const upstream = await fetch(new Request(streamUrl, {
+        method: 'GET',
+        headers: cdnHeaders,
+    }));
+
+    console.log(`[WORKER CDN FETCH] CDN responded: ${upstream.status}`);
+
+    if (!upstream.ok && upstream.status !== 206) {
+        const err = new Error(`CDN ${upstream.status}`);
+        // Tag 403 distinctly so handleRequest can decide to re-resolve
+        err.code = upstream.status === 403 ? 'CDN_403' : 'STREAM_PROXY_FAILED';
         throw err;
     }
 
+    // Build clean response — only forward audio-relevant headers
     const respHeaders = new Headers();
-    for (const k of PROXY_RESP_HEADERS) {
-        const v = cdnRes.headers.get(k);
-        if (v) respHeaders.set(k, v);
-    }
+    respHeaders.set('Content-Type', upstream.headers.get('content-type') || 'audio/mp4');
+    respHeaders.set('Accept-Ranges', 'bytes');
+
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength) respHeaders.set('Content-Length', contentLength);
+
+    const contentRange = upstream.headers.get('content-range');
+    if (contentRange) respHeaders.set('Content-Range', contentRange);
+
     respHeaders.set('Access-Control-Allow-Origin', '*');
     respHeaders.set('Cache-Control', 'no-store');
 
-    return new Response(cdnRes.body, {
-        status: cdnRes.status,
-        statusText: cdnRes.statusText,
+    console.log(`[WORKER STREAM OK] Piping to client — status=${upstream.status}`);
+
+    return new Response(upstream.body, {
+        status: upstream.status,
         headers: respHeaders,
     });
 }
@@ -335,6 +344,10 @@ async function cacheWrite(videoId, data) {
         },
     });
     await caches.default.put(cacheKey(videoId), res);
+}
+
+async function cacheDelete(videoId) {
+    await caches.default.delete(cacheKey(videoId));
 }
 
 // ---------------------------------------------------------------------------
@@ -406,10 +419,26 @@ async function handleRequest(request) {
     // --- 1. CF Cache lookup --------------------------------------------------
     const cached = await cacheRead(videoId);
     if (cached?.url) {
-        console.log(`[WORKER CACHE HIT] ${videoId} sourceType=${cached.sourceType}`);
-        return Response.redirect(cached.url, 302);
+        console.log(`[WORKER CACHE URL HIT] ${videoId} sourceType=${cached.sourceType}`);
+        try {
+            return await serveStream(cached.url, request);
+        } catch (err) {
+            if (err?.code === 'CDN_403') {
+                // Signed URL has expired or been invalidated — discard and re-resolve
+                console.log(`[WORKER CACHE URL INVALIDATED] ${videoId} — cached URL returned 403`);
+                await cacheDelete(videoId);
+                // Fall through to fresh resolution below
+            } else {
+                // Non-403 proxy failure — surface immediately
+                const code = err?.code || 'STREAM_PROXY_FAILED';
+                console.error(`[WORKER FINAL ERROR] ${videoId} cached proxy failed: code=${code}`);
+                return jsonError(code);
+            }
+        }
+        console.log(`[WORKER RE-RESOLVE AFTER 403] ${videoId} — fetching fresh stream URL`);
+    } else {
+        console.log(`[WORKER CACHE MISS] ${videoId}`);
     }
-    console.log(`[WORKER CACHE MISS] ${videoId}`);
 
     // --- 2. Resolve via Innertube client waterfall ---------------------------
     console.log(`[WORKER RESOLVE] Starting multi-client resolution for ${videoId}`);
@@ -430,16 +459,17 @@ async function handleRequest(request) {
     });
 
     // --- 4. Serve the stream -------------------------------------------------
+    // If we got here via cache-invalidation, log the retry clearly.
+    const isCacheRetry = cached?.url != null;
+    if (isCacheRetry) {
+        console.log(`[WORKER RETRY CDN FETCH] ${videoId} — using fresh URL after 403 invalidation`);
+    }
     let response;
     try {
-        if (useProxy) {
-            response = await proxyStream(resolved.url, request);
-        } else {
-            response = await serveStream(resolved.url, request, videoId);
-        }
+        response = await serveStream(resolved.url, request);
     } catch (err) {
-        const code = err?.code || 'STREAM_REDIRECT_FAILED';
-        console.error(`[WORKER FINAL ERROR] ${videoId} proxy/redirect: code=${code}`);
+        const code = err?.code || 'STREAM_PROXY_FAILED';
+        console.error(`[WORKER FINAL ERROR] ${videoId} proxy: code=${code}`);
         await cacheWritePromise;
         return jsonError(code);
     }
