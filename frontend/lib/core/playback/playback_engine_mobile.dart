@@ -1,12 +1,12 @@
 import 'dart:async';
-import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
-import '../config/api_config.dart';
+
 import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
@@ -99,41 +99,6 @@ bool _isDirectPlayableMuxed(MuxedStreamInfo s) {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// URL analysis helper — debug diagnostics only.
-// ---------------------------------------------------------------------------
-Map<String, String> _analyzeUrl(Uri uri, AudioOnlyStreamInfo info) {
-  final path = uri.path.toLowerCase();
-  final ext = path.contains('.') ? path.split('.').last.split('?').first : '';
-  final isManifest = ext == 'm3u8' ||
-      ext == 'mpd' ||
-      path.contains('manifest') ||
-      path.contains('playlist') ||
-      uri.queryParameters.containsKey('manifest_type');
-  final isSigned = uri.queryParameters.containsKey('expire') ||
-      uri.queryParameters.containsKey('sig') ||
-      uri.queryParameters.containsKey('signature') ||
-      uri.queryParameters.containsKey('lsig');
-  final totalBytes = info.size.totalBytes;
-
-  return {
-    'scheme': uri.scheme,
-    'host': uri.host,
-    'path_ext': ext.isEmpty ? '(none — direct CDN path)' : ext,
-    'mime': info.codec.mimeType,
-    'container': info.container.name,
-    'is_manifest': '$isManifest',
-    'is_signed_url': '$isSigned',
-    'query_params': '${uri.queryParameters.length}',
-    'total_bytes': '$totalBytes',
-    'size_known': '${totalBytes > 0}',
-    'direct_playable': '${_isDirectPlayable(info)}',
-    // DASH indicator: YouTube progressive streams serve full content-length,
-    // while DASH segments use 'clen=' query param alongside 'sq='
-    'has_sq_param': '${uri.queryParameters.containsKey('sq')}',
-    'has_clen_param': '${uri.queryParameters.containsKey('clen')}',
-  };
-}
 
 // ---------------------------------------------------------------------------
 // PlaybackEngineImpl
@@ -233,25 +198,41 @@ class PlaybackEngineImpl implements PlaybackEngine {
   // Stream resolution
   // -------------------------------------------------------------------------
 
-  /// Tries to resolve a playable stream URL from the backend cache.
-  ///
-  /// Calls GET /playback/resolve?videoId=… with a 3-second timeout.
-  /// Returns the stream URL if the backend returned ok=true, null otherwise.
-  /// Errors are swallowed — callers fall through to youtube_explode_dart.
-  Future<Uri?> _tryBackendResolve(String videoId) async {
+  // ── Worker-first stream resolution ─────────────────────────────────────
+  //
+  // Calls the Cloudflare Worker at stream.paaxmusic.app/{videoId}.
+  // The Worker does Innertube resolution + CF cache, then returns a 302
+  // redirect to the signed googlevideo CDN URL.
+  // We follow the redirect to obtain the final CDN URL for just_audio.
+  //
+  // Returns the final playable CDN Uri, or null on any failure.
+  Future<Uri?> _tryWorkerResolve(String videoId) async {
     try {
-      final uri = Uri.parse('${ApiConfig.baseUrl}/playback/resolve')
-          .replace(queryParameters: {'videoId': videoId});
-      final response = await http.get(uri).timeout(const Duration(seconds: 3));
-      if (response.statusCode != 200) return null;
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      if (body['ok'] != true) return null;
-      final streamUrl = body['streamUrl'] as String?;
-      if (streamUrl == null || streamUrl.isEmpty) return null;
-      debugPrint('[RESOLVE CACHE HIT] Backend returned cached stream for $videoId');
-      return Uri.parse(streamUrl);
+      debugPrint('[WORKER STREAM] loading $videoId');
+      final workerUri = Uri.parse('https://stream.paaxmusic.app/$videoId');
+
+      // http.get follows redirects by default — it will chase the 302 the
+      // Worker returns and land on the final googlevideo.com CDN URL.
+      final response = await http.get(
+        workerUri,
+        headers: const {'Accept': '*/*'},
+      ).timeout(const Duration(seconds: 10));
+
+      // After following the redirect, the final URL is the CDN URL.
+      // http package exposes it via response.request!.url after redirect chain.
+      final finalUrl = response.request?.url;
+
+      if (response.statusCode == 200 && finalUrl != null) {
+        debugPrint('[WORKER STREAM] resolved to ${finalUrl.host} (status=200)');
+        return finalUrl;
+      }
+
+      // If the Worker returned a non-200 final response, log and fail.
+      debugPrint(
+          '[WORKER STREAM] failed: HTTP ${response.statusCode} for $videoId');
+      return null;
     } catch (e) {
-      debugPrint('[RESOLVE] Backend check failed ($e) — falling back to youtube_explode_dart');
+      debugPrint('[WORKER STREAM] failed: $e');
       return null;
     }
   }
@@ -262,79 +243,47 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   /// Resolves the best playable stream for [videoId].
   ///
-  /// Resolution order:
-  ///   1. [AUDIO STREAM]  — audioOnly, direct-playable mp4/m4a (no sq=).
-  ///   2. [MUXED FALLBACK] — muxed mp4 when all audio-only are DASH-segmented.
+  /// V3 — Worker-first mode (Railway and youtube_explode_dart disabled for testing):
+  ///   1. Call Cloudflare Worker at stream.paaxmusic.app/{videoId}.
+  ///   2. Worker handles Innertube resolution, CF cache, and returns a CDN URL.
+  ///   3. Use that CDN URL directly with just_audio.
   ///
-  /// The YoutubeExplode session is opened and closed inside this method.
+  /// NOTE: youtube_explode_dart fallback paths are temporarily disabled so
+  /// Worker-first behaviour can be verified cleanly. Re-enable by uncommenting
+  /// the fallback block below once Worker is confirmed stable.
   Future<
     ({Uri url, String codec, String container, int bitrateKbps, bool isMuxedFallback})
   > _resolveStream(String videoId) async {
+    // ── PATH 0: Cloudflare Worker (primary — Worker-first) ─────────────────
+    final workerUrl = await _tryWorkerResolve(videoId);
+    if (workerUrl != null) {
+      debugPrint('[WORKER STREAM] setAudioSource OK — using CDN URL from Worker');
+      return (
+        url: workerUrl,
+        codec: 'audio/mp4',
+        container: 'mp4',
+        bitrateKbps: 0,
+        isMuxedFallback: false,
+      );
+    }
+
+    // ── WORKER FAILED — throw instead of falling back ───────────────────────
+    // youtube_explode_dart fallback intentionally disabled during Worker-first
+    // testing. To re-enable, uncomment the block below and remove this throw.
+    debugPrint('[WORKER STREAM] failed: Worker returned null — throwing');
+    throw const _PlaybackResolveException(
+      'Stream temporarily unavailable. Please try again.'
+    );
+
+    // ── DISABLED FALLBACK (re-enable post-validation) ───────────────────────
+    // ignore: dead_code
+    /*
+    debugPrint('[RESOLVE CACHE MISS] Worker failed — falling back to youtube_explode_dart');
     final yt = YoutubeExplode();
     try {
-      // ── PATH 0: backend Redis cache ──────────────────────────────────
-      // Check the backend first. If it has a cached URL, we avoid running
-      // youtube_explode_dart entirely (saves ~10–60 seconds on repeat plays).
-      final backendUrl = await _tryBackendResolve(videoId);
-      if (backendUrl != null) {
-        return (
-          url: backendUrl,
-          codec: 'audio/mp4',
-          container: 'mp4',
-          bitrateKbps: 0,         // unknown from cache — not needed for playback
-          isMuxedFallback: false, // backend resolved; type logged server-side
-        );
-      }
-
-      if (kDebugMode) {
-        debugPrint('[RESOLVE CACHE MISS] No backend cache — resolving via youtube_explode_dart for $videoId');
-      }
-
       final manifest = await yt.videos.streamsClient.getManifest(videoId);
-
-      // ── PATH 1: audio-only ───────────────────────────────────────────────
-      final audioStreams = manifest.audioOnly;
-
-      if (kDebugMode) {
-        debugPrint(
-            '[AUDIO STREAM] ${audioStreams.length} audio-only candidates:');
-        for (final s in audioStreams) {
-          final pass = _isDirectPlayable(s) ? '✓ direct' : '✗ skip';
-          final bytes = s.size.totalBytes;
-          final url = s.url;
-          debugPrint(
-            '  $pass  mime=${s.codec.mimeType}  '
-            'container=${s.container.name}  '
-            'bitrate=${(s.bitrate.bitsPerSecond / 1000).round()} kbps  '
-            'size=${bytes > 0 ? '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB' : 'unknown'}  '
-            'has_sq=${url.queryParameters.containsKey('sq')}  '
-            'host=${url.host.split('.').take(3).join('.')}',
-          );
-        }
-      }
-
-      final directStreams = audioStreams.where(_isDirectPlayable).toList();
-
-      if (kDebugMode) {
-        for (final s in audioStreams) {
-          final accepted = _isDirectPlayable(s);
-          final url = s.url;
-          final hasSq = url.queryParameters.containsKey('sq');
-          final hasClen = url.queryParameters.containsKey('clen');
-          final verdict = accepted ? '✓ direct' : '✗ skip';
-          final reason = !accepted
-              ? (hasSq ? 'sq=DASH-segment' : 'container/mime')
-              : (hasClen ? 'clen=known-size' : 'no-clen');
-          debugPrint(
-            '  $verdict  ${s.codec.mimeType}/${s.container.name}  '
-            '${(s.bitrate.bitsPerSecond / 1000).round()} kbps  '
-            'sq=$hasSq  clen=$hasClen  → $reason',
-          );
-        }
-      }
-
+      final directStreams = manifest.audioOnly.where(_isDirectPlayable).toList();
       if (directStreams.isNotEmpty) {
-        // Sort: clen= streams first (known-length file), then highest bitrate.
         directStreams.sort((a, b) {
           final aClen = a.url.queryParameters.containsKey('clen') ? 1 : 0;
           final bClen = b.url.queryParameters.containsKey('clen') ? 1 : 0;
@@ -342,48 +291,19 @@ class PlaybackEngineImpl implements PlaybackEngine {
           return b.bitrate.compareTo(a.bitrate);
         });
         final chosen = directStreams.first;
-        final bitrateKbps = (chosen.bitrate.bitsPerSecond / 1000).round();
-        final uri = chosen.url;
-
-        if (kDebugMode) {
-          final diag = _analyzeUrl(uri, chosen);
-          debugPrint('[AUDIO STREAM] ✓ Selected direct-playable audio-only stream:');
-          diag.forEach((k, v) => debugPrint('  $k: $v'));
-          debugPrint('  bitrate    : $bitrateKbps kbps');
-          debugPrint('  clen_known : ${uri.queryParameters.containsKey('clen')}');
-          debugPrint('  url_preview: ${uri.toString().substring(0, uri.toString().length.clamp(0, 80))}…');
-          if (diag['has_sq_param'] == 'true') {
-            debugPrint('[AUDIO STREAM] ⚠ UNEXPECTED: selected URL still has sq= — filter bug?');
-          }
-        }
-
         return (
-          url: uri,
+          url: chosen.url,
           codec: chosen.codec.mimeType,
           container: chosen.container.name,
-          bitrateKbps: bitrateKbps,
+          bitrateKbps: (chosen.bitrate.bitsPerSecond / 1000).round(),
           isMuxedFallback: false,
         );
       }
-
-      // ── PATH 2: muxed fallback ───────────────────────────────────────────
-      // All audio-only streams were DASH-segmented (sq=) or incompatible.
-      // Try muxed mp4: ExoPlayer plays only the audio track from the container.
-      if (kDebugMode) {
-        debugPrint(
-          '[MUXED FALLBACK] No direct audio-only streams — '
-          'all ${audioStreams.length} candidates had sq= or incompatible container. '
-          'Trying muxed mp4 streams…',
-        );
-      }
-
       return await _resolveMuxedFallback(videoId, manifest);
-    } catch (e) {
-      debugPrint('[PlaybackEngine][Error] Resolution failed for $videoId: $e');
-      rethrow;
     } finally {
       yt.close();
     }
+    */
   }
 
   /// Selects the best progressive mp4 muxed stream from [manifest].
@@ -832,17 +752,9 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   @override
   void prefetchNext(String videoId) {
-    if (videoId.isEmpty || _isDisposed) return;
-    // Call the backend prefetch endpoint — it runs yt-dlp in the background
-    // and primes Redis so the next load() call can skip youtube_explode_dart.
-    debugPrint('[TRACK PREFETCH] [PREFETCH START] Triggering backend warm-up for $videoId');
-    final prefetchUri = Uri.parse('${ApiConfig.baseUrl}/playback/prefetch')
-        .replace(queryParameters: {'videoId': videoId});
-    http.get(prefetchUri).then((_) {
-      debugPrint('[TRACK PREFETCH] [PREFETCH DONE] Backend acknowledged prefetch for $videoId');
-    }).catchError((Object e) {
-      debugPrint('[TRACK PREFETCH] [PREFETCH DONE] Backend prefetch failed for $videoId — ignored ($e)');
-    });
+    // Prefetch intentionally no-oped during Worker-first testing.
+    // The Cloudflare Worker's CF Cache handles repeat-play latency.
+    debugPrint('[TRACK PREFETCH] skipped — Worker-first mode (CF Cache handles caching)');
   }
 
   @override
