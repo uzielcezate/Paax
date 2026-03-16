@@ -1,108 +1,120 @@
 /**
  * Paax Stream Worker — stream.paaxmusic.app
+ * v3 — multi-client fallback + redirect-first serving
  *
- * Worker-first playback resolver: no Railway in the critical path.
+ * Resolution strategy:
+ *   Tries a prioritised list of Innertube clients in sequence.
+ *   Stops at first client that returns a playable, non-bot-gated stream.
+ *   Format selection mirrors Flutter playback_engine_mobile.dart:
+ *     PATH 1: audioOnly mp4/m4a (no sq= DASH)  → highest bitrate
+ *     PATH 2: muxed mp4 progressive fallback    → lowest bitrate
  *
- * Resolution strategy (mirrors Flutter playback_engine_mobile.dart):
- *   PATH 1 — audioOnly:  adaptiveFormats filtered for audio/mp4, no sq= (DASH)
- *             Sort: highest bitrate first.
- *   PATH 2 — muxed mp4 fallback: if all audio-only are DASH-segmented.
- *             Sort: lowest bitrate first (we only need the audio track).
- *
- * Caching:
- *   CF Cache API keyed on https://stream.paaxmusic.app/_cache/{videoId}
- *   TTL: 1800 s (30 min). Cache stores the resolved stream URL as plain text.
- *   Cache hit → 302 redirect directly to the YouTube CDN URL.
- *   Cache miss → resolve via Innertube → proxy bytes → prime cache.
+ * Serving strategy (redirect-first):
+ *   1. CF Cache hit  → 302 redirect to cached CDN URL (< 50 ms)
+ *   2. Cache miss    → resolve via Innertube client waterfall
+ *   3. On success    → write URL to CF Cache → 302 redirect to CDN URL
+ *   4. Proxy fallback → only used if redirect produces a non-2xx/3xx CDN status
  *
  * Logging tags:
- *   [WORKER RESOLVE]      Cold resolution attempt started
- *   [WORKER CACHE HIT]    Resolved URL served from CF cache
- *   [WORKER CACHE MISS]   No cache entry, resolving fresh
- *   [WORKER STREAM FETCH] Proxying audio bytes from CDN
- *   [WORKER ERROR]        Any failure with code + detail
+ *   [WORKER RESOLVE]        Cold resolution started
+ *   [WORKER CLIENT TRY]     Trying a specific Innertube client
+ *   [WORKER CLIENT SUCCESS] Client returned a playable stream
+ *   [WORKER CLIENT FAIL]    Client failed (bot-check / 403 / no formats)
+ *   [WORKER PLAYABILITY]    Playability status from Innertube
+ *   [WORKER CACHE HIT]      URL served from CF cache
+ *   [WORKER CACHE MISS]     No cache entry — resolving fresh
+ *   [WORKER REDIRECT MODE]  Serving via 302 → CDN (redirect-first)
+ *   [WORKER PROXY MODE]     Serving via byte-proxy (fallback only)
+ *   [WORKER CDN STATUS]     HTTP status returned by the YouTube CDN
+ *   [WORKER FINAL ERROR]    All clients failed — giving up
+ *   [WORKER ERROR]          Any unexpected error
  */
 
 // ---------------------------------------------------------------------------
-// Constants
+// Innertube client profiles
 // ---------------------------------------------------------------------------
-
-const CACHE_TTL_SECONDS = 1800; // 30 minutes
-
-// ---------------------------------------------------------------------------
-// Client profiles
-// ---------------------------------------------------------------------------
-
-// ANDROID client (clientName id = 3) is the most stable Innertube client for
-// getting pre-signed CDN URLs without JS signature deciphering in 2025.
-// ANDROID_EMBEDDED_PLAYER (id 55) and IOS (id 5) are alternatives if this
-// breaks, but ANDROID has the widest track record.
-const INNERTUBE_CLIENT_NAME = 'ANDROID';
-const INNERTUBE_CLIENT_ID = '3';          // numeric id sent in X-YouTube-Client-Name
-const INNERTUBE_CLIENT_VERSION = '20.10.38';   // recent stable Android app version
-const INNERTUBE_USER_AGENT =
-    `com.google.android.youtube/${INNERTUBE_CLIENT_VERSION} (Linux; U; Android 12; GB) gzip`;
-
-const INNERTUBE_PLAYER_URL =
-    'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-
-// Headers forwarded to the YouTube CDN when proxying.
-const PROXY_REQUEST_HEADERS = [
-    'range',
-    'if-range',
-    'if-modified-since',
+// Tried in order — first one that returns playabilityStatus=OK wins.
+// ANDROID (id=3) is most reliable for pre-signed progressive URLs.
+// ANDROID_VR (id=28) and TV_EMBEDDED (id=85) provide useful fallbacks.
+// IOS (id=5) uses a different signing path that bypasses some bot gates.
+const INNERTUBE_CLIENTS = [
+    {
+        name: 'ANDROID',
+        id: '3',
+        version: '20.10.38',
+        ua: 'com.google.android.youtube/20.10.38 (Linux; U; Android 12; GB) gzip',
+        extra: { androidSdkVersion: 30 },
+    },
+    {
+        name: 'ANDROID_VR',
+        id: '28',
+        version: '1.60.19',
+        ua: 'com.google.android.vr.youtube/1.60.19 (Linux; U; Android 12; GB) gzip',
+        extra: { androidSdkVersion: 30 },
+    },
+    {
+        name: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+        id: '85',
+        version: '2.0',
+        ua: 'Mozilla/5.0 (SMART-TV; LINUX; Tizen 5.0) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) SamsungBrowser/2.1 Chrome/56.0.2924.0 TV Safari/537.36',
+        extra: {},
+    },
+    {
+        name: 'IOS',
+        id: '5',
+        version: '19.45.4',
+        ua: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)',
+        extra: { deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.1.0' },
+    },
 ];
 
-// Headers forwarded from the CDN to the client.
-const PROXY_RESPONSE_HEADERS = [
-    'content-type',
-    'content-length',
-    'content-range',
-    'accept-ranges',
-    'last-modified',
-    'etag',
+const INNERTUBE_PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
+const CACHE_TTL_SECONDS = 1800; // 30 min
+
+// Signals that a retry with a different client might help
+const BOT_CHECK_SIGNALS = [
+    'sign in to confirm',
+    'confirm you',
+    'not a bot',
+    'unusual traffic',
+    'please sign in',
 ];
 
 // ---------------------------------------------------------------------------
-// Innertube resolver
+// Helpers forwarded to / from the YouTube CDN
 // ---------------------------------------------------------------------------
+const PROXY_REQ_HEADERS = ['range', 'if-range'];
+const PROXY_RESP_HEADERS = ['content-type', 'content-length', 'content-range',
+    'accept-ranges', 'last-modified', 'etag'];
 
-/**
- * Call YouTube's internal Innertube /player endpoint.
- * Returns the raw playerResponse JSON, or throws a typed Error with .code set.
- */
-async function fetchPlayerResponse(videoId) {
-    // Build a clean context identical to what the YouTube Android app sends.
-    const clientContext = {
-        clientName: INNERTUBE_CLIENT_NAME,
-        clientVersion: INNERTUBE_CLIENT_VERSION,
-        androidSdkVersion: 30,
+// ---------------------------------------------------------------------------
+// Innertube — single client attempt
+// ---------------------------------------------------------------------------
+async function tryClient(client, videoId) {
+    const ctx = {
+        clientName: client.name,
+        clientVersion: client.version,
         hl: 'en',
         gl: 'US',
         utcOffsetMinutes: 0,
+        ...client.extra,
     };
 
     const body = {
         videoId,
-        contentCheckOk: true,   // required — suppresses content-check gatekeeping
-        racyCheckOk: true,   // required — suppresses age-gate for edge-resolved calls
-        context: {
-            client: clientContext,
-        },
+        contentCheckOk: true,
+        racyCheckOk: true,
+        context: { client: ctx },
     };
 
-    console.log(
-        `[WORKER RESOLVE] client=${INNERTUBE_CLIENT_NAME}@${INNERTUBE_CLIENT_VERSION}` +
-        ` id=${INNERTUBE_CLIENT_ID} endpoint=${INNERTUBE_PLAYER_URL}`
-    );
-
-    const response = await fetch(INNERTUBE_PLAYER_URL, {
+    const res = await fetch(INNERTUBE_PLAYER_URL, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'User-Agent': INNERTUBE_USER_AGENT,
-            'X-YouTube-Client-Name': INNERTUBE_CLIENT_ID,
-            'X-YouTube-Client-Version': INNERTUBE_CLIENT_VERSION,
+            'User-Agent': client.ua,
+            'X-YouTube-Client-Name': client.id,
+            'X-YouTube-Client-Version': client.version,
             'Accept-Language': 'en-US,en;q=0.9',
             'Origin': 'https://www.youtube.com',
             'Referer': 'https://www.youtube.com/',
@@ -110,25 +122,17 @@ async function fetchPlayerResponse(videoId) {
         body: JSON.stringify(body),
     });
 
-    console.log(`[WORKER RESOLVE] Innertube HTTP status: ${response.status}`);
-
-    if (!response.ok) {
-        const text = await response.text();
-        console.error(
-            `[WORKER ERROR] Innertube ${response.status} for ${videoId}: ` +
-            text.substring(0, 200)
-        );
-        const code = response.status === 403 ? 'INNERTUBE_HTTP_403'
-            : response.status === 404 ? 'INNERTUBE_HTTP_404'
-                : 'INNERTUBE_HTTP_ERROR';
-        const err = new Error(`Innertube HTTP ${response.status}`);
+    if (!res.ok) {
+        const code = res.status === 403 ? 'INNERTUBE_403' : `INNERTUBE_HTTP_${res.status}`;
+        const snippet = (await res.text()).substring(0, 150);
+        console.log(`[WORKER CLIENT FAIL] ${client.name} HTTP=${res.status}: ${snippet}`);
+        const err = new Error(`HTTP ${res.status}`);
         err.code = code;
+        err.retry = true; // always retry with next client on HTTP errors
         throw err;
     }
 
-    const data = await response.json();
-
-    // Log diagnostic fields — visible in CF Workers tail logs
+    const data = await res.json();
     const playStatus = data?.playabilityStatus?.status ?? 'MISSING';
     const playReason = data?.playabilityStatus?.reason ?? '';
     const hasSD = !!data?.streamingData;
@@ -136,9 +140,26 @@ async function fetchPlayerResponse(videoId) {
     const fmtCount = (data?.streamingData?.formats ?? []).length;
 
     console.log(
-        `[WORKER RESOLVE] playabilityStatus=${playStatus} ${playReason} ` +
-        `| streamingData=${hasSD} adaptiveFormats=${adaptCount} formats=${fmtCount}`
+        `[WORKER PLAYABILITY] ${client.name}: status=${playStatus} ` +
+        `streamingData=${hasSD} adaptive=${adaptCount} formats=${fmtCount}` +
+        (playReason ? ` reason="${playReason}"` : '')
     );
+
+    // Bot-check → retry with next client
+    if (playStatus !== 'OK') {
+        const isBotCheck = BOT_CHECK_SIGNALS.some(s => playReason.toLowerCase().includes(s));
+        const err = new Error(playReason || playStatus);
+        err.code = isBotCheck ? 'PLAYABILITY_BOT_CHECK' : 'PLAYABILITY_FAILED';
+        err.retry = isBotCheck; // only retry on bot-check; hard failures don't retry
+        throw err;
+    }
+
+    if (!hasSD) {
+        const err = new Error('No streamingData');
+        err.code = 'NO_STREAMING_DATA';
+        err.retry = false;
+        throw err;
+    }
 
     return data;
 }
@@ -146,204 +167,219 @@ async function fetchPlayerResponse(videoId) {
 // ---------------------------------------------------------------------------
 // Format selection (mirrors Flutter _isDirectPlayable / _isDirectPlayableMuxed)
 // ---------------------------------------------------------------------------
-
-/** Return true if a format URL is a DASH segment (not a full progressive file). */
 function isDashUrl(url) {
     try {
         const u = new URL(url);
         if (u.searchParams.has('sq') || u.searchParams.has('manifest_type')) return true;
-        const path = u.pathname.toLowerCase();
-        if (path.endsWith('.m3u8') || path.endsWith('.mpd')) return true;
-        if (path.includes('manifest') || path.includes('playlist')) return true;
-    } catch (_) {
-        // malformed URL — treat as unsafe
-        return true;
-    }
+        const p = u.pathname.toLowerCase();
+        if (p.endsWith('.m3u8') || p.endsWith('.mpd')) return true;
+        if (p.includes('manifest') || p.includes('playlist')) return true;
+    } catch (_) { return true; }
     return false;
 }
 
-/** Return true if format is a direct, progressive audio-only mp4/m4a stream. */
 function isDirectAudio(fmt) {
     const mime = (fmt.mimeType || '').toLowerCase();
     const url = fmt.url || '';
-
     if (!url) return false;
-    // Must be audio/* (adaptiveFormat without video track)
     if (!mime.startsWith('audio/')) return false;
-    // mp4 / m4a / AAC only — reject webm / opus
     if (!mime.includes('mp4') && !mime.includes('m4a') && !mime.includes('aac')) return false;
     if (mime.includes('webm') || mime.includes('opus')) return false;
-    // Reject DASH segments
     if (isDashUrl(url)) return false;
     return true;
 }
 
-/** Return true if format is a direct, progressive muxed mp4 stream. */
 function isDirectMuxed(fmt) {
     const mime = (fmt.mimeType || '').toLowerCase();
     const url = fmt.url || '';
-
     if (!url) return false;
     if (!mime.startsWith('video/mp4')) return false;
     if (isDashUrl(url)) return false;
     return true;
 }
 
-/**
- * Given a parsed playerResponse, select the best direct stream URL.
- * Returns { url, sourceType, mimeType } or throws a typed Error with .code set.
- */
 function selectBestFormat(playerResponse) {
-    const status = playerResponse?.playabilityStatus?.status;
-    if (status && status !== 'OK') {
-        const reason = playerResponse?.playabilityStatus?.reason ?? status;
-        const err = new Error(`Video not playable: ${reason}`);
-        err.code = 'PLAYABILITY_FAILED';
-        throw err;
-    }
+    const adaptive = playerResponse.streamingData.adaptiveFormats || [];
+    const muxed = playerResponse.streamingData.formats || [];
 
-    const streamingData = playerResponse?.streamingData;
-    if (!streamingData) {
-        const err = new Error('Innertube returned no streamingData');
-        err.code = 'NO_STREAMING_DATA';
-        throw err;
-    }
-
-    // adaptiveFormats → audio-only tracks
-    const adaptive = streamingData.adaptiveFormats || [];
-    // formats → muxed video+audio (lower quality but always progressive)
-    const muxed = streamingData.formats || [];
-
-    // --- PATH 1: audio-only mp4/m4a ---
+    // PATH 1: audio-only mp4/m4a — highest bitrate
     const audioCandidates = adaptive.filter(isDirectAudio);
     if (audioCandidates.length > 0) {
-        // Prefer highest bitrate
         audioCandidates.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-        const chosen = audioCandidates[0];
-        const mime = (chosen.mimeType || 'audio/mp4').split(';')[0].trim();
-        console.log(
-            `[WORKER RESOLVE] audioOnly selected: itag=${chosen.itag} ` +
-            `mime=${mime} bitrate=${chosen.bitrate}`
-        );
-        return { url: chosen.url, sourceType: 'audioOnly', mimeType: mime };
+        const c = audioCandidates[0];
+        const mime = (c.mimeType || 'audio/mp4').split(';')[0].trim();
+        console.log(`[WORKER CLIENT SUCCESS] audioOnly itag=${c.itag} mime=${mime} bitrate=${c.bitrate}`);
+        return { url: c.url, sourceType: 'audioOnly', mimeType: mime };
     }
 
-    // --- PATH 2: muxed mp4 fallback ---
+    // PATH 2: muxed mp4 — lowest bitrate (audio track is all we need)
     const muxedCandidates = muxed.filter(isDirectMuxed);
     if (muxedCandidates.length > 0) {
-        // Prefer lowest bitrate — we only need the audio track
         muxedCandidates.sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0));
-        const chosen = muxedCandidates[0];
-        const mime = 'video/mp4';
-        console.log(
-            `[WORKER RESOLVE] muxed fallback selected: itag=${chosen.itag} ` +
-            `bitrate=${chosen.bitrate}`
-        );
-        return { url: chosen.url, sourceType: 'muxed', mimeType: mime };
+        const c = muxedCandidates[0];
+        console.log(`[WORKER CLIENT SUCCESS] muxed-fallback itag=${c.itag} bitrate=${c.bitrate}`);
+        return { url: c.url, sourceType: 'muxed', mimeType: 'video/mp4' };
     }
 
     const err = new Error(
-        `No direct playable stream found (${adaptive.length} adaptive, ${muxed.length} muxed ` +
-        `— all DASH-segmented or incompatible mimeTypes)`
+        `No direct format found (${adaptive.length} adaptive, ${muxed.length} muxed — all DASH or incompatible)`
     );
     err.code = 'NO_AUDIO_FORMAT';
+    err.retry = false;
     throw err;
 }
 
 // ---------------------------------------------------------------------------
-// Audio proxy
+// Client waterfall
 // ---------------------------------------------------------------------------
+async function resolveStream(videoId) {
+    let lastErr = null;
 
-/**
- * Proxy the YouTube CDN response back to the client.
- * Forwards Range headers so the client can seek.
- */
-async function proxyStream(streamUrl, clientRequest) {
-    console.log(`[WORKER STREAM FETCH] Proxying: ${streamUrl.substring(0, 80)}…`);
-
-    const cdnRequest = new Request(streamUrl, {
-        method: 'GET',
-        headers: buildProxyRequestHeaders(clientRequest.headers),
-    });
-
-    const cdnResponse = await fetch(cdnRequest);
-
-    if (!cdnResponse.ok && cdnResponse.status !== 206) {
-        throw new Error(`CDN fetch failed: ${cdnResponse.status}`);
+    for (const client of INNERTUBE_CLIENTS) {
+        console.log(`[WORKER CLIENT TRY] ${client.name}@${client.version} for ${videoId}`);
+        try {
+            const playerResponse = await tryClient(client, videoId);
+            return selectBestFormat(playerResponse);
+        } catch (err) {
+            lastErr = err;
+            console.log(
+                `[WORKER CLIENT FAIL] ${client.name}: code=${err.code} retry=${err.retry} ` +
+                `msg=${err.message}`
+            );
+            if (!err.retry) {
+                // Hard failure (video gone, DRM, etc.) — no point trying other clients
+                break;
+            }
+            // retry=true → try next client
+        }
     }
 
-    // Build clean response — only forward safe headers to the client
-    const responseHeaders = new Headers();
-    for (const key of PROXY_RESPONSE_HEADERS) {
-        const val = cdnResponse.headers.get(key);
-        if (val) responseHeaders.set(key, val);
-    }
-    // Ensure CORS is open (Flutter WebView / debug)
-    responseHeaders.set('Access-Control-Allow-Origin', '*');
-    responseHeaders.set('Cache-Control', 'no-store'); // client should not cache raw proxy bytes
-
-    return new Response(cdnResponse.body, {
-        status: cdnResponse.status,
-        statusText: cdnResponse.statusText,
-        headers: responseHeaders,
-    });
+    // All clients failed or hard failure hit
+    const finalCode = lastErr?.code || 'ALL_CLIENTS_BLOCKED';
+    const isBotBlock = finalCode === 'PLAYABILITY_BOT_CHECK' ||
+        finalCode === 'INNERTUBE_403';
+    const err = new Error(lastErr?.message || 'All Innertube clients blocked');
+    err.code = isBotBlock ? 'ALL_CLIENTS_BLOCKED' : finalCode;
+    throw err;
 }
 
-/** Build headers for the outbound CDN fetch from the client's headers. */
-function buildProxyRequestHeaders(clientHeaders) {
-    const h = new Headers();
-    for (const key of PROXY_REQUEST_HEADERS) {
-        const val = clientHeaders.get(key);
-        if (val) h.set(key, val);
+// ---------------------------------------------------------------------------
+// Serving — redirect-first, proxy fallback
+// ---------------------------------------------------------------------------
+async function serveStream(streamUrl, request, videoId) {
+    // Redirect-first: client hits CDN directly with its own headers.
+    // This avoids Worker bandwidth and bypasses CDN 403s caused by
+    // server-side proxying from a known datacenter IP range.
+    console.log(`[WORKER REDIRECT MODE] ${videoId} -> ${streamUrl.substring(0, 80)}...`);
+    return Response.redirect(streamUrl, 302);
+}
+
+/** Proxy fallback — used only if the caller explicitly requests it via ?proxy=1. */
+async function proxyStream(streamUrl, clientRequest) {
+    console.log(`[WORKER PROXY MODE] ${streamUrl.substring(0, 80)}...`);
+
+    const reqHeaders = new Headers();
+    for (const k of PROXY_REQ_HEADERS) {
+        const v = clientRequest.headers.get(k);
+        if (v) reqHeaders.set(k, v);
     }
-    // Required by YouTube CDN to serve progressive audio
-    h.set(
-        'User-Agent',
+    reqHeaders.set('User-Agent',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
         '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     );
-    h.set('Referer', 'https://www.youtube.com/');
-    h.set('Origin', 'https://www.youtube.com');
-    return h;
+    reqHeaders.set('Referer', 'https://www.youtube.com/');
+    reqHeaders.set('Origin', 'https://www.youtube.com');
+
+    const cdnRes = await fetch(new Request(streamUrl, { method: 'GET', headers: reqHeaders }));
+    console.log(`[WORKER CDN STATUS] ${cdnRes.status}`);
+
+    if (!cdnRes.ok && cdnRes.status !== 206) {
+        const err = new Error(`CDN ${cdnRes.status}`);
+        err.code = 'STREAM_PROXY_FAILED';
+        throw err;
+    }
+
+    const respHeaders = new Headers();
+    for (const k of PROXY_RESP_HEADERS) {
+        const v = cdnRes.headers.get(k);
+        if (v) respHeaders.set(k, v);
+    }
+    respHeaders.set('Access-Control-Allow-Origin', '*');
+    respHeaders.set('Cache-Control', 'no-store');
+
+    return new Response(cdnRes.body, {
+        status: cdnRes.status,
+        statusText: cdnRes.statusText,
+        headers: respHeaders,
+    });
 }
 
 // ---------------------------------------------------------------------------
 // CF Cache helpers
 // ---------------------------------------------------------------------------
-
-/** Build a canonical cache key URL for a videoId. */
 function cacheKey(videoId) {
-    return `https://stream.paaxmusic.app/_cache/${videoId}`;
+    return `https://stream.paaxmusic.app/_cache/v3/${videoId}`;
 }
 
-/** Read cached stream URL. Returns the URL string or null. */
 async function cacheRead(videoId) {
-    const cache = caches.default;
-    const response = await cache.match(cacheKey(videoId));
-    if (!response) return null;
-    const data = await response.json();
-    return data || null; // { url, sourceType, mimeType }
+    const res = await caches.default.match(cacheKey(videoId));
+    if (!res) return null;
+    try { return await res.json(); } catch (_) { return null; }
 }
 
-/** Write resolved stream metadata to CF Cache. */
 async function cacheWrite(videoId, data) {
-    const cache = caches.default;
-    const response = new Response(JSON.stringify(data), {
+    const res = new Response(JSON.stringify(data), {
         headers: {
             'Content-Type': 'application/json',
             'Cache-Control': `public, max-age=${CACHE_TTL_SECONDS}`,
         },
     });
-    await cache.put(cacheKey(videoId), response);
+    await caches.default.put(cacheKey(videoId), res);
+}
+
+// ---------------------------------------------------------------------------
+// Error helpers
+// ---------------------------------------------------------------------------
+const ERROR_HTTP = {
+    ALL_CLIENTS_BLOCKED: 503,
+    INNERTUBE_403: 503,
+    PLAYABILITY_BOT_CHECK: 503,
+    PLAYABILITY_FAILED: 404,
+    NO_STREAMING_DATA: 502,
+    NO_AUDIO_FORMAT: 502,
+    STREAM_REDIRECT_FAILED: 502,
+    STREAM_PROXY_FAILED: 502,
+};
+const ERROR_MSG = {
+    ALL_CLIENTS_BLOCKED: 'Stream temporarily unavailable — try again shortly',
+    INNERTUBE_403: 'Stream service rate-limited — try again',
+    PLAYABILITY_BOT_CHECK: 'Stream temporarily unavailable — try again shortly',
+    PLAYABILITY_FAILED: 'This track is no longer available',
+    NO_STREAMING_DATA: 'Playback is not available right now',
+    NO_AUDIO_FORMAT: 'No compatible audio stream found for this track',
+    STREAM_REDIRECT_FAILED: 'Stream redirect failed — try again',
+    STREAM_PROXY_FAILED: 'Stream proxy failed — try again',
+};
+
+function jsonError(code, extra) {
+    const status = ERROR_HTTP[code] || 502;
+    const message = ERROR_MSG[code] || 'Playback is not available right now';
+    return new Response(JSON.stringify({ error: message, code, ...extra }), {
+        status,
+        headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+        },
+    });
 }
 
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
-
 async function handleRequest(request) {
     const url = new URL(request.url);
-    const path = url.pathname;        // e.g. "/dQw4w9WgXcQ"
+    const path = url.pathname;
+    const useProxy = url.searchParams.get('proxy') === '1'; // debug override
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
@@ -358,103 +394,63 @@ async function handleRequest(request) {
         });
     }
 
-    // Extract videoId from path (strip leading /)
+    // Extract and validate videoId
     const videoId = path.slice(1).split('/')[0].trim();
     if (!videoId) {
-        return jsonError(400, 'MISSING_VIDEO_ID', 'Missing videoId in path — use /{videoId}');
+        return jsonError('MISSING_VIDEO_ID');
     }
-
-    // Validate: YouTube videoIds are 11 chars, alphanumeric + - _
     if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-        return jsonError(400, 'INVALID_VIDEO_ID', 'Invalid videoId format');
+        return jsonError('INVALID_VIDEO_ID');
     }
 
     // --- 1. CF Cache lookup --------------------------------------------------
     const cached = await cacheRead(videoId);
     if (cached?.url) {
-        console.log(`[WORKER CACHE HIT] ${videoId} → ${cached.sourceType}`);
-        // Redirect directly to CDN — avoids proxy bandwidth cost
+        console.log(`[WORKER CACHE HIT] ${videoId} sourceType=${cached.sourceType}`);
         return Response.redirect(cached.url, 302);
     }
     console.log(`[WORKER CACHE MISS] ${videoId}`);
 
-    // --- 2. Fresh resolution via Innertube ----------------------------------
-    console.log(`[WORKER RESOLVE] Starting Innertube resolution for ${videoId}`);
+    // --- 2. Resolve via Innertube client waterfall ---------------------------
+    console.log(`[WORKER RESOLVE] Starting multi-client resolution for ${videoId}`);
     let resolved;
     try {
-        const playerResponse = await fetchPlayerResponse(videoId);
-        resolved = selectBestFormat(playerResponse);
+        resolved = await resolveStream(videoId);
     } catch (err) {
-        const code = err?.code || 'RESOLVE_FAILED';
-        const msg = err?.message || String(err);
-        console.error(`[WORKER ERROR] resolve failed for ${videoId}: code=${code} msg=${msg}`);
-
-        // Map typed codes to appropriate HTTP status and user messages
-        const HTTP_STATUS = {
-            INNERTUBE_HTTP_403: 503,
-            INNERTUBE_HTTP_404: 404,
-            INNERTUBE_HTTP_ERROR: 502,
-            PLAYABILITY_FAILED: 404,
-            NO_STREAMING_DATA: 502,
-            NO_AUDIO_FORMAT: 502,
-        };
-        const USER_MESSAGE = {
-            INNERTUBE_HTTP_403: 'Stream service temporarily unavailable — try again',
-            INNERTUBE_HTTP_404: 'This track is no longer available',
-            INNERTUBE_HTTP_ERROR: 'Playback is not available right now',
-            PLAYABILITY_FAILED: 'This track is no longer available',
-            NO_STREAMING_DATA: 'Playback is not available right now',
-            NO_AUDIO_FORMAT: 'No compatible audio stream found for this track',
-        };
-        return jsonError(
-            HTTP_STATUS[code] || 502,
-            code,
-            USER_MESSAGE[code] || 'Playback is not available right now'
-        );
+        const code = err?.code || 'ALL_CLIENTS_BLOCKED';
+        console.error(`[WORKER FINAL ERROR] ${videoId}: code=${code} msg=${err.message}`);
+        return jsonError(code);
     }
 
-    // --- 3. Prime CF cache (fire-and-forget) --------------------------------
-    // We don't await this — let it race in the background.
+    // --- 3. Prime CF cache (best-effort, background) -------------------------
     const cacheWritePromise = cacheWrite(videoId, {
         url: resolved.url,
         sourceType: resolved.sourceType,
         mimeType: resolved.mimeType,
     });
 
-    // --- 4. Proxy stream to client ------------------------------------------
-    let proxyResponse;
+    // --- 4. Serve the stream -------------------------------------------------
+    let response;
     try {
-        proxyResponse = await proxyStream(resolved.url, request);
+        if (useProxy) {
+            response = await proxyStream(resolved.url, request);
+        } else {
+            response = await serveStream(resolved.url, request, videoId);
+        }
     } catch (err) {
-        const msg = err?.message || String(err);
-        console.error(`[WORKER ERROR] proxy failed for ${videoId}: ${msg}`);
-        return jsonError(502, 'PROXY_FAILED', 'Stream proxy failed — try again');
+        const code = err?.code || 'STREAM_REDIRECT_FAILED';
+        console.error(`[WORKER FINAL ERROR] ${videoId} proxy/redirect: code=${code}`);
+        await cacheWritePromise;
+        return jsonError(code);
     }
 
-    // Ensure cache write is flushed before the handler returns
     await cacheWritePromise;
-
-    return proxyResponse;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function jsonError(status, code, message) {
-    return new Response(JSON.stringify({ error: message, code }), {
-        status,
-        headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-        },
-    });
+    return response;
 }
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
-
 export default {
     async fetch(request, env, ctx) {
         try {
@@ -462,7 +458,10 @@ export default {
         } catch (err) {
             const msg = err?.message || String(err);
             console.error(`[WORKER ERROR] Unhandled: ${msg}`);
-            return jsonError(500, 'INTERNAL_ERROR', 'Internal server error');
+            return new Response(
+                JSON.stringify({ error: 'Internal server error', code: 'INTERNAL_ERROR' }),
+                { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
+            );
         }
     },
 };
