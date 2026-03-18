@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'stream_cache.dart';
 
 // ---------------------------------------------------------------------------
@@ -34,100 +33,96 @@ class ResolvedStream {
 
 /// Resolves a playable stream URL for a given YouTube video ID.
 ///
-/// Resolution strategy (V1):
-///   1. Check [StreamCache] — if a non-expired entry exists, return it as-is.
-///      The Worker URL is stable; only the underlying signed CDN URL expires.
-///      Since the Worker handles re-resolution transparently, the Worker URL
-///      itself never "expires" from the app's perspective.
-///   2. Verify the Worker is reachable via a low-cost HEAD request.
-///      If HEAD returns 200/206/303 → URL is valid, write to cache.
-///   3. On any error: return null — callers decide the fallback.
+/// ── V1 strategy ─────────────────────────────────────────────────────────────
+///   The Worker URL (stream.paaxmusic.app/{videoId}) is always deterministic
+///   and never needs a probe. The Worker handles Innertube resolution,
+///   CDN proxy, and CF caching transparently.
 ///
-/// Why HEAD and not GET?
-///   A HEAD probe is < 1 KB on the wire and confirms the Worker can resolve
-///   this videoId without streaming the full audio body to check availability.
+///   DO NOT HEAD-probe the Worker before use. Reasoning:
+///   1. The Worker is a proxy — a HEAD forces a full Innertube waterfall +
+///      CDN fetch just to answer a status code. This easily hits 8–12s,
+///      causing the resolver to time out and return null.
+///   2. The actual availability check is done naturally by ExoPlayer when it
+///      calls setAudioSource → play(). If the Worker returns 4xx/5xx,
+///      ExoPlayer throws PlayerException, which the engine catches to
+///      invalidate the cache and surface a user-friendly error.
+///   3. The Worker URL itself never "expires" — only the underlying signed CDN
+///      URL expires, but the Worker re-resolves that transparently.
+///
+///   Resolution order:
+///     1. StreamCache hit → instant return, no network call.
+///     2. Cache miss      → construct Worker URL, write to cache, return.
+///     ExoPlayer then makes the first GET when play() is called.
+// ────────────────────────────────────────────────────────────────────────────
 class MediaResolver {
   MediaResolver({StreamCache? cache}) : _cache = cache ?? StreamCache.instance;
 
   final StreamCache _cache;
 
   static const String _workerBase = 'https://stream.paaxmusic.app';
-  static const Duration _probeTimeout = Duration(seconds: 8);
 
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Returns a [ResolvedStream] for [videoId], or null on failure.
-  Future<ResolvedStream?> resolve(String videoId) async {
+  /// Returns a [ResolvedStream] for [videoId].
+  ///
+  /// Always succeeds — the Worker URL is deterministic. If the Worker itself
+  /// cannot serve the track, ExoPlayer will propagate a [PlayerException]
+  /// and the engine will invalidate the cache entry.
+  Future<ResolvedStream> resolve(String videoId) async {
     assert(videoId.isNotEmpty);
 
-    // --- 1. Cache hit ---------------------------------------------------------
+    // --- 1. Cache hit: instant, no network ──────────────────────────────────
+    debugPrint('[MEDIA CACHE READ] $videoId');
     final cached = await _cache.get(videoId);
     if (cached != null) {
       debugPrint('[MEDIA CACHE HIT] $videoId → ${cached.sourceType}');
       return cached;
     }
-    debugPrint('[MEDIA CACHE MISS] $videoId — resolving via Worker');
+    debugPrint('[MEDIA CACHE MISS] $videoId');
 
-    // --- 2. Resolve via Worker ------------------------------------------------
-    final workerUrl = Uri.parse('$_workerBase/$videoId');
-    debugPrint('[MEDIA RESOLVE] $videoId — calling Worker: $workerUrl');
+    // --- 2. Construct Worker URL — no probe needed ───────────────────────────
+    debugPrint('[MEDIA RESOLVE START] $videoId');
+    final workerUrl = '$_workerBase/$videoId';
+    final resolved = ResolvedStream(
+      url:        workerUrl,
+      sourceType: 'workerProxy',
+      resolvedAt: DateTime.now(),
+    );
 
-    try {
-      // HEAD probe: confirms the Worker can resolve this videoId.
-      // The Worker's Innertube waterfall runs, and if it succeeds the HEAD
-      // would return 200. If the track is unavailable, we get 404/503.
-      final probeResp = await http.head(workerUrl).timeout(_probeTimeout);
-      final status = probeResp.statusCode;
+    debugPrint('[MEDIA RESOLVE RESULT] $videoId → $workerUrl');
+    debugPrint('[MEDIA FORMAT PICK] $videoId → workerProxy (ExoPlayer streams bytes from Worker)');
 
-      debugPrint('[MEDIA RESOLVE] $videoId — Worker probe status=$status');
+    // Write to cache before returning so repeat plays are instant
+    debugPrint('[MEDIA CACHE WRITE] $videoId');
+    await _cache.put(videoId, resolved);
 
-      if (status >= 200 && status < 400) {
-        // Worker confirmed playable — use the Worker URL directly as the stream.
-        // just_audio will GET this URL; the Worker will stream audio bytes.
-        final resolved = ResolvedStream(
-          url: workerUrl.toString(),
-          sourceType: 'workerProxy',
-          resolvedAt: DateTime.now(),
-        );
-        debugPrint('[MEDIA FORMAT PICK] $videoId → workerProxy ${resolved.url}');
-        await _cache.put(videoId, resolved);
-        return resolved;
-      }
-
-      debugPrint('[MEDIA ERROR] $videoId — Worker probe rejected: $status');
-      return null;
-    } catch (e) {
-      debugPrint('[MEDIA ERROR] $videoId — resolve failed: $e');
-      return null;
-    }
+    return resolved;
   }
 
-  /// Resolve without cache check — always hits the Worker.
-  /// Used by [PrefetchManager] to warm the cache for upcoming tracks.
-  Future<ResolvedStream?> resolveForPrefetch(String videoId) async {
+  /// Pre-warm the cache for an upcoming track (used by PrefetchManager).
+  ///
+  /// Same logic as [resolve] — just constructs the URL and writes to cache.
+  /// The actual Worker call happens when ExoPlayer plays the track.
+  Future<ResolvedStream> resolveForPrefetch(String videoId) async {
     assert(videoId.isNotEmpty);
-    debugPrint('[MEDIA PREFETCH] Resolving $videoId in background');
 
-    final workerUrl = Uri.parse('$_workerBase/$videoId');
-    try {
-      final probeResp = await http
-          .head(workerUrl)
-          .timeout(const Duration(seconds: 12));
-      if (probeResp.statusCode >= 200 && probeResp.statusCode < 400) {
-        final resolved = ResolvedStream(
-          url: workerUrl.toString(),
-          sourceType: 'workerProxy',
-          resolvedAt: DateTime.now(),
-        );
-        await _cache.put(videoId, resolved);
-        debugPrint('[MEDIA PREFETCH] $videoId — cached successfully');
-        return resolved;
-      }
-    } catch (e) {
-      debugPrint('[MEDIA PREFETCH] $videoId — failed: $e');
+    // Check cache first — no need to prefetch if already warm
+    final cached = await _cache.get(videoId);
+    if (cached != null) {
+      debugPrint('[MEDIA PREFETCH] $videoId already cached — skip');
+      return cached;
     }
-    return null;
+
+    debugPrint('[MEDIA PREFETCH] $videoId — warming cache with Worker URL');
+    final resolved = ResolvedStream(
+      url:        '$_workerBase/$videoId',
+      sourceType: 'workerProxy',
+      resolvedAt: DateTime.now(),
+    );
+    await _cache.put(videoId, resolved);
+    debugPrint('[MEDIA PREFETCH] $videoId — cached successfully');
+    return resolved;
   }
 }
