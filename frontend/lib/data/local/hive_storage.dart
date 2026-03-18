@@ -6,14 +6,16 @@ import '../../domain/entities/user_profile.dart';
 import '../../domain/entities/artist.dart'; 
 
 class HiveStorage {
-  static const String likedTracksBox = 'liked_tracks';
-  static const String playlistsBox = 'playlists';
-  static const String savedAlbumsBox = 'saved_albums';
-  static const String userBox = 'user_profile';
-  static const String settingsBox = 'settings';
-  static const String recentSearchesBox = 'recent_searches';
-  static const String followedArtistsBox = 'followed_artists';
-  static const String recentlyPlayedBox = 'recently_played';
+  static const String likedTracksBox      = 'liked_tracks';
+  static const String playlistsBox         = 'playlists';
+  static const String savedAlbumsBox       = 'saved_albums';
+  static const String userBox              = 'user_profile';
+  static const String settingsBox          = 'settings';
+  static const String recentSearchesBox    = 'recent_searches';
+  static const String followedArtistsBox   = 'followed_artists';
+  static const String recentlyPlayedBox    = 'recently_played';
+  /// Persisted stream URL cache used by StreamCache / MediaResolver.
+  static const String streamCandidatesBox  = 'stream_candidates';
 
   static Future<void> init() async {
     await Hive.initFlutter();
@@ -33,10 +35,12 @@ class HiveStorage {
     await Hive.openBox<Playlist>(playlistsBox);
     await Hive.openBox<SavedAlbum>(savedAlbumsBox);
     await Hive.openBox<UserProfile>(userBox);
-    await Hive.openBox<Artist>(followedArtistsBox); 
-    await Hive.openBox(settingsBox); 
+    await Hive.openBox<Artist>(followedArtistsBox);
+    await Hive.openBox(settingsBox);
     await Hive.openBox<String>(recentSearchesBox);
     await Hive.openBox<Track>(recentlyPlayedBox);
+    // Stream URL cache — stores resolved Worker URLs for fast repeat plays
+    await Hive.openBox(streamCandidatesBox);
   }
   
   // ... (existing code)
