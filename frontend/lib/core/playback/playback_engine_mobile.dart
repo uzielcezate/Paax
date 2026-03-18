@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'media_resolver.dart';
-import 'stream_cache.dart';
 import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
@@ -14,32 +13,22 @@ import 'playback_engine.dart';
 //
 // Architecture:
 //   load(videoId)
-//     → StreamCache.get()         ← [MEDIA CACHE HIT] / [MEDIA CACHE MISS]
-//     → MediaResolver.resolve()   ← [MEDIA RESOLVE]
-//     → AudioSource.uri(workerUrl)← just_audio fetches bytes from Worker
-//     → _player.play()            ← [MEDIA PLAY]
+//     → MediaResolver.resolve()            ← calls Worker JSON API (or cache)
+//     → AudioSource.uri(directCdnUrl,
+//            headers: {Referer, Origin})   ← ExoPlayer fetches bytes directly
+//     → _player.play()                     ← [MEDIA PLAY]
 //
-// The Worker URL (stream.paaxmusic.app/{videoId}) never expires from the
-// app's perspective. The Worker handles Innertube re-resolution and CDN
-// proxy transparently. No headers are needed here — the Worker returns
-// proper Content-Type, Accept-Ranges, and CORS headers.
-//
-// ── old paths removed ───────────────────────────────────────────────────────
-//   • _tryWorkerResolve (inline HTTP) → replaced by MediaResolver
-//   • youtube_explode_dart fallback   → commented-out block gone
-//   • _kYouTubeHeaders                → not needed for Worker URL
-//   • prefetchNext Railway call       → replaced by PrefetchManager
+// On PlayerException (e.g. expired CDN URL):
+//   → resolver.invalidate(videoId)         ← clears StreamCache
+//   → resolver.resolve(videoId)            ← fresh Worker call → new CDN URL
+//   → AudioSource.uri(newUrl) + play()     ← retry once
 // ────────────────────────────────────────────────────────────────────────────
 
 class PlaybackEngineImpl implements PlaybackEngine {
-  PlaybackEngineImpl({
-    MediaResolver? resolver,
-    StreamCache?   cache,
-  })  : _resolver = resolver ?? MediaResolver(),
-        _cache    = cache    ?? StreamCache.instance;
+  PlaybackEngineImpl({MediaResolver? resolver})
+      : _resolver = resolver ?? MediaResolver();
 
   final MediaResolver _resolver;
-  final StreamCache   _cache;
   final _player       = AudioPlayer();
   final _completionController = StreamController<void>.broadcast();
 
@@ -107,80 +96,99 @@ class PlaybackEngineImpl implements PlaybackEngine {
     // Step 1: Stop previous playback immediately
     debugPrint('[PLAYER STOP] >>> videoId=$videoId');
     await _player.stop();
-    if (_loadId != myId) {
-      debugPrint('[PLAYER STOP] Superseded — bailing ($videoId)');
-      return;
-    }
+    if (_loadId != myId) return;
 
     // Publish resolving state to debug panel
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(videoId);
     }
 
-    // Step 2: Resolve stream URL (cache → Worker URL, no network probe)
+    // Step 2: Resolve — check cache then call Worker for direct CDN URL
     debugPrint('[MEDIA RESOLVE START] $videoId');
-    late ResolvedStream resolved;
+    ResolvedStream resolved;
     try {
       resolved = await _resolver.resolve(videoId);
     } catch (e) {
       debugPrint('[MEDIA ERROR] $videoId — resolve threw: $e');
-      throw const _MediaEngineException('Stream temporarily unavailable. Please try again.');
+      throw _MediaEngineException(e.toString());
     }
     if (_loadId != myId) {
-      debugPrint('[MEDIA RESOLVE RESULT] Superseded during resolve — bailing ($videoId)');
+      debugPrint('[MEDIA RESOLVE RESULT DIRECT] Superseded — bailing ($videoId)');
       return;
     }
-    debugPrint('[MEDIA RESOLVE RESULT] $videoId → ${resolved.sourceType} url=${resolved.url}');
-    debugPrint('[MEDIA FORMAT PICK] $videoId → ${resolved.sourceType}');
+    debugPrint('[MEDIA RESOLVE RESULT DIRECT] $videoId → ${resolved.sourceType} url=${resolved.url.substring(0, resolved.url.length.clamp(0, 70))}…');
+    debugPrint('[MEDIA FORMAT PICK] $videoId → ${resolved.sourceType} mime=${resolved.mimeType}');
 
-    // Step 3: Build AudioSource — no extra headers needed.
-    // The Worker URL returns proper Content-Type + CORS + Accept-Ranges headers.
-    final uri    = Uri.parse(resolved.url);
-    final source = AudioSource.uri(uri);
+    // Step 3: Set source + play (with re-resolve on failure)
+    await _loadAndPlay(videoId, resolved, myId, isRetry: false);
+  }
+
+  /// Inner helper: setAudioSource → seek → play.
+  /// On PlayerException, re-resolves once via [MediaResolver] and retries.
+  Future<void> _loadAndPlay(
+    String videoId,
+    ResolvedStream resolved,
+    int myId, {
+    required bool isRetry,
+  }) async {
+    // Direct CDN URL — googlevideo.com
+    // YouTube headers increase CDN acceptance rate.
+    final uri = Uri.parse(resolved.url);
+    final source = AudioSource.uri(
+      uri,
+      headers: const {
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
+        'Referer':  'https://www.youtube.com/',
+        'Origin':   'https://www.youtube.com',
+      },
+    );
 
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
-        videoId:        videoId,
-        urlHost:        uri.host,
-        urlScheme:      uri.scheme,
-        mimeType:       'audio/mp4',
-        container:      'mp4',
-        bitrateKbps:    0,
-        sizeKnown:      false,
-        totalBytes:     0,
-        headersAttached: false,
-        directStream:   true,
-        isManifest:     false,
-        succeeded:      false,
-        shortReason:    'Waiting for setAudioSource…',
+        videoId:         videoId,
+        urlHost:         uri.host,
+        urlScheme:       uri.scheme,
+        mimeType:        resolved.mimeType,
+        container:       resolved.mimeType.contains('mp4') ? 'mp4' : 'm4a',
+        bitrateKbps:     0,
+        sizeKnown:       false,
+        totalBytes:      0,
+        headersAttached: true,
+        directStream:    true,
+        isManifest:      false,
+        succeeded:       false,
+        shortReason:     'Waiting for setAudioSource…',
       );
     }
 
-    // Step 4: setAudioSource — preload:false defers buffering until play()
-    debugPrint('[PLAYER SET SOURCE] $videoId → ${uri.toString().substring(0, uri.toString().length.clamp(0, 70))}…');
+    debugPrint('[PLAYER SET SOURCE DIRECT] $videoId → ${uri.host}${uri.path.substring(0, uri.path.length.clamp(0, 40))}…');
     try {
       await _player.setAudioSource(source, preload: false);
       debugPrint('[PLAYER SET SOURCE] OK  state=${_player.processingState.name}  videoId=$videoId');
     } on PlayerException catch (e) {
       debugPrint('[PLAYER SET SOURCE ERROR] $videoId PlayerException: code=${e.code} msg=${e.message}');
-      // Invalidate cache so next play re-resolves a fresh URL
-      await _cache.invalidate(videoId);
+      if (!isRetry) {
+        // Invalidate stale cache entry and retry with a fresh resolve
+        await _resolver.invalidate(videoId);
+        debugPrint('[MEDIA RESOLVE RESULT DIRECT] $videoId — re-resolving after setAudioSource failure');
+        final fresh = await _resolver.resolve(videoId);
+        if (_loadId == myId) return _loadAndPlay(videoId, fresh, myId, isRetry: true);
+        return;
+      }
       throw _MediaEngineException(
         'Playback source rejected (${e.code}): ${e.message ?? 'unknown'}',
       );
     } catch (e) {
       debugPrint('[PLAYER SET SOURCE ERROR] $videoId: $e');
-      await _cache.invalidate(videoId);
+      await _resolver.invalidate(videoId);
       throw _MediaEngineException('Playback setup failed: $e');
     }
 
-    if (_loadId != myId) {
-      debugPrint('[PLAYER LOAD] Superseded after setAudioSource — bailing ($videoId)');
-      return;
-    }
+    if (_loadId != myId) return;
 
-    // Step 5: seek(0) + play — atomic, no guard between them
-    debugPrint('[MEDIA PLAY] $videoId — starting playback');
+    debugPrint('[PLAYER PLAY DIRECT] $videoId — starting playback');
     try {
       await _player.seek(Duration.zero);
       await _player.play();
@@ -203,19 +211,19 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
-          videoId:        videoId,
-          urlHost:        uri.host,
-          urlScheme:      uri.scheme,
-          mimeType:       'audio/mp4',
-          container:      'mp4',
-          bitrateKbps:    0,
-          sizeKnown:      false,
-          totalBytes:     0,
-          headersAttached: false,
-          directStream:   true,
-          isManifest:     false,
-          succeeded:      true,
-          shortReason:    'Worker proxy stream',
+          videoId:         videoId,
+          urlHost:         uri.host,
+          urlScheme:       uri.scheme,
+          mimeType:        resolved.mimeType,
+          container:       resolved.mimeType.contains('mp4') ? 'mp4' : 'm4a',
+          bitrateKbps:     0,
+          sizeKnown:       false,
+          totalBytes:      0,
+          headersAttached: true,
+          directStream:    true,
+          isManifest:      false,
+          succeeded:       true,
+          shortReason:     'Direct CDN stream (${resolved.sourceType})',
         );
       }
     } catch (e) {
