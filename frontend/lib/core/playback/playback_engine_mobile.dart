@@ -117,19 +117,21 @@ class PlaybackEngineImpl implements PlaybackEngine {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(videoId);
     }
 
-    // Step 2: Resolve stream URL (cache → Worker probe)
-    final resolved = await _resolver.resolve(videoId);
-    if (_loadId != myId) {
-      debugPrint('[MEDIA RESOLVE] Superseded during resolve — bailing ($videoId)');
-      return;
-    }
-
-    if (resolved == null) {
-      debugPrint('[MEDIA ERROR] $videoId — resolver returned null');
+    // Step 2: Resolve stream URL (cache → Worker URL, no network probe)
+    debugPrint('[MEDIA RESOLVE START] $videoId');
+    late ResolvedStream resolved;
+    try {
+      resolved = await _resolver.resolve(videoId);
+    } catch (e) {
+      debugPrint('[MEDIA ERROR] $videoId — resolve threw: $e');
       throw const _MediaEngineException('Stream temporarily unavailable. Please try again.');
     }
-
-    debugPrint('[MEDIA FORMAT PICK] $videoId → ${resolved.sourceType} url=${resolved.url}');
+    if (_loadId != myId) {
+      debugPrint('[MEDIA RESOLVE RESULT] Superseded during resolve — bailing ($videoId)');
+      return;
+    }
+    debugPrint('[MEDIA RESOLVE RESULT] $videoId → ${resolved.sourceType} url=${resolved.url}');
+    debugPrint('[MEDIA FORMAT PICK] $videoId → ${resolved.sourceType}');
 
     // Step 3: Build AudioSource — no extra headers needed.
     // The Worker URL returns proper Content-Type + CORS + Accept-Ranges headers.
@@ -155,19 +157,19 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
 
     // Step 4: setAudioSource — preload:false defers buffering until play()
-    debugPrint('[PLAYER LOAD] >>> setAudioSource videoId=$videoId');
+    debugPrint('[PLAYER SET SOURCE] $videoId → ${uri.toString().substring(0, uri.toString().length.clamp(0, 70))}…');
     try {
       await _player.setAudioSource(source, preload: false);
-      debugPrint('[PLAYER LOAD] <<< setAudioSource OK  state=${_player.processingState.name}');
+      debugPrint('[PLAYER SET SOURCE] OK  state=${_player.processingState.name}  videoId=$videoId');
     } on PlayerException catch (e) {
-      debugPrint('[MEDIA ERROR] $videoId setAudioSource PlayerException: ${e.code} ${e.message}');
+      debugPrint('[PLAYER SET SOURCE ERROR] $videoId PlayerException: code=${e.code} msg=${e.message}');
       // Invalidate cache so next play re-resolves a fresh URL
       await _cache.invalidate(videoId);
       throw _MediaEngineException(
         'Playback source rejected (${e.code}): ${e.message ?? 'unknown'}',
       );
     } catch (e) {
-      debugPrint('[MEDIA ERROR] $videoId setAudioSource failed: $e');
+      debugPrint('[PLAYER SET SOURCE ERROR] $videoId: $e');
       await _cache.invalidate(videoId);
       throw _MediaEngineException('Playback setup failed: $e');
     }
@@ -182,7 +184,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
     try {
       await _player.seek(Duration.zero);
       await _player.play();
-      debugPrint('[MEDIA PLAY] $videoId  playing=${_player.playing}  '
+      debugPrint('[MEDIA PLAY] $videoId OK  playing=${_player.playing}  '
           'state=${_player.processingState.name}');
 
       // 2-second stall detector
@@ -195,7 +197,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
           debugPrint('[MEDIA ERROR] $videoId — stall detected after 2s  '
               'playing=${_player.playing}  pos=$current');
         } else {
-          debugPrint('[PLAYER] $videoId — position advancing normally ✓');
+          debugPrint('[MEDIA PLAY] $videoId advancing normally ✓');
         }
       });
 
@@ -217,7 +219,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
         );
       }
     } catch (e) {
-      debugPrint('[MEDIA ERROR] $videoId play() failed: $e');
+      debugPrint('[PLAYER PLAY ERROR] $videoId: $e');
       throw _MediaEngineException('Playback failed to start: $e');
     }
   }

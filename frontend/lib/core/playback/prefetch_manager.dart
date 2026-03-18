@@ -46,9 +46,9 @@ class PrefetchManager {
     debugPrint('[MEDIA PREFETCH] Queuing $videoId');
     final future = _resolver
         .resolveForPrefetch(videoId)
+        .then((_) {})
         .catchError((Object e) {
           debugPrint('[MEDIA PREFETCH] $videoId error: $e');
-          return null;
         })
         .whenComplete(() => _inFlight.remove(videoId));
 
