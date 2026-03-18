@@ -12,6 +12,7 @@ import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/music_card.dart';
 import '../widgets/add_to_playlist_sheet.dart';
 import '../../core/playback/playback_diagnostics.dart';
+import '../widgets/playback_debug_overlay.dart';
 
 class TrackDetailScreen extends StatefulWidget {
   final Track track;
@@ -238,10 +239,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
             top: MediaQuery.of(context).padding.top + kToolbarHeight + 4,
             left: 12,
             right: 12,
-            child: ValueListenableBuilder<PlaybackDiagnostics?>(
-              valueListenable: PlaybackDiagnosticsNotifier,
-              builder: (context, diag, _) => _DebugDiagnosticsPanel(diag: diag),
-            ),
+            child: const PlaybackDebugOverlay(),
           ),
 
         ],
@@ -267,134 +265,6 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
         const SizedBox(height: 8),
         Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
       ],
-    );
-  }
-}
-
-// =============================================================================
-// TEMPORARY DEBUG-ONLY WIDGET — remove before shipping to production.
-// Positioned overlay at top of screen; always rendered in debug mode.
-// =============================================================================
-class _DebugDiagnosticsPanel extends StatelessWidget {
-  // Nullable: shows placeholder when no diagnostics have been published yet.
-  final PlaybackDiagnostics? diag;
-  const _DebugDiagnosticsPanel({required this.diag});
-
-  @override
-  Widget build(BuildContext context) {
-    // ── Null state: no track has been played yet ──────────────────────────
-    if (diag == null) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1A00).withOpacity(0.97),
-          border: Border.all(color: Colors.yellowAccent, width: 1.5),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: const Row(
-          children: [
-            Icon(Icons.bug_report, color: Colors.yellowAccent, size: 14),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'DEBUG PLAYBACK INFO — no diagnostics yet. Tap Play to begin.',
-                style: TextStyle(
-                  color: Colors.yellowAccent,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final d = diag!;
-    final isResolving = d.failedAt == null && !d.succeeded && d.urlHost == '…';
-    final statusColor = d.succeeded
-        ? Colors.greenAccent
-        : isResolving
-            ? Colors.amber
-            : Colors.redAccent;
-    final statusLabel = d.succeeded
-        ? '✓ PLAYING'
-        : isResolving
-            ? '⧗ Resolving…'
-            : '✗ FAILED at ${d.failedAt ?? 'resolve'}';
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xEE0A0A1A),
-        border: Border.all(color: statusColor, width: 1.5),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.bug_report, color: statusColor, size: 14),
-              const SizedBox(width: 6),
-              Text(
-                'DEBUG PLAYBACK INFO',
-                style: TextStyle(
-                  color: statusColor,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.8,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          _row('status', statusLabel, statusColor),
-          _row('videoId', d.videoId),
-          _row('host', d.urlHost),
-          _row('scheme', d.urlScheme),
-          _row('mime', d.mimeType),
-          _row('container', d.container),
-          _row('bitrate', d.bitrateKbps > 0 ? '${d.bitrateKbps} kbps' : '?'),
-          _row('size', d.sizeKnown
-              ? '${(d.totalBytes / 1024 / 1024).toStringAsFixed(2)} MB'
-              : '✗ unknown'),
-          _row('headers', d.headersAttached ? '✓ attached' : '✗ MISSING'),
-          _row('direct', d.directStream ? '✓ byte-pipe' : '✗ URL redirect'),
-          _row('manifest', d.isManifest ? '⚠ YES — bad!' : 'no'),
-          if (!d.succeeded && d.shortReason != null) ...[
-            const Divider(color: Colors.white24, height: 12),
-            _row('failed at', d.failedAt ?? 'resolve', Colors.redAccent),
-            _row('reason', d.shortReason!, Colors.orangeAccent),
-            if (d.exceptionMessage != null)
-              _row('exception', d.exceptionMessage!, Colors.white54),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _row(String label, String value, [Color valueColor = Colors.white70]) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1.5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 72,
-            child: Text(label,
-                style: const TextStyle(color: Colors.white38, fontSize: 10.5)),
-          ),
-          Expanded(
-            child: Text(value,
-                style: TextStyle(
-                    color: valueColor,
-                    fontSize: 10.5,
-                    fontFamily: 'monospace')),
-          ),
-        ],
-      ),
     );
   }
 }

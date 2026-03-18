@@ -76,13 +76,40 @@ class PlaybackEngineImpl implements PlaybackEngine {
       );
       if (state.processingState == ProcessingState.completed) {
         _completionController.add(null);
+        if (kDebugMode) {
+          final prev = PlaybackDiagnosticsNotifier.value;
+          if (prev != null) {
+            PlaybackDiagnosticsNotifier.value = prev.copyWith(
+              stage:          PlaybackStage.completed,
+              processingState: 'completed',
+              isPlaying:      false,
+              stageEnteredAt: DateTime.now(),
+            );
+          }
+        }
+      } else if (kDebugMode) {
+        final prev = PlaybackDiagnosticsNotifier.value;
+        if (prev != null) {
+          PlaybackDiagnosticsNotifier.value = prev.copyWith(
+            processingState: state.processingState.name,
+            isPlaying:       state.playing,
+          );
+        }
       }
     }));
 
     _subscriptions.add(_player.positionStream.listen((pos) {
       if (_isDisposed) return;
-      if (pos.inMilliseconds % 2000 < 250) {
-        debugPrint('[PLAYER POSITION] ${pos.inSeconds}s');
+      if (kDebugMode) {
+        final prev = PlaybackDiagnosticsNotifier.value;
+        if (prev != null && prev.stage == PlaybackStage.playing) {
+          PlaybackDiagnosticsNotifier.value = prev.copyWith(
+            position: pos,
+            buffered: _player.bufferedPosition,
+            duration: _player.duration ?? Duration.zero,
+            isPlaying: _player.playing,
+          );
+        }
       }
     }));
   }
@@ -100,7 +127,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
     // Publish resolving state to debug panel
     if (kDebugMode) {
-      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(videoId);
+      PlaybackDiagnosticsNotifier.value =
+          PlaybackDiagnostics.atStage(PlaybackStage.resolving, videoId: videoId);
     }
 
     // Step 2: Resolve — check cache then call Worker for direct CDN URL
@@ -118,6 +146,17 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
     debugPrint('[MEDIA RESOLVE RESULT DIRECT] $videoId → ${resolved.sourceType} url=${resolved.url.substring(0, resolved.url.length.clamp(0, 70))}…');
     debugPrint('[MEDIA FORMAT PICK] $videoId → ${resolved.sourceType} mime=${resolved.mimeType}');
+
+    if (kDebugMode) {
+      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+        PlaybackStage.resolved,
+        videoId:    videoId,
+        sourceType: resolved.sourceType,
+        mimeType:   resolved.mimeType,
+        expiresAt:  resolved.expiresAt,
+        urlHost:    Uri.parse(resolved.url).host,
+      );
+    }
 
     // Step 3: Set source + play (with re-resolve on failure)
     await _loadAndPlay(videoId, resolved, myId, isRetry: false);
@@ -146,20 +185,13 @@ class PlaybackEngineImpl implements PlaybackEngine {
     );
 
     if (kDebugMode) {
-      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
-        videoId:         videoId,
-        urlHost:         uri.host,
-        urlScheme:       uri.scheme,
-        mimeType:        resolved.mimeType,
-        container:       resolved.mimeType.contains('mp4') ? 'mp4' : 'm4a',
-        bitrateKbps:     0,
-        sizeKnown:       false,
-        totalBytes:      0,
-        headersAttached: true,
-        directStream:    true,
-        isManifest:      false,
-        succeeded:       false,
-        shortReason:     'Waiting for setAudioSource…',
+      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+        PlaybackStage.settingSource,
+        videoId:    videoId,
+        sourceType: resolved.sourceType,
+        mimeType:   resolved.mimeType,
+        expiresAt:  resolved.expiresAt,
+        urlHost:    uri.host,
       );
     }
 
@@ -167,8 +199,29 @@ class PlaybackEngineImpl implements PlaybackEngine {
     try {
       await _player.setAudioSource(source, preload: false);
       debugPrint('[PLAYER SET SOURCE] OK  state=${_player.processingState.name}  videoId=$videoId');
+      if (kDebugMode) {
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.sourceReady,
+          videoId:        videoId,
+          sourceType:     resolved.sourceType,
+          mimeType:       resolved.mimeType,
+          expiresAt:      resolved.expiresAt,
+          urlHost:        uri.host,
+          processingState: _player.processingState.name,
+        );
+      }
     } on PlayerException catch (e) {
       debugPrint('[PLAYER SET SOURCE ERROR] $videoId PlayerException: code=${e.code} msg=${e.message}');
+      if (kDebugMode) {
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.failedPlayer,
+          videoId:   videoId,
+          sourceType: resolved.sourceType,
+          mimeType:  resolved.mimeType,
+          urlHost:   uri.host,
+          lastError:  'setAudioSource failed: code=${e.code} msg=${e.message ?? 'unknown'}',
+        );
+      }
       if (!isRetry) {
         // Invalidate stale cache entry and retry with a fresh resolve
         await _resolver.invalidate(videoId);
@@ -191,43 +244,47 @@ class PlaybackEngineImpl implements PlaybackEngine {
     debugPrint('[PLAYER PLAY DIRECT] $videoId — starting playback');
     try {
       await _player.seek(Duration.zero);
+      if (kDebugMode) {
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.buffering,
+          videoId:        videoId,
+          sourceType:     resolved.sourceType,
+          mimeType:       resolved.mimeType,
+          expiresAt:      resolved.expiresAt,
+          urlHost:        uri.host,
+          processingState: _player.processingState.name,
+        );
+      }
       await _player.play();
       debugPrint('[MEDIA PLAY] $videoId OK  playing=${_player.playing}  '
           'state=${_player.processingState.name}');
 
-      // 2-second stall detector
-      final posAtStart   = _player.position;
-      final stallCheckId = myId;
-      Future.delayed(const Duration(seconds: 2), () {
-        if (_isDisposed || _loadId != stallCheckId) return;
-        final current = _player.position;
-        if (current <= posAtStart) {
-          debugPrint('[MEDIA ERROR] $videoId — stall detected after 2s  '
-              'playing=${_player.playing}  pos=$current');
-        } else {
-          debugPrint('[MEDIA PLAY] $videoId advancing normally ✓');
-        }
-      });
-
       if (kDebugMode) {
-        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics(
-          videoId:         videoId,
-          urlHost:         uri.host,
-          urlScheme:       uri.scheme,
-          mimeType:        resolved.mimeType,
-          container:       resolved.mimeType.contains('mp4') ? 'mp4' : 'm4a',
-          bitrateKbps:     0,
-          sizeKnown:       false,
-          totalBytes:      0,
-          headersAttached: true,
-          directStream:    true,
-          isManifest:      false,
-          succeeded:       true,
-          shortReason:     'Direct CDN stream (${resolved.sourceType})',
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.playing,
+          videoId:        videoId,
+          sourceType:     resolved.sourceType,
+          mimeType:       resolved.mimeType,
+          expiresAt:      resolved.expiresAt,
+          urlHost:        uri.host,
+          processingState: _player.processingState.name,
+          isPlaying:      _player.playing,
+          position:       _player.position,
+          duration:       _player.duration ?? Duration.zero,
         );
       }
     } catch (e) {
       debugPrint('[PLAYER PLAY ERROR] $videoId: $e');
+      if (kDebugMode) {
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.failedPlayer,
+          videoId:   videoId,
+          sourceType: resolved.sourceType,
+          mimeType:  resolved.mimeType,
+          urlHost:   uri.host,
+          lastError:  'play() failed: $e',
+        );
+      }
       throw _MediaEngineException('Playback failed to start: $e');
     }
   }

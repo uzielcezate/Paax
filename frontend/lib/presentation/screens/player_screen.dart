@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
@@ -8,6 +9,7 @@ import '../state/library_controller.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/app_image.dart';
 import '../widgets/smooth_audio_progress_bar.dart';
+import '../widgets/playback_debug_overlay.dart';
 import '../screens/album_detail_screen.dart';
 import '../screens/artist_detail_screen.dart';
 import '../screens/main_wrapper.dart';
@@ -235,7 +237,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         const SmoothAudioProgressBar(), 
                         
                         SizedBox(height: Responsive.verticalSpacing(context) * 2),
-                        
+
+                        // ── DEBUG OVERLAY (debug builds only) ───────────────
+                        if (kDebugMode) const PlaybackDebugOverlay(),
+                        if (kDebugMode) SizedBox(height: Responsive.verticalSpacing(context)),
+                        // ────────────────────────────────────────────────────
+
                         // Controls
                         const _PlayerControls(),
                         
