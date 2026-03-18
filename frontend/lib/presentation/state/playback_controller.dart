@@ -4,12 +4,14 @@ import 'dart:math';
 import '../../domain/entities/track.dart';
 import '../../core/playback/playback_engine.dart';
 import '../../core/playback/playback_factory.dart';
+import '../../core/playback/prefetch_manager.dart';
 
 /// Loop mode — kept local to avoid importing just_audio on web.
 enum LoopMode { off, all, one }
 
 class PlaybackController extends ChangeNotifier {
   late final PlaybackEngine _engine;
+  late final PrefetchManager _prefetchManager;
 
   List<Track> _queue = [];
   int _currentIndex = -1;
@@ -35,19 +37,19 @@ class PlaybackController extends ChangeNotifier {
   Duration get position => _position;
   Duration get duration => _duration;
   /// True only when the player has reported a real, positive duration.
-  /// UI should show '--:--' and disable seeking while this is false.
   bool get durationKnown => _duration > Duration.zero;
   bool get isShuffle => _isShuffle;
   LoopMode get loopMode => _loopMode;
   bool get isLoadingTrack => _isLoadingTrack;
   String? get errorMessage => _errorMessage;
 
-  // Notifiers for high-frequency updates (to avoid full rebuilds)
+  // Notifiers for high-frequency updates (avoid full rebuilds)
   final positionNotifier = ValueNotifier<Duration>(Duration.zero);
   final durationNotifier = ValueNotifier<Duration>(Duration.zero);
 
   PlaybackController() {
-    _engine = getPlaybackEngine();
+    _engine          = getPlaybackEngine();
+    _prefetchManager = PrefetchManager();
     _initEngine();
   }
 
@@ -55,9 +57,9 @@ class PlaybackController extends ChangeNotifier {
   bool _isScrubbing = false;
 
   Future<void> seek(Duration position) async {
-    // Optimistic update
     positionNotifier.value = position;
     _position = position;
+    debugPrint('[MEDIA SEEK] ${position.inSeconds}s');
     await _engine.seek(position);
   }
 
@@ -69,7 +71,7 @@ class PlaybackController extends ChangeNotifier {
     _isScrubbing = false;
   }
 
-  // Engine Listeners
+  // ── Engine listeners ────────────────────────────────────────────────────────
   Future<void> _initEngine() async {
     await _engine.initialize();
 
@@ -87,17 +89,11 @@ class PlaybackController extends ChangeNotifier {
 
     _engine.positionStream.listen((p) {
       if (_isScrubbing) return;
-
       final now = DateTime.now();
       if (now.difference(lastUpdate).inMilliseconds < 250) return;
-
-      if (p < lastEmittedPosition && (lastEmittedPosition - p).inSeconds < 2) {
-        return;
-      }
-
+      if (p < lastEmittedPosition && (lastEmittedPosition - p).inSeconds < 2) return;
       lastUpdate = now;
       lastEmittedPosition = p;
-
       positionNotifier.value = p;
       _position = p;
     });
@@ -149,6 +145,7 @@ class PlaybackController extends ChangeNotifier {
     }
 
     if (nextIndex >= 0) {
+      debugPrint('[MEDIA NEXT TRACK] index=$nextIndex id=${_queue[nextIndex].id}');
       _currentIndex = nextIndex;
       await _playCurrent();
     }
@@ -157,7 +154,6 @@ class PlaybackController extends ChangeNotifier {
   Future<void> playPrevious() async {
     if (_queue.isEmpty) return;
 
-    // If more than 3 seconds in, restart track
     if (_position.inSeconds > 3) {
       await seek(Duration.zero);
       return;
@@ -178,11 +174,10 @@ class PlaybackController extends ChangeNotifier {
     final track = _queue[_currentIndex];
 
     // Immediately notify so UI shows title/artwork/track info
-    _errorMessage = null;
-    _isLoadingTrack = true;
-    // Reset position/duration for new track
-    _position = Duration.zero;
-    _duration = Duration.zero;
+    _errorMessage    = null;
+    _isLoadingTrack  = true;
+    _position        = Duration.zero;
+    _duration        = Duration.zero;
     positionNotifier.value = Duration.zero;
     durationNotifier.value = Duration.zero;
     notifyListeners();
@@ -190,35 +185,34 @@ class PlaybackController extends ChangeNotifier {
     bool loadFailed = false;
     try {
       await _engine.load(track.id);
-      // Success — isPlaying will be set via playingStream listener.
-      // Kick off background prefetch for the next track so its stream URL
-      // is warm in the CDN cache when the user hits next.
-      final next = _nextTrackInQueue();
-      if (next != null) _engine.prefetchNext(next.id);
+      // Kick off background prefetch once current track is loading:
+      // pre-resolve the next 2 tracks so their stream URLs are cache-warm.
+      final upcoming = _upcomingTrackIds(count: 2);
+      if (upcoming.isNotEmpty) {
+        debugPrint('[MEDIA PREFETCH] Queuing ${upcoming.length} upcoming track(s): $upcoming');
+        _prefetchManager.prefetchList(upcoming);
+      }
     } catch (e) {
       loadFailed = true;
-      _errorMessage = 'Playback unavailable: ${e.toString().replaceFirst('Exception: ', '')}';
+      _errorMessage   = 'Playback unavailable: ${e.toString().replaceFirst('Exception: ', '')}';
       _isLoadingTrack = false;
-      _isPlaying = false;
+      _isPlaying      = false;
       notifyListeners();
     } finally {
-      // Only clear loading flag here if the catch block didn't already do it.
-      // This prevents a second notifyListeners() race when the error state
-      // has already been published above.
       if (!loadFailed) {
         _isLoadingTrack = false;
-        // Don't call notifyListeners here — playingStream/durationStream will do it
+        // Don't call notifyListeners — playingStream/durationStream will
       }
     }
   }
 
   Future<void> playQueue(List<Track> tracks, {int index = 0}) async {
     if (tracks.isEmpty) return;
+    // Cancel any in-flight prefetch for the old queue
+    _prefetchManager.cancelAll();
     _queue = List.from(tracks);
     _currentIndex = index;
-    if (_currentIndex < 0 || _currentIndex >= _queue.length) {
-      _currentIndex = 0;
-    }
+    if (_currentIndex < 0 || _currentIndex >= _queue.length) _currentIndex = 0;
     await _playCurrent();
   }
 
@@ -226,20 +220,20 @@ class PlaybackController extends ChangeNotifier {
     await playQueue([track]);
   }
 
-  /// Returns the next track that would play after the current one,
-  /// respecting shuffle and loop mode. Returns null if there is no next track.
-  Track? _nextTrackInQueue() {
-    if (_queue.isEmpty) return null;
-    if (_isShuffle) {
-      // In shuffle mode we can't predict the random pick, but we can warm up
-      // any track that isn't the current one as a best-effort hint.
-      // Skip prefetch in shuffle to avoid wasting bandwidth on the wrong track.
-      return null;
+  /// Returns the IDs of the next [count] tracks in queue order,
+  /// respecting loop. Skips shuffle (can't predict random picks).
+  List<String> _upcomingTrackIds({int count = 2}) {
+    if (_queue.isEmpty || _isShuffle) return [];
+    final ids = <String>[];
+    for (var i = 1; i <= count; i++) {
+      final idx = _currentIndex + i;
+      if (idx < _queue.length) {
+        ids.add(_queue[idx].id);
+      } else if (_loopMode == LoopMode.all && _queue.isNotEmpty) {
+        ids.add(_queue[idx % _queue.length].id);
+      }
     }
-    final nextIdx = _currentIndex + 1;
-    if (nextIdx < _queue.length) return _queue[nextIdx];
-    if (_loopMode == LoopMode.all && _queue.isNotEmpty) return _queue[0];
-    return null;
+    return ids;
   }
 
   void addToQueue(Track track) {
@@ -247,9 +241,7 @@ class PlaybackController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void startScrubbing() {
-    _isScrubbing = true;
-  }
+  void startScrubbing() => _isScrubbing = true;
 
   void toggleShuffle() {
     _isShuffle = !_isShuffle;
@@ -270,15 +262,13 @@ class PlaybackController extends ChangeNotifier {
   /// Clears a previously shown error so the UI can dismiss the snackbar.
   void clearError() {
     _errorMessage = null;
-    // No notifyListeners needed — caller handles after consuming
   }
 
-  Widget buildPlayerView(BuildContext context) {
-    return _engine.buildPlayerView(context);
-  }
+  Widget buildPlayerView(BuildContext context) => _engine.buildPlayerView(context);
 
   @override
   void dispose() {
+    _prefetchManager.cancelAll();
     _engine.dispose();
     super.dispose();
   }
