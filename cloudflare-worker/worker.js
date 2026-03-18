@@ -360,8 +360,6 @@ const ERROR_HTTP = {
     PLAYABILITY_FAILED: 404,
     NO_STREAMING_DATA: 502,
     NO_AUDIO_FORMAT: 502,
-    STREAM_REDIRECT_FAILED: 502,
-    STREAM_PROXY_FAILED: 502,
 };
 const ERROR_MSG = {
     ALL_CLIENTS_BLOCKED: 'Stream temporarily unavailable — try again shortly',
@@ -370,8 +368,6 @@ const ERROR_MSG = {
     PLAYABILITY_FAILED: 'This track is no longer available',
     NO_STREAMING_DATA: 'Playback is not available right now',
     NO_AUDIO_FORMAT: 'No compatible audio stream found for this track',
-    STREAM_REDIRECT_FAILED: 'Stream redirect failed — try again',
-    STREAM_PROXY_FAILED: 'Stream proxy failed — try again',
 };
 
 function jsonError(code, extra) {
@@ -387,12 +383,30 @@ function jsonError(code, extra) {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the Unix expiry timestamp from a googlevideo.com CDN URL.
+ * The URL contains "expire=<unix_seconds>" as a query parameter.
+ * Returns 0 if the param is absent or unparseable.
+ */
+function extractExpiresAt(cdnUrl) {
+    try {
+        const u = new URL(cdnUrl);
+        const v = u.searchParams.get('expire');
+        return v ? parseInt(v, 10) : 0;
+    } catch (_) {
+        return 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 async function handleRequest(request) {
     const url = new URL(request.url);
     const path = url.pathname;
-    const useProxy = url.searchParams.get('proxy') === '1'; // debug override
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
@@ -401,44 +415,25 @@ async function handleRequest(request) {
             headers: {
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Headers': 'Accept, Range',
                 'Access-Control-Max-Age': '86400',
             },
         });
     }
 
-    // Extract and validate videoId
-    const videoId = path.slice(1).split('/')[0].trim();
-    if (!videoId) {
-        return jsonError('MISSING_VIDEO_ID');
-    }
-    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-        return jsonError('INVALID_VIDEO_ID');
-    }
+    // Extract and validate videoId from path  /{videoId}  or  /resolve/{videoId}
+    const segments = path.slice(1).split('/');
+    const videoId = (segments[segments.length - 1] || '').trim();
+    if (!videoId) return jsonError('MISSING_VIDEO_ID');
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return jsonError('INVALID_VIDEO_ID');
 
     // --- 1. CF Cache lookup --------------------------------------------------
     const cached = await cacheRead(videoId);
     if (cached?.url) {
-        console.log(`[WORKER CACHE URL HIT] ${videoId} sourceType=${cached.sourceType}`);
-        try {
-            return await serveStream(cached.url, request);
-        } catch (err) {
-            if (err?.code === 'CDN_403') {
-                // Signed URL has expired or been invalidated — discard and re-resolve
-                console.log(`[WORKER CACHE URL INVALIDATED] ${videoId} — cached URL returned 403`);
-                await cacheDelete(videoId);
-                // Fall through to fresh resolution below
-            } else {
-                // Non-403 proxy failure — surface immediately
-                const code = err?.code || 'STREAM_PROXY_FAILED';
-                console.error(`[WORKER FINAL ERROR] ${videoId} cached proxy failed: code=${code}`);
-                return jsonError(code);
-            }
-        }
-        console.log(`[WORKER RE-RESOLVE AFTER 403] ${videoId} — fetching fresh stream URL`);
-    } else {
-        console.log(`[WORKER CACHE MISS] ${videoId}`);
+        console.log(`[WORKER CACHE HIT] ${videoId} sourceType=${cached.sourceType}`);
+        return jsonResolveResponse(cached);
     }
+    console.log(`[WORKER CACHE MISS] ${videoId}`);
 
     // --- 2. Resolve via Innertube client waterfall ---------------------------
     console.log(`[WORKER RESOLVE] Starting multi-client resolution for ${videoId}`);
@@ -451,31 +446,43 @@ async function handleRequest(request) {
         return jsonError(code);
     }
 
-    // --- 3. Prime CF cache (best-effort, background) -------------------------
-    const cacheWritePromise = cacheWrite(videoId, {
+    // Extract expiry from the signed CDN URL (expire= param, Unix seconds)
+    const expiresAt = extractExpiresAt(resolved.url);
+    const payload = {
         url: resolved.url,
-        sourceType: resolved.sourceType,
         mimeType: resolved.mimeType,
+        sourceType: resolved.sourceType,
+        expiresAt,  // 0 if not determinable
+    };
+
+    // --- 3. Cache the resolved metadata for fast repeat requests ------------
+    // Use background write so response is not delayed.
+    await caches.default.put(
+        cacheKey(videoId),
+        new Response(JSON.stringify(payload), {
+            headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': `public, max-age=${CACHE_TTL_SECONDS}`,
+            },
+        })
+    );
+
+    console.log(`[WORKER RESOLVE RESULT] ${videoId} sourceType=${resolved.sourceType} expiresAt=${expiresAt}`);
+
+    // --- 4. Return JSON metadata (no byte proxying) -------------------------
+    return jsonResolveResponse(payload);
+}
+
+/** Build the standard JSON resolve response with CORS headers. */
+function jsonResolveResponse(data) {
+    return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store',  // flutter handles its own caching
+        },
     });
-
-    // --- 4. Serve the stream -------------------------------------------------
-    // If we got here via cache-invalidation, log the retry clearly.
-    const isCacheRetry = cached?.url != null;
-    if (isCacheRetry) {
-        console.log(`[WORKER RETRY CDN FETCH] ${videoId} — using fresh URL after 403 invalidation`);
-    }
-    let response;
-    try {
-        response = await serveStream(resolved.url, request);
-    } catch (err) {
-        const code = err?.code || 'STREAM_PROXY_FAILED';
-        console.error(`[WORKER FINAL ERROR] ${videoId} proxy: code=${code}`);
-        await cacheWritePromise;
-        return jsonError(code);
-    }
-
-    await cacheWritePromise;
-    return response;
 }
 
 // ---------------------------------------------------------------------------

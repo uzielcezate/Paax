@@ -8,17 +8,12 @@ import 'media_resolver.dart';
 
 /// Two-tier cache for resolved stream URLs.
 ///
-/// Tier 1 — in-memory [HashMap]: zero-latency lookup, lost on app restart.
+/// Tier 1 — in-memory HashMap: zero-latency lookup, lost on app restart.
 /// Tier 2 — Hive box `stream_candidates`: survives restarts, bounded to 50
 ///           entries, with TTL validation on read.
 ///
-/// TTL = 4 minutes (slightly under the Worker's 5-min CF cache TTL so we
-/// never serve a URL that the Worker would consider expired).
-///
-/// Note: The Worker URL itself (stream.paaxmusic.app/{id}) never expires —
-/// only the underlying signed CDN URL changes, and the Worker re-resolves
-/// that transparently. The TTL here prevents us from skipping the HEAD probe
-/// for tracks that the Worker might have evicted from its own CF cache.
+/// TTL = 4 minutes. Additionally, any entry whose CDN URL has passed its
+/// expiresAt timestamp is evicted proactively.
 class StreamCache {
   StreamCache._();
 
@@ -95,17 +90,21 @@ class StreamCache {
   // ---------------------------------------------------------------------------
 
   bool _isExpired(ResolvedStream r) =>
-      DateTime.now().difference(r.resolvedAt) > kTtl;
+      DateTime.now().difference(r.resolvedAt) > kTtl || r.isExpired;
 
   Map<String, dynamic> _serialize(ResolvedStream r) => {
-        'url':         r.url,
-        'sourceType':  r.sourceType,
-        'resolvedAt':  r.resolvedAt.toIso8601String(),
+        'url':        r.url,
+        'mimeType':   r.mimeType,
+        'sourceType': r.sourceType,
+        'resolvedAt': r.resolvedAt.toIso8601String(),
+        'expiresAt':  r.expiresAt,
       };
 
   ResolvedStream _deserialize(Map raw) => ResolvedStream(
         url:        raw['url']        as String,
+        mimeType:   (raw['mimeType']  as String?) ?? 'audio/mp4',
         sourceType: raw['sourceType'] as String,
         resolvedAt: DateTime.parse(raw['resolvedAt'] as String),
+        expiresAt:  (raw['expiresAt'] as int?)    ?? 0,
       );
 }
