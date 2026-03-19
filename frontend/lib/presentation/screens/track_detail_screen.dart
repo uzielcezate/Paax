@@ -11,7 +11,6 @@ import '../../domain/repositories/music_repository.dart';
 import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/music_card.dart';
 import '../widgets/add_to_playlist_sheet.dart';
-import '../../core/playback/playback_diagnostics.dart';
 import '../widgets/playback_debug_overlay.dart';
 
 class TrackDetailScreen extends StatefulWidget {
