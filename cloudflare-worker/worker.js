@@ -1,28 +1,21 @@
 /**
  * Paax Stream Worker — stream.paaxmusic.app
- * v4 — multi-client fallback + preferred-client hint + JSON resolve metadata
+ * v5 — diverse candidates + exclude-client parameter + precise error codes
  *
- * Resolution strategy:
- *   If ?client=X is passed, try that client first, then fall through waterfall.
- *   Otherwise, tries a prioritised list of Innertube clients in sequence.
- *   Stops at first client that returns a playable, non-bot-gated stream.
+ * Key changes vs v4:
+ *   - selectBestFormat() now returns ALL playable candidate URLs, not just winner
+ *   - ?exclude=ANDROID,IOS skips known-failed clients in the waterfall
+ *   - PLAYABILITY_FAILED is now retry=true unless track is truly dead
+ *     (removed / doesn't exist). Age-gate, members, region → try next client.
+ *   - JSON response includes candidates[] so Flutter can cycle locally
+ *     before making another Worker round-trip.
+ *   - Cache key bumped to v5.
  *
- * Format selection:
- *   PATH 1: audioOnly mp4/m4a (no sq= DASH) → highest bitrate (prefer itag 140)
- *   PATH 2: muxed mp4 progressive fallback   → lowest bitrate
- *
- * JSON response:
- *   { url, mimeType, sourceType, expiresAt, clientUsed, itag }
- *
- * Logging tags:
- *   [WORKER RESOLVE]        Cold resolution started
- *   [WORKER CLIENT TRY]     Trying a specific Innertube client
- *   [WORKER CLIENT SUCCESS] Client returned a playable stream
- *   [WORKER CLIENT FAIL]    Client failed (bot-check / 403 / no formats)
- *   [WORKER PLAYABILITY]    Playability status from Innertube
- *   [WORKER CACHE HIT]      URL served from CF cache
- *   [WORKER CACHE MISS]     No cache entry — resolving fresh
- *   [WORKER FINAL ERROR]    All clients failed — giving up
+ * JSON response shape:
+ *   {
+ *     url, mimeType, sourceType, expiresAt, clientUsed, itag,
+ *     candidates: [{ url, itag, mimeType, sourceType, bitrate }]
+ *   }
  */
 
 // ---------------------------------------------------------------------------
@@ -68,14 +61,25 @@ const INNERTUBE_CLIENTS = [
 ];
 
 const INNERTUBE_PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-const CACHE_TTL_SECONDS = 300;  // 5 min — CDN URLs expire in ~6h; we refresh early
+const CACHE_TTL_SECONDS = 300; // 5 min
 
+// Signals that indicate a bot/rate-limit gate → retry with next client
 const BOT_CHECK_SIGNALS = [
     'sign in to confirm',
     'confirm you',
     'not a bot',
     'unusual traffic',
     'please sign in',
+];
+
+// Signals that mean the track is truly dead → do NOT retry other clients
+const HARD_UNAVAILABLE_SIGNALS = [
+    'no longer available',
+    'has been removed',
+    'does not exist',
+    'been removed',
+    'not exist',
+    'unavailable in your country', // region-locked is hard-unavailable
 ];
 
 // ---------------------------------------------------------------------------
@@ -118,13 +122,13 @@ async function tryClient(client, videoId) {
         console.log(`[WORKER CLIENT FAIL] ${client.name} HTTP=${res.status}: ${snippet}`);
         const err = new Error(`HTTP ${res.status}`);
         err.code = code;
-        err.retry = true;
+        err.retry = true; // Always retry on HTTP errors — transient
         throw err;
     }
 
     const data = await res.json();
     const playStatus = data?.playabilityStatus?.status ?? 'MISSING';
-    const playReason = data?.playabilityStatus?.reason ?? '';
+    const playReason = (data?.playabilityStatus?.reason ?? '').toLowerCase();
     const hasSD = !!data?.streamingData;
     const adaptCount = (data?.streamingData?.adaptiveFormats ?? []).length;
     const fmtCount = (data?.streamingData?.formats ?? []).length;
@@ -136,17 +140,30 @@ async function tryClient(client, videoId) {
     );
 
     if (playStatus !== 'OK') {
-        const isBotCheck = BOT_CHECK_SIGNALS.some(s => playReason.toLowerCase().includes(s));
-        const err = new Error(playReason || playStatus);
-        err.code = isBotCheck ? 'PLAYABILITY_BOT_CHECK' : 'PLAYABILITY_FAILED';
-        err.retry = isBotCheck;
+        const isBotCheck = BOT_CHECK_SIGNALS.some(s => playReason.includes(s));
+        const isHardDead = HARD_UNAVAILABLE_SIGNALS.some(s => playReason.includes(s));
+
+        const err = new Error(data?.playabilityStatus?.reason || playStatus);
+        if (isBotCheck) {
+            err.code = 'PLAYABILITY_BOT_CHECK';
+            err.retry = true;
+        } else if (isHardDead) {
+            // Track is genuinely gone — no point trying other clients
+            err.code = 'PLAYABILITY_UNAVAILABLE';
+            err.retry = false;
+        } else {
+            // Members-only, age-gate, private, sign-in-required, etc.
+            // A different client may bypass these — always retry
+            err.code = 'PLAYABILITY_GATED';
+            err.retry = true;
+        }
         throw err;
     }
 
     if (!hasSD) {
         const err = new Error('No streamingData');
         err.code = 'NO_STREAMING_DATA';
-        err.retry = false;
+        err.retry = true; // Another client might return streamingData
         throw err;
     }
 
@@ -154,7 +171,7 @@ async function tryClient(client, videoId) {
 }
 
 // ---------------------------------------------------------------------------
-// Format selection
+// Format helpers
 // ---------------------------------------------------------------------------
 function isDashUrl(url) {
     try {
@@ -187,53 +204,95 @@ function isDirectMuxed(fmt) {
     return true;
 }
 
+/**
+ * Select the best format AND collect all other playable candidates.
+ * Returns { url, mimeType, sourceType, itag, clientUsed, candidates[] }
+ *
+ * candidates[] is sorted: audioOnly first (by descending bitrate), then muxed
+ * (by ascending bitrate). The first entry is the chosen primary URL.
+ */
 function selectBestFormat(playerResponse, clientName) {
     const adaptive = playerResponse.streamingData.adaptiveFormats || [];
     const muxed = playerResponse.streamingData.formats || [];
 
-    // PATH 1: audio-only mp4/m4a — prefer itag 140 (128kbps AAC), then highest bitrate
     const audioCandidates = adaptive.filter(isDirectAudio);
-    if (audioCandidates.length > 0) {
-        // Prefer itag=140 (known stable MP4 audio across all clients)
-        const preferred = audioCandidates.find(f => f.itag === 140);
-        const c = preferred || audioCandidates.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-        const mime = (c.mimeType || 'audio/mp4').split(';')[0].trim();
-        console.log(`[WORKER CLIENT SUCCESS] ${clientName} audioOnly itag=${c.itag} mime=${mime} bitrate=${c.bitrate}`);
-        return { url: c.url, sourceType: 'audioOnly', mimeType: mime, itag: c.itag, clientUsed: clientName };
-    }
-
-    // PATH 2: muxed mp4 — lowest bitrate (audio track is all we need)
     const muxedCandidates = muxed.filter(isDirectMuxed);
-    if (muxedCandidates.length > 0) {
-        muxedCandidates.sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0));
-        const c = muxedCandidates[0];
-        console.log(`[WORKER CLIENT SUCCESS] ${clientName} muxed-fallback itag=${c.itag} bitrate=${c.bitrate}`);
-        return { url: c.url, sourceType: 'muxed', mimeType: 'video/mp4', itag: c.itag, clientUsed: clientName };
+
+    if (audioCandidates.length === 0 && muxedCandidates.length === 0) {
+        const err = new Error(
+            `No direct format (${adaptive.length} adaptive, ${muxed.length} muxed — all DASH/incompatible)`
+        );
+        err.code = 'NO_AUDIO_FORMAT';
+        err.retry = true; // A different client might have non-DASH formats
+        throw err;
     }
 
-    const err = new Error(
-        `No direct format found (${adaptive.length} adaptive, ${muxed.length} muxed — all DASH or incompatible)`
+    // Sort audio candidates: prefer itag=140 (stable AAC MP4), then highest bitrate
+    audioCandidates.sort((a, b) => {
+        if (a.itag === 140 && b.itag !== 140) return -1;
+        if (b.itag === 140 && a.itag !== 140) return 1;
+        return (b.bitrate || 0) - (a.bitrate || 0);
+    });
+    muxedCandidates.sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0));
+
+    // All candidates: audioOnly first, then muxed
+    const allCandidates = [
+        ...audioCandidates.map(f => ({
+            url: f.url,
+            itag: f.itag,
+            mimeType: (f.mimeType || 'audio/mp4').split(';')[0].trim(),
+            sourceType: 'audioOnly',
+            bitrate: f.bitrate || 0,
+        })),
+        ...muxedCandidates.map(f => ({
+            url: f.url,
+            itag: f.itag,
+            mimeType: 'video/mp4',
+            sourceType: 'muxed',
+            bitrate: f.bitrate || 0,
+        })),
+    ];
+
+    const primary = allCandidates[0];
+    console.log(
+        `[WORKER CLIENT SUCCESS] ${clientName} chose itag=${primary.itag} ` +
+        `mime=${primary.mimeType} sourceType=${primary.sourceType} ` +
+        `bitrate=${primary.bitrate} totalCandidates=${allCandidates.length}`
     );
-    err.code = 'NO_AUDIO_FORMAT';
-    err.retry = false;
-    throw err;
+
+    return {
+        url: primary.url,
+        mimeType: primary.mimeType,
+        sourceType: primary.sourceType,
+        itag: primary.itag,
+        clientUsed: clientName,
+        candidates: allCandidates, // all available playable URLs
+    };
 }
 
 // ---------------------------------------------------------------------------
-// Client waterfall — optionally starts with a preferred client
+// Client waterfall — optional preferred client + exclude list
 // ---------------------------------------------------------------------------
-async function resolveStream(videoId, preferredClientName) {
+async function resolveStream(videoId, preferredClientName, excludeClients) {
     let lastErr = null;
 
-    // Build ordered client list: preferred first (if specified + found), then rest
-    let clientList = [...INNERTUBE_CLIENTS];
-    if (preferredClientName) {
+    // Build ordered client list
+    let clientList = INNERTUBE_CLIENTS.filter(c => !excludeClients.includes(c.name));
+
+    // Preferred client first
+    if (preferredClientName && !excludeClients.includes(preferredClientName)) {
         const idx = clientList.findIndex(c => c.name === preferredClientName);
         if (idx > 0) {
             const preferred = clientList.splice(idx, 1)[0];
             clientList = [preferred, ...clientList];
             console.log(`[WORKER RESOLVE] Preferred client: ${preferredClientName}`);
         }
+    }
+
+    if (clientList.length === 0) {
+        const err = new Error('All clients excluded by caller');
+        err.code = 'ALL_CLIENTS_EXCLUDED';
+        throw err;
     }
 
     for (const client of clientList) {
@@ -244,25 +303,23 @@ async function resolveStream(videoId, preferredClientName) {
         } catch (err) {
             lastErr = err;
             console.log(
-                `[WORKER CLIENT FAIL] ${client.name}: code=${err.code} retry=${err.retry} ` +
-                `msg=${err.message}`
+                `[WORKER CLIENT FAIL] ${client.name}: code=${err.code} retry=${err.retry} msg=${err.message}`
             );
-            if (!err.retry) break; // hard failure — no point trying other clients
+            if (!err.retry) break; // Hard failure — skip remaining clients
         }
     }
 
     const finalCode = lastErr?.code || 'ALL_CLIENTS_BLOCKED';
-    const isBotBlock = finalCode === 'PLAYABILITY_BOT_CHECK' || finalCode === 'INNERTUBE_403';
     const err = new Error(lastErr?.message || 'All Innertube clients blocked');
-    err.code = isBotBlock ? 'ALL_CLIENTS_BLOCKED' : finalCode;
+    err.code = finalCode;
     throw err;
 }
 
 // ---------------------------------------------------------------------------
-// CF Cache helpers  (key version bumped to v4 to invalidate old format)
+// CF Cache helpers — v5
 // ---------------------------------------------------------------------------
 function cacheKey(videoId) {
-    return `https://stream.paaxmusic.app/_cache/v4/${videoId}`;
+    return `https://stream.paaxmusic.app/_cache/v5/${videoId}`;
 }
 
 async function cacheRead(videoId) {
@@ -271,24 +328,16 @@ async function cacheRead(videoId) {
     try { return await res.json(); } catch (_) { return null; }
 }
 
-async function cacheWrite(videoId, data) {
-    const res = new Response(JSON.stringify(data), {
-        headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': `public, max-age=${CACHE_TTL_SECONDS}`,
-        },
-    });
-    await caches.default.put(cacheKey(videoId), res);
-}
-
 // ---------------------------------------------------------------------------
 // Error helpers
 // ---------------------------------------------------------------------------
 const ERROR_HTTP = {
     ALL_CLIENTS_BLOCKED: 503,
+    ALL_CLIENTS_EXCLUDED: 503,
     INNERTUBE_403: 503,
     PLAYABILITY_BOT_CHECK: 503,
-    PLAYABILITY_FAILED: 404,
+    PLAYABILITY_GATED: 503,
+    PLAYABILITY_UNAVAILABLE: 404,
     NO_STREAMING_DATA: 502,
     NO_AUDIO_FORMAT: 502,
     MISSING_VIDEO_ID: 400,
@@ -296,27 +345,26 @@ const ERROR_HTTP = {
 };
 const ERROR_MSG = {
     ALL_CLIENTS_BLOCKED: 'Stream temporarily unavailable — try again shortly',
+    ALL_CLIENTS_EXCLUDED: 'Stream temporarily unavailable — all clients exhausted',
     INNERTUBE_403: 'Stream service rate-limited — try again',
     PLAYABILITY_BOT_CHECK: 'Stream temporarily unavailable — try again shortly',
-    PLAYABILITY_FAILED: 'This track is no longer available',
+    PLAYABILITY_GATED: 'Stream temporarily unavailable — try again shortly',
+    PLAYABILITY_UNAVAILABLE: 'This track is no longer available',
     NO_STREAMING_DATA: 'Playback is not available right now',
     NO_AUDIO_FORMAT: 'No compatible audio stream found for this track',
     MISSING_VIDEO_ID: 'Missing video ID',
     INVALID_VIDEO_ID: 'Invalid video ID',
 };
 
-function jsonError(code, extra) {
+function jsonError(code, message) {
     const status = ERROR_HTTP[code] || 502;
-    const message = ERROR_MSG[code] || 'Playback is not available right now';
-    return new Response(JSON.stringify({ error: message, code, ...extra }), {
+    const msg = message || ERROR_MSG[code] || 'Playback is not available right now';
+    return new Response(JSON.stringify({ error: msg, code }), {
         status,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 function extractExpiresAt(cdnUrl) {
     try {
         const u = new URL(cdnUrl);
@@ -325,7 +373,6 @@ function extractExpiresAt(cdnUrl) {
     } catch (_) { return 0; }
 }
 
-/** Build the standard JSON resolve response with CORS headers. */
 function jsonResolveResponse(data) {
     return new Response(JSON.stringify(data), {
         status: 200,
@@ -344,7 +391,6 @@ async function handleRequest(request) {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // CORS preflight
     if (request.method === 'OPTIONS') {
         return new Response(null, {
             status: 204,
@@ -357,35 +403,38 @@ async function handleRequest(request) {
         });
     }
 
-    // Extract videoId from  /{videoId}  or  /resolve/{videoId}
     const segments = path.slice(1).split('/');
     const videoId = (segments[segments.length - 1] || '').trim();
     if (!videoId) return jsonError('MISSING_VIDEO_ID');
     if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return jsonError('INVALID_VIDEO_ID');
 
-    // Optional preferred client hint from Flutter (e.g. ?client=ANDROID_VR)
+    // Preferred-client hint (e.g. ?client=ANDROID_VR)
     const preferredClient = url.searchParams.get('client') || null;
+    // Excluded clients from Flutter retry blacklist (e.g. ?exclude=ANDROID,IOS)
+    const excludeParam = url.searchParams.get('exclude') || '';
+    const excludeClients = excludeParam ? excludeParam.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-    // --- 1. CF Cache lookup --------------------------------------------------
-    // Skip cache if a specific client is requested (force fresh resolve)
-    if (!preferredClient) {
+    const forceResolve = !!preferredClient || excludeClients.length > 0;
+
+    // --- 1. CF Cache lookup (skip if forced to resolve with specific params) --
+    if (!forceResolve) {
         const cached = await cacheRead(videoId);
         if (cached?.url) {
-            console.log(`[WORKER CACHE HIT] ${videoId} sourceType=${cached.sourceType} client=${cached.clientUsed ?? '?'}`);
+            console.log(`[WORKER CACHE HIT] ${videoId} client=${cached.clientUsed ?? '?'} itag=${cached.itag ?? '?'}`);
             return jsonResolveResponse(cached);
         }
     }
-    console.log(`[WORKER CACHE MISS] ${videoId}${preferredClient ? ` (forced client=${preferredClient})` : ''}`);
+    console.log(`[WORKER CACHE MISS] ${videoId}${forceResolve ? ` (forced: client=${preferredClient} exclude=${excludeParam})` : ''}`);
 
-    // --- 2. Resolve via Innertube client waterfall ---------------------------
-    console.log(`[WORKER RESOLVE] Starting resolution for ${videoId}`);
+    // --- 2. Resolve --------------------------------------------------------
+    console.log(`[WORKER RESOLVE] Starting for ${videoId} exclude=[${excludeClients.join(',')}]`);
     let resolved;
     try {
-        resolved = await resolveStream(videoId, preferredClient);
+        resolved = await resolveStream(videoId, preferredClient, excludeClients);
     } catch (err) {
         const code = err?.code || 'ALL_CLIENTS_BLOCKED';
         console.error(`[WORKER FINAL ERROR] ${videoId}: code=${code} msg=${err.message}`);
-        return jsonError(code);
+        return jsonError(code, err.message);
     }
 
     const expiresAt = extractExpiresAt(resolved.url);
@@ -396,10 +445,11 @@ async function handleRequest(request) {
         expiresAt,
         clientUsed: resolved.clientUsed,
         itag: resolved.itag,
+        candidates: resolved.candidates,  // all playable URLs from this client
     };
 
-    // --- 3. Cache the resolved metadata (only for full resolved, not client-hint requests) ---
-    if (!preferredClient) {
+    // --- 3. Cache (only for non-forced resolves) ---------------------------
+    if (!forceResolve) {
         await caches.default.put(
             cacheKey(videoId),
             new Response(JSON.stringify(payload), {
@@ -411,8 +461,7 @@ async function handleRequest(request) {
         );
     }
 
-    console.log(`[WORKER RESOLVE RESULT] ${videoId} client=${resolved.clientUsed} itag=${resolved.itag} sourceType=${resolved.sourceType} expiresAt=${expiresAt}`);
-
+    console.log(`[WORKER RESOLVE RESULT] ${videoId} client=${resolved.clientUsed} itag=${resolved.itag} candidates=${resolved.candidates.length}`);
     return jsonResolveResponse(payload);
 }
 
