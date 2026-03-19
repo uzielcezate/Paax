@@ -8,43 +8,39 @@ import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
 // ---------------------------------------------------------------------------
-// PlaybackEngineImpl — Media Engine V1
+// PlaybackEngineImpl — truthful state machine
 // ---------------------------------------------------------------------------
 //
-// Architecture:
-//   load(videoId)
-//     → MediaResolver.resolve()            ← calls Worker JSON API (or cache)
-//     → AudioSource.uri(directCdnUrl,
-//            headers: {Referer, Origin})   ← ExoPlayer fetches bytes directly
-//     → _player.play()                     ← [MEDIA PLAY]
+// load(videoId)
+//   → MediaResolver.resolve()          → Worker JSON (or cache) → CDN URL
+//   → setAudioSource(directCdnUrl)     → stage = settingSource / sourceReady / failedSetSource
+//   → seek(0) + play()                 → stage = buffering
+//   → playerStateStream confirms ready → stage = playing   ← ONLY REAL SIGNAL
+//   → 3s stall guard                   → stage = failedBuffering / falsePlayingDetected
 //
-// On PlayerException (e.g. expired CDN URL):
-//   → resolver.invalidate(videoId)         ← clears StreamCache
-//   → resolver.resolve(videoId)            ← fresh Worker call → new CDN URL
-//   → AudioSource.uri(newUrl) + play()     ← retry once
-// ────────────────────────────────────────────────────────────────────────────
+// "playing" is NEVER set by calling play().
+// It is ONLY set when playerStateStream emits ProcessingState.ready
+// AND either position > 0 OR buffered > 0 confirms actual bytes are moving.
+// ---------------------------------------------------------------------------
 
 class PlaybackEngineImpl implements PlaybackEngine {
   PlaybackEngineImpl({MediaResolver? resolver})
       : _resolver = resolver ?? MediaResolver();
 
   final MediaResolver _resolver;
-  final _player       = AudioPlayer();
+  final _player              = AudioPlayer();
   final _completionController = StreamController<void>.broadcast();
 
   bool _isDisposed = false;
   final _subscriptions = <StreamSubscription>[];
 
-  // Load-lock: generation counter. Bumped at every load() call.
-  // Any in-flight load() that finds _loadId changed after an await bails out.
   int _loadId = 0;
 
   // ── PlaybackEngine streams ─────────────────────────────────────────────────
-  @override Stream<Duration> get positionStream  => _player.positionStream;
-  @override Stream<Duration> get durationStream  => _player.durationStream
-      .where((d) => d != null && d > Duration.zero)
-      .map((d) => d!);
-  @override Stream<bool>     get playingStream   => _player.playingStream;
+  @override Stream<Duration> get positionStream   => _player.positionStream;
+  @override Stream<Duration> get durationStream   => _player.durationStream
+      .where((d) => d != null && d > Duration.zero).map((d) => d!);
+  @override Stream<bool>     get playingStream    => _player.playingStream;
   @override Stream<void>     get completionStream => _completionController.stream;
 
   // ── initialize ─────────────────────────────────────────────────────────────
@@ -68,26 +64,26 @@ class PlaybackEngineImpl implements PlaybackEngine {
       _player.pause();
     }));
 
+    // ── Completion ────────────────────────────────────────────────────────────
     _subscriptions.add(_player.playerStateStream.listen((state) {
       if (_isDisposed) return;
-      debugPrint(
-        '[PLAYER STATE] playing=${state.playing}  '
-        'processingState=${state.processingState.name}',
-      );
+      debugPrint('[PLAYER STATE] playing=${state.playing} state=${state.processingState.name}');
+
       if (state.processingState == ProcessingState.completed) {
         _completionController.add(null);
         if (kDebugMode) {
           final prev = PlaybackDiagnosticsNotifier.value;
           if (prev != null) {
             PlaybackDiagnosticsNotifier.value = prev.copyWith(
-              stage:          PlaybackStage.completed,
+              stage:           PlaybackStage.completed,
               processingState: 'completed',
-              isPlaying:      false,
-              stageEnteredAt: DateTime.now(),
+              isPlaying:       false,
+              stageEnteredAt:  DateTime.now(),
             );
           }
         }
       } else if (kDebugMode) {
+        // Always push live processingState + isPlaying changes
         final prev = PlaybackDiagnosticsNotifier.value;
         if (prev != null) {
           PlaybackDiagnosticsNotifier.value = prev.copyWith(
@@ -95,22 +91,24 @@ class PlaybackEngineImpl implements PlaybackEngine {
             isPlaying:       state.playing,
           );
         }
+        // Check if this state update warrants upgrading buffering → playing
+        _maybeUpgradePlaying(state.processingState, state.playing);
       }
     }));
 
+    // ── Live position/buffered push (only during confirmed playback) ──────────
     _subscriptions.add(_player.positionStream.listen((pos) {
       if (_isDisposed) return;
-      if (kDebugMode) {
-        final prev = PlaybackDiagnosticsNotifier.value;
-        if (prev != null && prev.stage == PlaybackStage.playing) {
-          PlaybackDiagnosticsNotifier.value = prev.copyWith(
-            position: pos,
-            buffered: _player.bufferedPosition,
-            duration: _player.duration ?? Duration.zero,
-            isPlaying: _player.playing,
-          );
-        }
-      }
+      if (!kDebugMode) return;
+      final prev = PlaybackDiagnosticsNotifier.value;
+      if (prev == null) return;
+      // Always push position/buffered regardless of stage so overlay is live
+      PlaybackDiagnosticsNotifier.value = prev.copyWith(
+        position:  pos,
+        buffered:  _player.bufferedPosition,
+        duration:  _player.duration ?? Duration.zero,
+        isPlaying: _player.playing,
+      );
     }));
   }
 
@@ -120,200 +118,349 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (videoId.isEmpty) return;
     final myId = ++_loadId;
 
-    // Step 1: Stop previous playback immediately
-    debugPrint('[PLAYER STOP] >>> videoId=$videoId');
+
+    debugPrint('[PLAYER STOP] >>> $videoId');
     await _player.stop();
     if (_loadId != myId) return;
 
-    // Publish resolving state to debug panel
+    final resolveStart = DateTime.now();
+
     if (kDebugMode) {
-      PlaybackDiagnosticsNotifier.value =
-          PlaybackDiagnostics.atStage(PlaybackStage.resolving, videoId: videoId);
+      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(
+        videoId,
+        resolveStartedAt: resolveStart,
+      );
     }
 
-    // Step 2: Resolve — check cache then call Worker for direct CDN URL
+    // ── Step 1: Resolve ──────────────────────────────────────────────────────
     debugPrint('[MEDIA RESOLVE START] $videoId');
     ResolvedStream resolved;
     try {
       resolved = await _resolver.resolve(videoId);
     } catch (e) {
-      debugPrint('[MEDIA ERROR] $videoId — resolve threw: $e');
+      final elapsed = DateTime.now().difference(resolveStart);
+      debugPrint('[MEDIA RESOLVE FAIL] $videoId +${elapsed.inMilliseconds}ms err=$e');
+      final isTimeout = e.toString().toLowerCase().contains('timeout');
+      final stage = isTimeout
+          ? PlaybackStage.failedResolveTimeout
+          : PlaybackStage.failedResolveHttp;
+      final resolveEx = e is MediaResolveException ? e : null;
+      if (kDebugMode) {
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          stage,
+          videoId:           videoId,
+          resolveStartedAt:  resolveStart,
+          resolveFinishedAt: DateTime.now(),
+          workerHttpStatus:  resolveEx?.httpStatus ?? 0,
+          workerErrorBody:   resolveEx?.errorBody,
+          lastError:         e.toString(),
+        );
+      }
       throw _MediaEngineException(e.toString());
     }
-    if (_loadId != myId) {
-      debugPrint('[MEDIA RESOLVE RESULT DIRECT] Superseded — bailing ($videoId)');
-      return;
-    }
-    debugPrint('[MEDIA RESOLVE RESULT DIRECT] $videoId → ${resolved.sourceType} url=${resolved.url.substring(0, resolved.url.length.clamp(0, 70))}…');
-    debugPrint('[MEDIA FORMAT PICK] $videoId → ${resolved.sourceType} mime=${resolved.mimeType}');
+
+    final resolveEnd = DateTime.now();
+    final resolveMs  = resolveEnd.difference(resolveStart).inMilliseconds;
+    debugPrint('[MEDIA RESOLVE OK] $videoId +${resolveMs}ms '
+        '→ ${resolved.sourceType} mime=${resolved.mimeType}');
+
+    if (_loadId != myId) return;
 
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
         PlaybackStage.resolved,
-        videoId:    videoId,
-        sourceType: resolved.sourceType,
-        mimeType:   resolved.mimeType,
-        expiresAt:  resolved.expiresAt,
-        urlHost:    Uri.parse(resolved.url).host,
+        videoId:           videoId,
+        sourceType:        resolved.sourceType,
+        mimeType:          resolved.mimeType,
+        expiresAt:         resolved.expiresAt,
+        urlHost:           Uri.parse(resolved.url).host,
+        resolveStartedAt:  resolveStart,
+        resolveFinishedAt: resolveEnd,
       );
     }
 
-    // Step 3: Set source + play (with re-resolve on failure)
-    await _loadAndPlay(videoId, resolved, myId, isRetry: false);
+    // ── Step 2: setAudioSource ────────────────────────────────────────────────
+    await _loadAndPlay(videoId, resolved, myId, resolveStart, resolveEnd, isRetry: false);
   }
 
-  /// Inner helper: setAudioSource → seek → play.
-  /// On PlayerException, re-resolves once via [MediaResolver] and retries.
   Future<void> _loadAndPlay(
     String videoId,
     ResolvedStream resolved,
-    int myId, {
+    int myId,
+    DateTime resolveStart,
+    DateTime resolveEnd, {
     required bool isRetry,
   }) async {
-    // Direct CDN URL — googlevideo.com
-    // YouTube headers increase CDN acceptance rate.
     final uri = Uri.parse(resolved.url);
-    final source = AudioSource.uri(
-      uri,
-      headers: const {
-        'User-Agent':
-            'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-        'Referer':  'https://www.youtube.com/',
-        'Origin':   'https://www.youtube.com',
-      },
-    );
+    final source = AudioSource.uri(uri, headers: const {
+      'User-Agent':
+          'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 '
+          '(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
+      'Referer': 'https://www.youtube.com/',
+      'Origin':  'https://www.youtube.com',
+    });
 
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
         PlaybackStage.settingSource,
-        videoId:    videoId,
-        sourceType: resolved.sourceType,
-        mimeType:   resolved.mimeType,
-        expiresAt:  resolved.expiresAt,
-        urlHost:    uri.host,
+        videoId:           videoId,
+        sourceType:        resolved.sourceType,
+        mimeType:          resolved.mimeType,
+        expiresAt:         resolved.expiresAt,
+        urlHost:           uri.host,
+        resolveStartedAt:  resolveStart,
+        resolveFinishedAt: resolveEnd,
+        setSourceCalled:   true,
       );
     }
 
-    debugPrint('[PLAYER SET SOURCE DIRECT] $videoId → ${uri.host}${uri.path.substring(0, uri.path.length.clamp(0, 40))}…');
+    debugPrint('[PLAYER SET SOURCE] $videoId → ${uri.host}');
     try {
       await _player.setAudioSource(source, preload: false);
-      debugPrint('[PLAYER SET SOURCE] OK  state=${_player.processingState.name}  videoId=$videoId');
+      debugPrint('[PLAYER SET SOURCE OK] $videoId state=${_player.processingState.name}');
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.sourceReady,
-          videoId:        videoId,
-          sourceType:     resolved.sourceType,
-          mimeType:       resolved.mimeType,
-          expiresAt:      resolved.expiresAt,
-          urlHost:        uri.host,
-          processingState: _player.processingState.name,
+          videoId:            videoId,
+          sourceType:         resolved.sourceType,
+          mimeType:           resolved.mimeType,
+          expiresAt:          resolved.expiresAt,
+          urlHost:            uri.host,
+          resolveStartedAt:   resolveStart,
+          resolveFinishedAt:  resolveEnd,
+          setSourceCalled:    true,
+          setSourceSucceeded: true,
+          processingState:    _player.processingState.name,
         );
       }
     } on PlayerException catch (e) {
-      debugPrint('[PLAYER SET SOURCE ERROR] $videoId PlayerException: code=${e.code} msg=${e.message}');
+      final errMsg = 'PlayerException code=${e.code} msg=${e.message ?? 'unknown'}';
+      debugPrint('[PLAYER SET SOURCE ERROR] $videoId $errMsg');
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
-          PlaybackStage.failedPlayer,
-          videoId:   videoId,
-          sourceType: resolved.sourceType,
-          mimeType:  resolved.mimeType,
-          urlHost:   uri.host,
-          lastError:  'setAudioSource failed: code=${e.code} msg=${e.message ?? 'unknown'}',
+          PlaybackStage.failedSetSource,
+          videoId:          videoId,
+          sourceType:       resolved.sourceType,
+          mimeType:         resolved.mimeType,
+          urlHost:          uri.host,
+          resolveStartedAt: resolveStart, resolveFinishedAt: resolveEnd,
+          setSourceCalled:  true,  setSourceSucceeded: false,
+          setSourceError:   errMsg,
+          lastError:        errMsg,
         );
       }
       if (!isRetry) {
-        // Invalidate stale cache entry and retry with a fresh resolve
         await _resolver.invalidate(videoId);
-        debugPrint('[MEDIA RESOLVE RESULT DIRECT] $videoId — re-resolving after setAudioSource failure');
-        final fresh = await _resolver.resolve(videoId);
-        if (_loadId == myId) return _loadAndPlay(videoId, fresh, myId, isRetry: true);
+        debugPrint('[MEDIA RE-RESOLVE] $videoId after setAudioSource failure');
+        ResolvedStream fresh;
+        try {
+          fresh = await _resolver.resolve(videoId);
+        } catch (e2) {
+          throw _MediaEngineException('Re-resolve failed: $e2');
+        }
+        if (_loadId == myId) {
+          return _loadAndPlay(videoId, fresh, myId, resolveStart, DateTime.now(), isRetry: true);
+        }
         return;
       }
-      throw _MediaEngineException(
-        'Playback source rejected (${e.code}): ${e.message ?? 'unknown'}',
-      );
+      throw _MediaEngineException('Source rejected (${e.code}): ${e.message ?? 'unknown'}');
     } catch (e) {
-      debugPrint('[PLAYER SET SOURCE ERROR] $videoId: $e');
+      debugPrint('[PLAYER SET SOURCE ERROR] $videoId generic: $e');
       await _resolver.invalidate(videoId);
-      throw _MediaEngineException('Playback setup failed: $e');
+      if (kDebugMode) {
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.failedSetSource,
+          videoId:         videoId,
+          urlHost:         uri.host,
+          setSourceCalled: true,
+          lastError:       'setAudioSource error: $e',
+        );
+      }
+      throw _MediaEngineException('Source setup failed: $e');
     }
 
     if (_loadId != myId) return;
 
-    debugPrint('[PLAYER PLAY DIRECT] $videoId — starting playback');
+    // ── Step 3: play() — mark buffering, NOT playing ──────────────────────────
+    debugPrint('[PLAYER PLAY] $videoId — calling play()');
+    final playCallTime = DateTime.now();
+
+    if (kDebugMode) {
+      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+        PlaybackStage.buffering,
+        videoId:            videoId,
+        sourceType:         resolved.sourceType,
+        mimeType:           resolved.mimeType,
+        expiresAt:          resolved.expiresAt,
+        urlHost:            uri.host,
+        resolveStartedAt:   resolveStart,
+        resolveFinishedAt:  resolveEnd,
+        setSourceCalled:    true,
+        setSourceSucceeded: true,
+        playCalled:         true,
+        processingState:    _player.processingState.name,
+      );
+    }
+
+    bool playOk = false;
     try {
       await _player.seek(Duration.zero);
-      if (kDebugMode) {
-        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
-          PlaybackStage.buffering,
-          videoId:        videoId,
-          sourceType:     resolved.sourceType,
-          mimeType:       resolved.mimeType,
-          expiresAt:      resolved.expiresAt,
-          urlHost:        uri.host,
-          processingState: _player.processingState.name,
-        );
-      }
       await _player.play();
-      debugPrint('[MEDIA PLAY] $videoId OK  playing=${_player.playing}  '
-          'state=${_player.processingState.name}');
-
-      if (kDebugMode) {
-        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
-          PlaybackStage.playing,
-          videoId:        videoId,
-          sourceType:     resolved.sourceType,
-          mimeType:       resolved.mimeType,
-          expiresAt:      resolved.expiresAt,
-          urlHost:        uri.host,
-          processingState: _player.processingState.name,
-          isPlaying:      _player.playing,
-          position:       _player.position,
-          duration:       _player.duration ?? Duration.zero,
-        );
-      }
+      playOk = true;
+      debugPrint('[PLAYER PLAY] $videoId play() returned — '
+          'state=${_player.processingState.name} playing=${_player.playing}');
     } catch (e) {
       debugPrint('[PLAYER PLAY ERROR] $videoId: $e');
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
-          PlaybackStage.failedPlayer,
-          videoId:   videoId,
-          sourceType: resolved.sourceType,
-          mimeType:  resolved.mimeType,
-          urlHost:   uri.host,
-          lastError:  'play() failed: $e',
+          PlaybackStage.failedBuffering,
+          videoId:           videoId,
+          sourceType:        resolved.sourceType,
+          mimeType:          resolved.mimeType,
+          urlHost:           uri.host,
+          resolveStartedAt:  resolveStart, resolveFinishedAt: resolveEnd,
+          setSourceCalled:   true, setSourceSucceeded: true,
+          playCalled:        true, playSucceeded: false,
+          playError:         'play() threw: $e',
+          lastError:         'play() threw: $e',
         );
       }
       throw _MediaEngineException('Playback failed to start: $e');
     }
+
+    if (_loadId != myId) return;
+
+    // After play() returns, we do NOT mark stage = playing yet.
+    // We install a 3-second stall guard.
+    // playerStateStream (in initialize()) will upgrade us to "playing"
+    // IF ProcessingState.ready is observed. The guard downgrades otherwise.
+    final guardId = myId;
+    final videoIdGuard = videoId;
+    final resolveCapture  = resolved;
+    final resolveStartCap = resolveStart;
+    final resolveEndCap   = resolveEnd;
+    final playCallTimeCap = playCallTime;
+
+    Future.delayed(const Duration(seconds: 3), () {
+      if (_isDisposed || _loadId != guardId) return;
+      final d = PlaybackDiagnosticsNotifier.value;
+      if (d == null || d.videoId != videoIdGuard) return;
+
+      // Check if we're still in buffering (play() didn't produce real playback)
+      final pos     = _player.position;
+      final buf     = _player.bufferedPosition;
+      final state   = _player.processingState;
+      final playing = _player.playing;
+
+      debugPrint('[STALL GUARD] $videoIdGuard pos=${pos.inMilliseconds}ms '
+          'buf=${buf.inMilliseconds}ms state=${state.name} playing=$playing');
+
+      // Truthful playing: processingState must be ready/buffering AND bytes moved
+      final bytesMoving = pos > Duration.zero || buf > Duration.zero;
+
+      if (!kDebugMode) return;
+
+      if (d.stage == PlaybackStage.playing && !bytesMoving) {
+        // Stage was already promoted to playing (by playerStateStream) but no bytes
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.falsePlayingDetected,
+          videoId:            videoIdGuard,
+          sourceType:         resolveCapture.sourceType,
+          mimeType:           resolveCapture.mimeType,
+          expiresAt:          resolveCapture.expiresAt,
+          urlHost:            uri.host,
+          resolveStartedAt:   resolveStartCap,
+          resolveFinishedAt:  resolveEndCap,
+          setSourceCalled:    true, setSourceSucceeded: true,
+          playCalled:         true, playSucceeded:      playOk,
+          processingState:    state.name,
+          isPlaying:          playing,
+          position:           pos,
+          buffered:           buf,
+          lastError:          'play() returned but ExoPlayer idle/pos=0/buf=0 after 3s '
+                              '(processingState=${state.name})',
+        );
+      } else if ((d.stage == PlaybackStage.buffering ||
+                  d.stage == PlaybackStage.stalledAfterResolved) &&
+                 !bytesMoving) {
+        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+          PlaybackStage.failedBuffering,
+          videoId:            videoIdGuard,
+          sourceType:         resolveCapture.sourceType,
+          mimeType:           resolveCapture.mimeType,
+          expiresAt:          resolveCapture.expiresAt,
+          urlHost:            uri.host,
+          resolveStartedAt:   resolveStartCap,
+          resolveFinishedAt:  resolveEndCap,
+          setSourceCalled:    true, setSourceSucceeded: true,
+          playCalled:         true, playSucceeded:      playOk,
+          processingState:    state.name,
+          isPlaying:          playing,
+          position:           pos,
+          buffered:           buf,
+          lastError:          'Buffering stall: ${DateTime.now().difference(playCallTimeCap).inSeconds}s '
+                              'with zero bytes (state=${state.name})',
+        );
+      }
+      // If bytes are moving but stage is still buffering, let playerStateStream
+      // promote it to playing via the listener in initialize().
+    });
+
+    // Update buffering snapshot with confirmed play() result
+    if (kDebugMode) {
+      PlaybackDiagnosticsNotifier.value = (PlaybackDiagnosticsNotifier.value ?? 
+          PlaybackDiagnostics.atStage(PlaybackStage.buffering, videoId: videoId))
+          .copyWith(
+            playSucceeded:   true,
+            processingState: _player.processingState.name,
+            isPlaying:       _player.playing,
+            position:        _player.position,
+            buffered:        _player.bufferedPosition,
+            duration:        _player.duration ?? Duration.zero,
+          );
+    }
+  }
+
+  // ── playerStateStream promotes buffering → playing truthfully ─────────────
+  // This replaces the old "mark playing right after play()" logic.
+  // Called from initialize()'s listener — upgrade stage when ExoPlayer
+  // confirms actual readiness + bytes are moving.
+  void _maybeUpgradePlaying(ProcessingState state, bool isPlaying) {
+    if (!kDebugMode) return;
+    final prev = PlaybackDiagnosticsNotifier.value;
+    if (prev == null) return;
+    if (prev.stage != PlaybackStage.buffering &&
+        prev.stage != PlaybackStage.stalledAfterResolved) return;
+
+    final pos = _player.position;
+    final buf = _player.bufferedPosition;
+    final bytesMoving = pos > Duration.zero || buf > Duration.zero;
+
+    if ((state == ProcessingState.ready || state == ProcessingState.buffering) &&
+        isPlaying &&
+        bytesMoving) {
+      debugPrint('[PLAYER PLAYING CONFIRMED] ${prev.videoId} pos=${pos.inMilliseconds}ms buf=${buf.inMilliseconds}ms');
+      PlaybackDiagnosticsNotifier.value = prev.copyWith(
+        stage:           PlaybackStage.playing,
+        stageEnteredAt:  DateTime.now(),
+        processingState: state.name,
+        isPlaying:       true,
+        position:        pos,
+        buffered:        buf,
+        duration:        _player.duration ?? Duration.zero,
+        playSucceeded:   true,
+      );
+    }
   }
 
   // ── controls ───────────────────────────────────────────────────────────────
-  @override
-  Future<void> play() async {
-    debugPrint('[MEDIA PLAY] resume');
-    await _player.play();
-  }
-
-  @override
-  Future<void> pause() async {
-    debugPrint('[PLAYER PAUSE]');
-    await _player.pause();
-  }
-
-  @override
-  Future<void> seek(Duration position) async {
+  @override Future<void> play()  async { debugPrint('[MEDIA PLAY] resume'); await _player.play(); }
+  @override Future<void> pause() async { debugPrint('[PLAYER PAUSE]'); await _player.pause(); }
+  @override Future<void> seek(Duration position) async {
     debugPrint('[MEDIA SEEK] ${position.inSeconds}s');
     await _player.seek(position);
   }
-
-  @override
-  void prefetchNext(String videoId) {
-    // Legacy call-site in PlaybackController; no-op here —
-    // prefetching is now handled by PrefetchManager directly.
-    // This stub preserves interface compatibility.
-  }
+  @override void prefetchNext(String videoId) { /* handled by PrefetchManager */ }
 
   @override
   void dispose() {
@@ -334,6 +481,5 @@ class PlaybackEngineImpl implements PlaybackEngine {
 class _MediaEngineException implements Exception {
   final String message;
   const _MediaEngineException(this.message);
-  @override
-  String toString() => message;
+  @override String toString() => message;
 }

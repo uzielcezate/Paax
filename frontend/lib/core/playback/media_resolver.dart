@@ -114,14 +114,23 @@ class MediaResolver {
     if (response.statusCode != 200) {
       // Worker returned an error — try to parse the code from JSON
       String code = 'WORKER_ERROR';
+      String? errorBody;
       try {
-        final body = jsonDecode(response.body) as Map<String, dynamic>;
-        code = (body['code'] as String?) ?? code;
-      } catch (_) {}
-      debugPrint('[MEDIA RESOLVE ERROR] $videoId — Worker returned ${response.statusCode} code=$code');
+        final b = jsonDecode(response.body) as Map<String, dynamic>;
+        code      = (b['code']    as String?) ?? code;
+        errorBody = (b['message'] as String?) ?? (b['error'] as String?);
+      } catch (_) {
+        // Body may be HTML (rate-limit page) — capture first 120 chars
+        errorBody = response.body.length > 120
+            ? '${response.body.substring(0, 120)}…'
+            : response.body;
+      }
+      debugPrint('[MEDIA RESOLVE FAIL] $videoId — HTTP ${response.statusCode} code=$code body=${errorBody ?? '—'}');
       throw MediaResolveException(
         _workerErrorMessage(code, response.statusCode),
-        code: code,
+        code:      code,
+        httpStatus: response.statusCode,
+        errorBody: errorBody,
       );
     }
 
@@ -210,10 +219,19 @@ class MediaResolver {
 
 /// Thrown by [MediaResolver.resolve] on any failure.
 class MediaResolveException implements Exception {
-  final String message;
+  final String  message;
   final String? code;
+  /// HTTP status code from the Worker (non-200), or 0 on network error.
+  final int     httpStatus;
+  /// Short excerpt from the Worker error body.
+  final String? errorBody;
 
-  const MediaResolveException(this.message, {this.code});
+  const MediaResolveException(
+    this.message, {
+    this.code,
+    this.httpStatus = 0,
+    this.errorBody,
+  });
 
   @override
   String toString() => message;

@@ -1,25 +1,12 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../core/playback/playback_diagnostics.dart';
 
 // ============================================================================
-// TEMPORARY DEBUG OVERLAY — remove before production release
-//
-// Drop-in widget for the Now Playing screen.
-// Reads from [PlaybackDiagnosticsNotifier] (ValueNotifier) which the engine
-// updates at every stage. The player live state (position/buffered/playing)
-// is fed via [audioPlayer], which this widget polls every 500ms.
+// TEMPORARY DEBUG OVERLAY — remove before production release.
+// Injected into player_screen.dart (debug builds only).
 // ============================================================================
 
-/// Wrap with [kDebugMode] guard at call-site so it tree-shakes in release.
-///
-/// Usage (inside PlayerScreen Column):
-///   if (kDebugMode) PlaybackDebugOverlay(audioPlayer: _engine.player),
-///
-/// Since we can't expose the player directly, the overlay uses the
-/// [PlaybackDiagnosticsNotifier] for player live-state too (engine pushes
-/// copyWith updates via a periodic callback).
 class PlaybackDebugOverlay extends StatefulWidget {
   const PlaybackDebugOverlay({super.key});
 
@@ -29,150 +16,230 @@ class PlaybackDebugOverlay extends StatefulWidget {
 
 class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
   PlaybackDiagnostics? _diag;
-  Timer? _stallTimer;
-  bool _stalled = false;
+  Timer?               _ticker;
+  bool                 _stalled = false;
 
   @override
   void initState() {
     super.initState();
     _diag = PlaybackDiagnosticsNotifier.value;
-    PlaybackDiagnosticsNotifier.addListener(_onDiagUpdate);
-    // Stall check: fires every second, marks stall if stage age > 5s
-    _stallTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    PlaybackDiagnosticsNotifier.addListener(_onDiag);
+    // Rebuild every second so stageAge and stall detection stay live.
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
-      final d = PlaybackDiagnosticsNotifier.value;
-      if (d == null) return;
-      final isStuckStage = d.stage == PlaybackStage.resolving ||
-          d.stage == PlaybackStage.settingSource ||
-          d.stage == PlaybackStage.buffering;
-      final nowStalled = isStuckStage && d.stageAge.inSeconds >= 5;
-      if (nowStalled != _stalled) {
-        setState(() => _stalled = nowStalled);
-      } else {
-        // Still force rebuild to update stageAge timer
-        if (mounted) setState(() {});
-      }
+      final d = _diag;
+      if (d == null) { setState(() {}); return; }
+      final stuckStages = {
+        PlaybackStage.resolving,
+        PlaybackStage.settingSource,
+        PlaybackStage.buffering,
+        PlaybackStage.stalledAfterResolved,
+      };
+      setState(() {
+        _stalled = stuckStages.contains(d.stage) && d.stageAge.inSeconds >= 5;
+      });
     });
   }
 
-  void _onDiagUpdate() {
+  void _onDiag() {
     if (!mounted) return;
     setState(() {
-      _diag = PlaybackDiagnosticsNotifier.value;
-      _stalled = false; // reset stall flag on any update
+      _diag    = PlaybackDiagnosticsNotifier.value;
+      _stalled = false;
     });
   }
 
   @override
   void dispose() {
-    PlaybackDiagnosticsNotifier.removeListener(_onDiagUpdate);
-    _stallTimer?.cancel();
+    PlaybackDiagnosticsNotifier.removeListener(_onDiag);
+    _ticker?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final d = _diag;
-
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 0, vertical: 6),
+      margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.82),
+        color: Colors.black.withOpacity(0.88),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _borderColor(d),
-          width: 1.5,
-        ),
+        border: Border.all(color: _border(d), width: 1.8),
       ),
       child: Theme(
-        data: Theme.of(context).copyWith(
-          dividerColor: Colors.white12,
-        ),
+        data: Theme.of(context).copyWith(dividerColor: Colors.white12),
         child: ExpansionTile(
           initiallyExpanded: true,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-          title: Row(
-            children: [
-              _StageChip(d?.stage, stalled: _stalled),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  d?.videoId ?? '—',
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
+          title: Row(children: [
+            _StageChip(d?.stage, stalled: _stalled),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                d?.videoId ?? '—',
+                style: const TextStyle(color: Colors.white60, fontFamily: 'monospace', fontSize: 11),
+                overflow: TextOverflow.ellipsis,
               ),
-              if (_stalled)
-                const Padding(
-                  padding: EdgeInsets.only(left: 6),
-                  child: Text('⏱ STALL',
-                      style: TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold)),
-                ),
-            ],
-          ),
-          children: [
-            if (d == null)
-              const _Row('status', 'waiting for first play…')
-            else ...[
-              _Row('stage',       d.stageName + (d.stageAge.inSeconds > 0 ? '  (+${d.stageAge.inSeconds}s)' : '')),
-              _Row('sourceType',  d.sourceType),
-              _Row('mimeType',    d.mimeType),
-              _Row('urlHost',     d.urlHost),
-              _Row('expiresAt',   d.expiresAt == 0 ? '—' : _fmtExpiry(d.expiresAt)),
-              const Divider(height: 8, color: Colors.white12),
-              _Row('playerState', d.processingState),
-              _Row('playing',     d.isPlaying ? '▶  true' : '⏸  false'),
-              _Row('position',    _fmtDuration(d.position)),
-              _Row('buffered',    _fmtDuration(d.buffered)),
-              _Row('duration',    _fmtDuration(d.duration)),
-              if (d.lastError != null) ...[
-                const Divider(height: 8, color: Colors.white12),
-                _Row('❌ error', d.lastError!, isError: true),
-              ],
-            ],
-          ],
+            ),
+            if (_stalled)
+              const Text('⏱ STALL',
+                  style: TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold)),
+          ]),
+          children: [_buildBody(d)],
         ),
       ),
     );
   }
 
-  Color _borderColor(PlaybackDiagnostics? d) {
+  Widget _buildBody(PlaybackDiagnostics? d) {
+    if (d == null) return const _R('status', 'waiting for first play…');
+    final elapsed = d.resolveElapsed;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Stage + timing ─────────────────────────────────────────────────
+        _R('stage',
+            '${d.stageName}  (+${d.stageAge.inSeconds}s in stage)'),
+        _R('stage@',
+            _fmt(d.stageEnteredAt),
+            dim: true),
+
+        const _Div(),
+
+        // ── Resolution ──────────────────────────────────────────────────────
+        _R('resolve↑', d.resolveStartedAt != null ? _fmt(d.resolveStartedAt!) : '—', dim: true),
+        _R('resolve↓', d.resolveFinishedAt != null ? _fmt(d.resolveFinishedAt!) : '—', dim: true),
+        _R('resolveMs',
+            elapsed != null ? '${elapsed.inMilliseconds} ms' : '—'),
+        _R('workerHTTP',
+            d.workerHttpStatus == 0 ? '—' : '${d.workerHttpStatus}',
+            warn: d.workerHttpStatus != 0 && d.workerHttpStatus != 200),
+        if (d.workerErrorBody != null)
+          _R('workerErr', d.workerErrorBody!, err: true),
+
+        const _Div(),
+
+        // ── Resolved info ────────────────────────────────────────────────────
+        _R('sourceType', d.sourceType),
+        _R('mimeType',   d.mimeType),
+        _R('urlHost',    d.urlHost),
+        _R('expiresAt',  _fmtExpiry(d.expiresAt),
+            warn: d.isUrlExpired),
+
+        const _Div(),
+
+        // ── setAudioSource ────────────────────────────────────────────────────
+        _R('setSrc?',    d.setSourceCalled ? 'called' : 'not yet'),
+        _R('setSrcOK',   d.setSourceSucceeded ? '✓ yes' : '—',
+            ok: d.setSourceSucceeded),
+        if (d.setSourceError != null)
+          _R('setSrcErr', d.setSourceError!, err: true),
+
+        // ── play() ────────────────────────────────────────────────────────────
+        _R('play()?',    d.playCalled ? 'called' : 'not yet'),
+        _R('playOK',     d.playSucceeded ? '✓ yes' : '—',
+            ok: d.playSucceeded),
+        if (d.playError != null)
+          _R('playErr', d.playError!, err: true),
+
+        const _Div(),
+
+        // ── Live player state ─────────────────────────────────────────────────
+        _R('exoState',  d.processingState),
+        _R('playing',   d.isPlaying ? '▶  true' : '⏸  false'),
+        _R('position',  _dur(d.position)),
+        _R('buffered',  _dur(d.buffered)),
+        _R('duration',  _dur(d.duration)),
+
+        // ── False-playing warning ─────────────────────────────────────────────
+        if (d.stage == PlaybackStage.falsePlayingDetected ||
+            d.stage == PlaybackStage.failedBuffering)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.orange),
+              ),
+              child: Text(
+                d.stage == PlaybackStage.falsePlayingDetected
+                    ? '⚠ FALSE PLAYING — play() was called but ExoPlayer reports idle + pos=0 + buf=0'
+                    : '⚠ FAILED BUFFERING — play() called but no bytes moved within 3s',
+                style: const TextStyle(
+                  color: Colors.orange,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+
+        // ── Last error ────────────────────────────────────────────────────────
+        if (d.lastError != null) ...[
+          const _Div(),
+          _R('❌ error', d.lastError!, err: true),
+        ],
+      ],
+    );
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  Color _border(PlaybackDiagnostics? d) {
     if (d == null) return Colors.white24;
     if (_stalled) return Colors.orange;
     switch (d.stage) {
-      case PlaybackStage.playing:     return Colors.greenAccent;
-      case PlaybackStage.failedResolve:
-      case PlaybackStage.failedPlayer: return Colors.redAccent;
-      case PlaybackStage.buffering:   return Colors.amber;
-      default:                        return Colors.white24;
+      case PlaybackStage.playing:
+        return Colors.greenAccent;
+      case PlaybackStage.failedResolveTimeout:
+      case PlaybackStage.failedResolveHttp:
+      case PlaybackStage.failedSetSource:
+      case PlaybackStage.failedBuffering:
+      case PlaybackStage.falsePlayingDetected:
+        return Colors.redAccent;
+      case PlaybackStage.stalledAfterResolved:
+        return Colors.orange;
+      case PlaybackStage.buffering:
+        return Colors.amber;
+      case PlaybackStage.resolved:
+      case PlaybackStage.sourceReady:
+        return Colors.blue;
+      default:
+        return Colors.white24;
     }
   }
 
-  String _fmtDuration(Duration d) {
+  static String _dur(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
 
-  String _fmtExpiry(int expiresAt) {
+  static String _fmt(DateTime dt) {
+    final h  = dt.hour.toString().padLeft(2, '0');
+    final m  = dt.minute.toString().padLeft(2, '0');
+    final s  = dt.second.toString().padLeft(2, '0');
+    final ms = dt.millisecond.toString().padLeft(3, '0');
+    return '$h:$m:$s.$ms';
+  }
+
+  static String _fmtExpiry(int expiresAt) {
+    if (expiresAt == 0) return '—';
     final exp  = DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000);
     final diff = exp.difference(DateTime.now());
-    final sign = diff.isNegative ? '−' : '+';
-    final abs  = diff.abs();
-    final h    = abs.inHours;
-    final m    = abs.inMinutes.remainder(60);
-    return diff.isNegative
-        ? '⚠ EXPIRED ${sign}${h}h${m}m ago'
-        : 'OK (${sign}${h}h${m}m left)';
+    if (diff.isNegative) {
+      final a = diff.abs();
+      return '⚠ EXPIRED ${a.inHours}h${a.inMinutes.remainder(60)}m ago';
+    }
+    return 'OK (+${diff.inHours}h${diff.inMinutes.remainder(60)}m left)';
   }
 }
 
-// ── Sub-widgets ───────────────────────────────────────────────────────────────
+// ── Sub-widgets ────────────────────────────────────────────────────────────────
 
 class _StageChip extends StatelessWidget {
   final PlaybackStage? stage;
@@ -181,72 +248,81 @@ class _StageChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = stage?.name ?? 'idle';
     Color bg;
     if (stalled) {
       bg = Colors.orange;
     } else {
       switch (stage) {
-        case PlaybackStage.playing:
-          bg = Colors.green.shade700;
-          break;
-        case PlaybackStage.failedResolve:
-        case PlaybackStage.failedPlayer:
-          bg = Colors.red.shade700;
-          break;
+        case PlaybackStage.playing: bg = Colors.green.shade700; break;
+        case PlaybackStage.failedResolveTimeout:
+        case PlaybackStage.failedResolveHttp:
+        case PlaybackStage.failedSetSource:
+        case PlaybackStage.failedBuffering:
+        case PlaybackStage.falsePlayingDetected: bg = Colors.red.shade700; break;
+        case PlaybackStage.stalledAfterResolved: bg = Colors.deepOrange.shade700; break;
         case PlaybackStage.buffering:
-        case PlaybackStage.settingSource:
-          bg = Colors.amber.shade700;
-          break;
+        case PlaybackStage.settingSource:        bg = Colors.amber.shade800; break;
         case PlaybackStage.resolved:
-        case PlaybackStage.sourceReady:
-          bg = Colors.blue.shade700;
-          break;
-        default:
-          bg = Colors.grey.shade700;
+        case PlaybackStage.sourceReady:          bg = Colors.blue.shade700; break;
+        default:                                 bg = Colors.grey.shade700;
       }
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-      child: Text(label,
-          style: const TextStyle(
-              color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+      child: Text(
+        stage?.name ?? 'idle',
+        style: const TextStyle(
+          color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'monospace',
+        ),
+      ),
     );
   }
 }
 
-class _Row extends StatelessWidget {
+class _R extends StatelessWidget {
   final String label;
   final String value;
-  final bool isError;
-  const _Row(this.label, this.value, {this.isError = false});
+  final bool err;
+  final bool warn;
+  final bool ok;
+  final bool dim;
+  const _R(this.label, this.value, {this.err=false, this.warn=false, this.ok=false, this.dim=false});
 
   @override
   Widget build(BuildContext context) {
+    final Color col = err  ? Colors.redAccent
+                    : warn ? Colors.orange
+                    : ok   ? Colors.greenAccent
+                    : dim  ? Colors.white30
+                           : Colors.white;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 96,
+            width: 88,
             child: Text(label,
-                style: const TextStyle(
-                    color: Colors.white38, fontSize: 11, fontFamily: 'monospace')),
+                style: const TextStyle(color: Colors.white38, fontSize: 10.5, fontFamily: 'monospace')),
           ),
           Expanded(
             child: Text(value,
                 style: TextStyle(
-                    color: isError ? Colors.redAccent : Colors.white,
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    fontWeight: isError ? FontWeight.bold : FontWeight.normal),
-                overflow: TextOverflow.fade,
-                maxLines: 3),
+                  color: col, fontSize: 10.5, fontFamily: 'monospace',
+                  fontWeight: (err || warn) ? FontWeight.bold : FontWeight.normal,
+                ),
+                maxLines: 4, overflow: TextOverflow.fade),
           ),
         ],
       ),
     );
   }
+}
+
+class _Div extends StatelessWidget {
+  const _Div();
+  @override
+  Widget build(BuildContext context) =>
+      const Divider(height: 8, thickness: 0.4, color: Colors.white12);
 }
