@@ -70,7 +70,12 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
           title: Row(children: [
             _StageChip(d?.stage, stalled: _stalled),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
+            if ((d?.attempt ?? 1) > 1)
+              _Badge('#${d!.attempt}', Colors.amber),
+            if ((d?.blacklistCount ?? 0) > 0)
+              _Badge('✕${d!.blacklistCount}', Colors.orange),
+            const SizedBox(width: 6),
             Expanded(
               child: Text(
                 d?.videoId ?? '—',
@@ -79,14 +84,7 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
               ),
             ),
             if (_stalled)
-              const Text('⏱ STALL',
-                  style: TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold)),
-            if ((d?.retryCount ?? 0) > 0)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: Text('↺${d!.retryCount}',
-                    style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
-              ),
+              const Text('⏱', style: TextStyle(color: Colors.orange, fontSize: 13)),
           ]),
           children: [_buildBody(d)],
         ),
@@ -100,66 +98,56 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Stage ────────────────────────────────────────────────────────────
-        _R('stage',     '${d.stageName}  (+${d.stageAge.inSeconds}s)'),
-        _R('stage@',    _fmt(d.stageEnteredAt), dim: true),
+        // ── Stage / Attempt ──────────────────────────────────────────────────
+        _R('stage',     '${d.stage.name}  (+${d.stageAge.inSeconds}s)'),
+        _R('attempt',   '${d.attempt}'),
+        _R('candidate', d.candidateKey),
+        _R('blacklisted', '${d.blacklistCount}', warn: d.blacklistCount > 0),
+        _R('failureSrc', d.failureSource.name, warn: d.failureSource != FailureSource.none),
 
         const _Div(),
 
-        // ── Resolution ───────────────────────────────────────────────────────
+        // ── Resolution timing ────────────────────────────────────────────────
         _R('resolve↑',  d.resolveStartedAt  != null ? _fmt(d.resolveStartedAt!)  : '—', dim: true),
         _R('resolve↓',  d.resolveFinishedAt != null ? _fmt(d.resolveFinishedAt!) : '—', dim: true),
         _R('resolveMs', elapsed != null ? '${elapsed.inMilliseconds} ms' : '—'),
-        _R('workerHTTP',d.workerHttpStatus == 0 ? '—' : '${d.workerHttpStatus}',
+        _R('workerHTTP', d.workerHttpStatus == 0 ? '—' : '${d.workerHttpStatus}',
             warn: d.workerHttpStatus != 0 && d.workerHttpStatus != 200),
-        if (d.workerErrorBody != null)
-          _R('workerErr', d.workerErrorBody!, err: true),
+        if (d.workerErrorBody != null) _R('workerErr', d.workerErrorBody!, err: true),
 
         const _Div(),
 
         // ── Stream info ──────────────────────────────────────────────────────
-        _R('client',    d.clientUsed),
-        _R('itag',      d.itag == 0 ? '—' : '${d.itag}'),
-        _R('sourceType',d.sourceType),
-        _R('mimeType',  d.mimeType),
-        _R('urlHost',   d.urlHost),
-        _R('expiresAt', _fmtExpiry(d.expiresAt), warn: d.isUrlExpired),
+        _R('client',     d.clientUsed),
+        _R('itag',       d.itag == 0 ? '—' : '${d.itag}'),
+        _R('sourceType', d.sourceType),
+        _R('mimeType',   d.mimeType),
+        _R('urlHost',    d.urlHost),
+        _R('expiresAt',  _fmtExpiry(d.expiresAt), warn: d.isUrlExpired),
 
         const _Div(),
 
         // ── setAudioSource ───────────────────────────────────────────────────
-        _R('setSrc?',   d.setSourceCalled ? 'called' : 'not yet'),
-        _R('setSrcOK',  d.setSourceSucceeded ? '✓ yes' : '—', ok: d.setSourceSucceeded),
-        if (d.setSourceError != null)
-          _R('setSrcErr', d.setSourceError!, err: true),
+        _R('setSrc?',  d.setSourceCalled    ? 'called' : 'not yet'),
+        _R('setSrcOK', d.setSourceSucceeded ? '✓ yes'  : '—', ok: d.setSourceSucceeded),
+        if (d.setSourceError != null) _R('setSrcErr', d.setSourceError!, err: true),
 
-        // ── play() ────────────────────────────────────────────────────────────
-        _R('play()?',   d.playCalled ? 'called' : 'not yet'),
-        _R('playOK',    d.playSucceeded ? '✓ yes' : '—', ok: d.playSucceeded),
-        if (d.playError != null)
-          _R('playErr',  d.playError!, err: true),
+        // ── play() ─────────────────────────────────────────────────────────
+        _R('play()?', d.playCalled    ? 'called' : 'not yet'),
+        _R('playOK',  d.playSucceeded ? '✓ yes'  : '—', ok: d.playSucceeded),
+        if (d.playError != null) _R('playErr', d.playError!, err: true),
 
         const _Div(),
 
-        // ── Live player state ─────────────────────────────────────────────────
-        _R('exoState',  d.processingState),
-        _R('playing',   d.isPlaying ? '▶  true' : '⏸  false'),
-        _R('position',  _dur(d.position)),
-        _R('buffered',  _dur(d.buffered)),
-        _R('duration',  _dur(d.duration)),
+        // ── Live player ───────────────────────────────────────────────────────
+        _R('exoState', d.processingState),
+        _R('playing',  d.isPlaying ? '▶  true' : '⏸  false'),
+        _R('position', _dur(d.position)),
+        _R('buffered', _dur(d.buffered)),
+        _R('duration', _dur(d.duration)),
 
-        // ── Retry info ────────────────────────────────────────────────────────
-        if (d.retryCount > 0) ...[
-          const _Div(),
-          _R('retries',   '${d.retryCount}'),
-          if (d.retryClientUsed != null)
-            _R('retryClient', d.retryClientUsed!),
-        ],
-
-        // ── Stall / false-playing warning ─────────────────────────────────────
-        if (d.stage == PlaybackStage.falsePlayingDetected ||
-            d.stage == PlaybackStage.failedBuffering      ||
-            d.stage == PlaybackStage.fallbackRetryFailed)
+        // ── Warning banners ──────────────────────────────────────────────────
+        if (_isBannerStage(d.stage))
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Container(
@@ -169,16 +157,13 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(color: Colors.orange),
               ),
-              child: Text(
-                _stageWarning(d.stage),
+              child: Text(_stageWarning(d.stage, d),
                 style: const TextStyle(
                   color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold,
-                ),
-              ),
+                )),
             ),
           ),
 
-        // ── Error ─────────────────────────────────────────────────────────────
         if (d.lastError != null) ...[
           const _Div(),
           _R('❌ error', d.lastError!, err: true),
@@ -187,20 +172,27 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     );
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
+  bool _isBannerStage(PlaybackStage s) => const {
+    PlaybackStage.falsePlayingDetected,
+    PlaybackStage.failedBuffering,
+    PlaybackStage.fallbackRetryFailed,
+  }.contains(s);
 
-  String _stageWarning(PlaybackStage s) {
+  String _stageWarning(PlaybackStage s, PlaybackDiagnostics d) {
     switch (s) {
-      case PlaybackStage.falsePlayingDetected: return '⚠ FALSE PLAYING — play() called but ExoPlayer idle + pos=0 + buf=0';
-      case PlaybackStage.failedBuffering:      return '⚠ BUFFERING STALL — play() returned but no bytes moved in 3s';
-      case PlaybackStage.fallbackRetryFailed:  return '⚠ FALLBACK RETRY FAILED — both original + retry client produced no bytes';
+      case PlaybackStage.falsePlayingDetected:
+        return '⚠ FALSE PLAYING — play() called but ExoPlayer idle + pos=0 + buf=0';
+      case PlaybackStage.failedBuffering:
+        return '⚠ BUFFERING STALL — no bytes in 3s (${d.failureSource.name} failure)';
+      case PlaybackStage.fallbackRetryFailed:
+        return '⚠ ALL RETRIES FAILED — ${d.blacklistCount} candidate(s) blacklisted, no bytes from any';
       default: return '';
     }
   }
 
   Color _border(PlaybackDiagnostics? d) {
     if (d == null) return Colors.white24;
-    if (_stalled) return Colors.orange;
+    if (_stalled)  return Colors.orange;
     switch (d.stage) {
       case PlaybackStage.playing:
       case PlaybackStage.fallbackRetrySucceeded:    return Colors.greenAccent;
@@ -225,15 +217,10 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
-
   static String _fmt(DateTime dt) {
-    final h  = dt.hour.toString().padLeft(2, '0');
-    final m  = dt.minute.toString().padLeft(2, '0');
-    final s  = dt.second.toString().padLeft(2, '0');
-    final ms = dt.millisecond.toString().padLeft(3, '0');
-    return '$h:$m:$s.$ms';
+    return '${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}:'
+        '${dt.second.toString().padLeft(2,'0')}.${dt.millisecond.toString().padLeft(3,'0')}';
   }
-
   static String _fmtExpiry(int expiresAt) {
     if (expiresAt == 0) return '—';
     final exp  = DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000);
@@ -246,7 +233,21 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
   }
 }
 
-// ── Sub-widgets ────────────────────────────────────────────────────────────────
+// ── Sub-widgets ──────────────────────────────────────────────────────────────
+
+class _Badge extends StatelessWidget {
+  final String text;
+  final Color  color;
+  const _Badge(this.text, this.color);
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(right: 4),
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(5)),
+    child: Text(text, style: const TextStyle(
+        color: Colors.black87, fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+  );
+}
 
 class _StageChip extends StatelessWidget {
   final PlaybackStage? stage;
@@ -278,14 +279,14 @@ class _StageChip extends StatelessWidget {
       }
     }
     return Container(
+      margin: const EdgeInsets.only(right: 6),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-      child: Text(
-        stage?.name ?? 'idle',
-        style: const TextStyle(
-          color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'monospace',
-        ),
-      ),
+      child: Text(stage?.name ?? 'idle',
+          style: const TextStyle(
+            color: Colors.white, fontSize: 10,
+            fontWeight: FontWeight.bold, fontFamily: 'monospace',
+          )),
     );
   }
 }
@@ -304,24 +305,14 @@ class _R extends StatelessWidget {
                            : Colors.white;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1.5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 88,
-            child: Text(label,
-                style: const TextStyle(color: Colors.white38, fontSize: 10.5, fontFamily: 'monospace')),
-          ),
-          Expanded(
-            child: Text(value,
-                style: TextStyle(
-                  color: col, fontSize: 10.5, fontFamily: 'monospace',
-                  fontWeight: (err || warn) ? FontWeight.bold : FontWeight.normal,
-                ),
-                maxLines: 4, overflow: TextOverflow.fade),
-          ),
-        ],
-      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(width: 88, child: Text(label,
+            style: const TextStyle(color: Colors.white38, fontSize: 10.5, fontFamily: 'monospace'))),
+        Expanded(child: Text(value,
+            style: TextStyle(color: col, fontSize: 10.5, fontFamily: 'monospace',
+                fontWeight: (err || warn) ? FontWeight.bold : FontWeight.normal),
+            maxLines: 4, overflow: TextOverflow.fade)),
+      ]),
     );
   }
 }
