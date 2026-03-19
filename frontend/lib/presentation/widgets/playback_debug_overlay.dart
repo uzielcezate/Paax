@@ -4,7 +4,6 @@ import '../../core/playback/playback_diagnostics.dart';
 
 // ============================================================================
 // TEMPORARY DEBUG OVERLAY — remove before production release.
-// Injected into player_screen.dart (debug builds only).
 // ============================================================================
 
 class PlaybackDebugOverlay extends StatefulWidget {
@@ -24,16 +23,16 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     super.initState();
     _diag = PlaybackDiagnosticsNotifier.value;
     PlaybackDiagnosticsNotifier.addListener(_onDiag);
-    // Rebuild every second so stageAge and stall detection stay live.
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       final d = _diag;
       if (d == null) { setState(() {}); return; }
-      final stuckStages = {
+      const stuckStages = {
         PlaybackStage.resolving,
         PlaybackStage.settingSource,
         PlaybackStage.buffering,
         PlaybackStage.stalledAfterResolved,
+        PlaybackStage.fallbackRetryStarted,
       };
       setState(() {
         _stalled = stuckStages.contains(d.stage) && d.stageAge.inSeconds >= 5;
@@ -43,10 +42,7 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
 
   void _onDiag() {
     if (!mounted) return;
-    setState(() {
-      _diag    = PlaybackDiagnosticsNotifier.value;
-      _stalled = false;
-    });
+    setState(() { _diag = PlaybackDiagnosticsNotifier.value; _stalled = false; });
   }
 
   @override
@@ -62,7 +58,7 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.88),
+        color: Colors.black.withOpacity(0.90),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _border(d), width: 1.8),
       ),
@@ -85,6 +81,12 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
             if (_stalled)
               const Text('⏱ STALL',
                   style: TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold)),
+            if ((d?.retryCount ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Text('↺${d!.retryCount}',
+                    style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
           ]),
           children: [_buildBody(d)],
         ),
@@ -98,50 +100,44 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Stage + timing ─────────────────────────────────────────────────
-        _R('stage',
-            '${d.stageName}  (+${d.stageAge.inSeconds}s in stage)'),
-        _R('stage@',
-            _fmt(d.stageEnteredAt),
-            dim: true),
+        // ── Stage ────────────────────────────────────────────────────────────
+        _R('stage',     '${d.stageName}  (+${d.stageAge.inSeconds}s)'),
+        _R('stage@',    _fmt(d.stageEnteredAt), dim: true),
 
         const _Div(),
 
-        // ── Resolution ──────────────────────────────────────────────────────
-        _R('resolve↑', d.resolveStartedAt != null ? _fmt(d.resolveStartedAt!) : '—', dim: true),
-        _R('resolve↓', d.resolveFinishedAt != null ? _fmt(d.resolveFinishedAt!) : '—', dim: true),
-        _R('resolveMs',
-            elapsed != null ? '${elapsed.inMilliseconds} ms' : '—'),
-        _R('workerHTTP',
-            d.workerHttpStatus == 0 ? '—' : '${d.workerHttpStatus}',
+        // ── Resolution ───────────────────────────────────────────────────────
+        _R('resolve↑',  d.resolveStartedAt  != null ? _fmt(d.resolveStartedAt!)  : '—', dim: true),
+        _R('resolve↓',  d.resolveFinishedAt != null ? _fmt(d.resolveFinishedAt!) : '—', dim: true),
+        _R('resolveMs', elapsed != null ? '${elapsed.inMilliseconds} ms' : '—'),
+        _R('workerHTTP',d.workerHttpStatus == 0 ? '—' : '${d.workerHttpStatus}',
             warn: d.workerHttpStatus != 0 && d.workerHttpStatus != 200),
         if (d.workerErrorBody != null)
           _R('workerErr', d.workerErrorBody!, err: true),
 
         const _Div(),
 
-        // ── Resolved info ────────────────────────────────────────────────────
-        _R('sourceType', d.sourceType),
-        _R('mimeType',   d.mimeType),
-        _R('urlHost',    d.urlHost),
-        _R('expiresAt',  _fmtExpiry(d.expiresAt),
-            warn: d.isUrlExpired),
+        // ── Stream info ──────────────────────────────────────────────────────
+        _R('client',    d.clientUsed),
+        _R('itag',      d.itag == 0 ? '—' : '${d.itag}'),
+        _R('sourceType',d.sourceType),
+        _R('mimeType',  d.mimeType),
+        _R('urlHost',   d.urlHost),
+        _R('expiresAt', _fmtExpiry(d.expiresAt), warn: d.isUrlExpired),
 
         const _Div(),
 
-        // ── setAudioSource ────────────────────────────────────────────────────
-        _R('setSrc?',    d.setSourceCalled ? 'called' : 'not yet'),
-        _R('setSrcOK',   d.setSourceSucceeded ? '✓ yes' : '—',
-            ok: d.setSourceSucceeded),
+        // ── setAudioSource ───────────────────────────────────────────────────
+        _R('setSrc?',   d.setSourceCalled ? 'called' : 'not yet'),
+        _R('setSrcOK',  d.setSourceSucceeded ? '✓ yes' : '—', ok: d.setSourceSucceeded),
         if (d.setSourceError != null)
           _R('setSrcErr', d.setSourceError!, err: true),
 
         // ── play() ────────────────────────────────────────────────────────────
-        _R('play()?',    d.playCalled ? 'called' : 'not yet'),
-        _R('playOK',     d.playSucceeded ? '✓ yes' : '—',
-            ok: d.playSucceeded),
+        _R('play()?',   d.playCalled ? 'called' : 'not yet'),
+        _R('playOK',    d.playSucceeded ? '✓ yes' : '—', ok: d.playSucceeded),
         if (d.playError != null)
-          _R('playErr', d.playError!, err: true),
+          _R('playErr',  d.playError!, err: true),
 
         const _Div(),
 
@@ -152,33 +148,37 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
         _R('buffered',  _dur(d.buffered)),
         _R('duration',  _dur(d.duration)),
 
-        // ── False-playing warning ─────────────────────────────────────────────
+        // ── Retry info ────────────────────────────────────────────────────────
+        if (d.retryCount > 0) ...[
+          const _Div(),
+          _R('retries',   '${d.retryCount}'),
+          if (d.retryClientUsed != null)
+            _R('retryClient', d.retryClientUsed!),
+        ],
+
+        // ── Stall / false-playing warning ─────────────────────────────────────
         if (d.stage == PlaybackStage.falsePlayingDetected ||
-            d.stage == PlaybackStage.failedBuffering)
+            d.stage == PlaybackStage.failedBuffering      ||
+            d.stage == PlaybackStage.fallbackRetryFailed)
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(8),
+              width: double.infinity, padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.18),
+                color: Colors.orange.withOpacity(0.14),
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(color: Colors.orange),
               ),
               child: Text(
-                d.stage == PlaybackStage.falsePlayingDetected
-                    ? '⚠ FALSE PLAYING — play() was called but ExoPlayer reports idle + pos=0 + buf=0'
-                    : '⚠ FAILED BUFFERING — play() called but no bytes moved within 3s',
+                _stageWarning(d.stage),
                 style: const TextStyle(
-                  color: Colors.orange,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
+                  color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold,
                 ),
               ),
             ),
           ),
 
-        // ── Last error ────────────────────────────────────────────────────────
+        // ── Error ─────────────────────────────────────────────────────────────
         if (d.lastError != null) ...[
           const _Div(),
           _R('❌ error', d.lastError!, err: true),
@@ -189,27 +189,34 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
+  String _stageWarning(PlaybackStage s) {
+    switch (s) {
+      case PlaybackStage.falsePlayingDetected: return '⚠ FALSE PLAYING — play() called but ExoPlayer idle + pos=0 + buf=0';
+      case PlaybackStage.failedBuffering:      return '⚠ BUFFERING STALL — play() returned but no bytes moved in 3s';
+      case PlaybackStage.fallbackRetryFailed:  return '⚠ FALLBACK RETRY FAILED — both original + retry client produced no bytes';
+      default: return '';
+    }
+  }
+
   Color _border(PlaybackDiagnostics? d) {
     if (d == null) return Colors.white24;
     if (_stalled) return Colors.orange;
     switch (d.stage) {
       case PlaybackStage.playing:
-        return Colors.greenAccent;
+      case PlaybackStage.fallbackRetrySucceeded:    return Colors.greenAccent;
       case PlaybackStage.failedResolveTimeout:
       case PlaybackStage.failedResolveHttp:
       case PlaybackStage.failedSetSource:
       case PlaybackStage.failedBuffering:
       case PlaybackStage.falsePlayingDetected:
-        return Colors.redAccent;
+      case PlaybackStage.fallbackRetryFailed:       return Colors.redAccent;
       case PlaybackStage.stalledAfterResolved:
-        return Colors.orange;
+      case PlaybackStage.fallbackRetryStarted:      return Colors.orange;
       case PlaybackStage.buffering:
-        return Colors.amber;
+      case PlaybackStage.settingSource:             return Colors.amber;
       case PlaybackStage.resolved:
-      case PlaybackStage.sourceReady:
-        return Colors.blue;
-      default:
-        return Colors.white24;
+      case PlaybackStage.sourceReady:               return Colors.blue;
+      default:                                      return Colors.white24;
     }
   }
 
@@ -253,18 +260,21 @@ class _StageChip extends StatelessWidget {
       bg = Colors.orange;
     } else {
       switch (stage) {
-        case PlaybackStage.playing: bg = Colors.green.shade700; break;
+        case PlaybackStage.playing:
+        case PlaybackStage.fallbackRetrySucceeded:    bg = Colors.green.shade700;      break;
         case PlaybackStage.failedResolveTimeout:
         case PlaybackStage.failedResolveHttp:
         case PlaybackStage.failedSetSource:
         case PlaybackStage.failedBuffering:
-        case PlaybackStage.falsePlayingDetected: bg = Colors.red.shade700; break;
-        case PlaybackStage.stalledAfterResolved: bg = Colors.deepOrange.shade700; break;
+        case PlaybackStage.falsePlayingDetected:
+        case PlaybackStage.fallbackRetryFailed:       bg = Colors.red.shade700;        break;
+        case PlaybackStage.stalledAfterResolved:
+        case PlaybackStage.fallbackRetryStarted:      bg = Colors.deepOrange.shade700; break;
         case PlaybackStage.buffering:
-        case PlaybackStage.settingSource:        bg = Colors.amber.shade800; break;
+        case PlaybackStage.settingSource:             bg = Colors.amber.shade800;      break;
         case PlaybackStage.resolved:
-        case PlaybackStage.sourceReady:          bg = Colors.blue.shade700; break;
-        default:                                 bg = Colors.grey.shade700;
+        case PlaybackStage.sourceReady:               bg = Colors.blue.shade700;       break;
+        default:                                      bg = Colors.grey.shade700;
       }
     }
     return Container(
@@ -281,12 +291,8 @@ class _StageChip extends StatelessWidget {
 }
 
 class _R extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool err;
-  final bool warn;
-  final bool ok;
-  final bool dim;
+  final String label, value;
+  final bool err, warn, ok, dim;
   const _R(this.label, this.value, {this.err=false, this.warn=false, this.ok=false, this.dim=false});
 
   @override
