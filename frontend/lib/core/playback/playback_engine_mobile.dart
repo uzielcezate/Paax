@@ -417,12 +417,18 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (attempt >= _kMaxAttempts) {
       debugPrint('[PLAYER RETRY] $videoId max attempts ($attempt/$_kMaxAttempts) reached');
       if (kDebugMode) {
-        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+        // Preserve existing diagnostic snapshot — just flip stage and error.
+        final prev = PlaybackDiagnosticsNotifier.value;
+        PlaybackDiagnosticsNotifier.value = (prev ?? PlaybackDiagnostics.atStage(
           PlaybackStage.fallbackRetryFailed,
-          videoId:        videoId, attempt: attempt,
+          videoId: videoId, attempt: attempt,
           blacklistCount: _blacklist.count(videoId),
+        )).copyWith(
+          stage:          PlaybackStage.fallbackRetryFailed,
+          stageEnteredAt: DateTime.now(),
           failureSource:  source,
-          lastError:      'All $_kMaxAttempts attempts exhausted. Last: $reason',
+          blacklistCount: _blacklist.count(videoId),
+          lastError: 'All $_kMaxAttempts attempts exhausted. Last: $reason',
         );
       }
       return;
@@ -497,14 +503,23 @@ class PlaybackEngineImpl implements PlaybackEngine {
       freshResolved = await _resolver.resolve(videoId, excludeClients: failedClients);
     } catch (e) {
       debugPrint('[PLAYER RETRY FAIL] $videoId re-resolve failed: $e');
-      _emitResolveFailure(videoId, e, freshStart, attempt: attempt);
+      // _emitResolveFailure sets all worker metadata (httpStatus, attemptedClients,
+      // clientErrors, excludedClients). We then upgrade the stage to fallbackRetryFailed
+      // using copyWith so none of that data is lost.
+      _emitResolveFailure(videoId, e, freshStart,
+          attempt: attempt, excludedClients: failedClients);
       if (kDebugMode) {
-        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+        final prev = PlaybackDiagnosticsNotifier.value;
+        PlaybackDiagnosticsNotifier.value = (prev ?? PlaybackDiagnostics.atStage(
           PlaybackStage.fallbackRetryFailed,
-          videoId:        videoId, attempt: attempt,
+          videoId: videoId, attempt: attempt,
           blacklistCount: _blacklist.count(videoId),
+        )).copyWith(
+          stage:          PlaybackStage.fallbackRetryFailed,
+          stageEnteredAt: DateTime.now(),
           failureSource:  FailureSource.resolve,
-          lastError:      'Re-resolve failed exclude=[${failedClients.join(',')}]: $e',
+          blacklistCount: _blacklist.count(videoId),
+          lastError: 'Re-resolve failed exclude=[${failedClients.join(',')}]: $e',
         );
       }
       return;
@@ -523,12 +538,19 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (nextCandidate == null) {
       debugPrint('[PLAYER RETRY FAIL] $videoId re-resolve returned only blacklisted candidates');
       if (kDebugMode) {
-        PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
+        // Preserve the resolved metadata (attemptedClients, chosen, candidates) —
+        // just upgrade the stage so the overlay keeps all the Worker response info.
+        final prev = PlaybackDiagnosticsNotifier.value;
+        PlaybackDiagnosticsNotifier.value = (prev ?? PlaybackDiagnostics.atStage(
           PlaybackStage.fallbackRetryFailed,
-          videoId:       videoId, attempt: attempt,
+          videoId: videoId, attempt: attempt,
           blacklistCount: _blacklist.count(videoId),
+        )).copyWith(
+          stage:          PlaybackStage.fallbackRetryFailed,
+          stageEnteredAt: DateTime.now(),
           failureSource:  FailureSource.resolve,
-          lastError:     'No new candidate after re-resolve with different client',
+          blacklistCount: _blacklist.count(videoId),
+          lastError: 'No new candidate after re-resolve — all from same blacklisted client',
         );
       }
       return;
@@ -614,16 +636,21 @@ class PlaybackEngineImpl implements PlaybackEngine {
     );
   }
 
-  void _emitResolveFailure(String videoId, Object e, DateTime resolveStart,
-      {required int attempt}) {
+  void _emitResolveFailure(
+    String   videoId,
+    Object   e,
+    DateTime resolveStart, {
+    required int          attempt,
+    List<String>          excludedClients = const [],
+  }) {
     if (!kDebugMode) return;
     final isTimeout = e.toString().toLowerCase().contains('timeout');
     final re    = e is MediaResolveException ? e : null;
     final stage = isTimeout
         ? PlaybackStage.failedResolveTimeout
         : PlaybackStage.failedResolveHttp;
-    // Build per-client error display from exception fields
     final clientErrors = re?.clientErrors ?? [];
+    // Build compact per-client error string for workerErrorBody
     final clientErrorStr = clientErrors.isNotEmpty
         ? clientErrors.map((e) => '${e['client']}: ${e['code']}').join(' | ')
         : null;
@@ -636,7 +663,11 @@ class PlaybackEngineImpl implements PlaybackEngine {
       resolveFinishedAt:  DateTime.now(),
       workerHttpStatus:   re?.httpStatus ?? 0,
       workerErrorBody:    clientErrorStr ?? re?.errorBody,
-      attemptedClients:   re?.attemptedClients ?? [],
+      // Prefer fields from Worker response; fallback to empty list
+      attemptedClients:   (re != null && re.attemptedClients.isNotEmpty)
+                              ? re.attemptedClients
+                              : [],
+      excludedClients:    excludedClients,
       clientErrors:       clientErrors,
       lastError:          e.toString(),
       failureSource:      FailureSource.resolve,
