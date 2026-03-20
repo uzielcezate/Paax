@@ -4,17 +4,14 @@ import 'package:http/http.dart' as http;
 import 'stream_cache.dart';
 
 // ---------------------------------------------------------------------------
-// StreamCandidate — one playable format URL from a resolved client
+// StreamCandidate
 // ---------------------------------------------------------------------------
-
-/// A single playable stream candidate returned by the Worker.
-/// Multiple candidates can come from the same Innertube client.
 class StreamCandidate {
   final String url;
-  final int    itag;       // e.g. 140 (audio/mp4), 18 (muxed)
-  final String mimeType;  // e.g. 'audio/mp4', 'video/mp4'
-  final String sourceType; // 'audioOnly' | 'muxed'
-  final String clientUsed; // e.g. 'ANDROID'
+  final int    itag;
+  final String mimeType;
+  final String sourceType;
+  final String clientUsed;
   final int    bitrate;
 
   const StreamCandidate({
@@ -26,16 +23,11 @@ class StreamCandidate {
     this.bitrate = 0,
   });
 
-  /// Unique key used by [CandidateBlacklist] to track failures.
   String get key => '$clientUsed:$itag';
 
   Map<String, dynamic> toJson() => {
-    'url':        url,
-    'itag':       itag,
-    'mimeType':   mimeType,
-    'sourceType': sourceType,
-    'clientUsed': clientUsed,
-    'bitrate':    bitrate,
+    'url': url, 'itag': itag, 'mimeType': mimeType,
+    'sourceType': sourceType, 'clientUsed': clientUsed, 'bitrate': bitrate,
   };
 
   factory StreamCandidate.fromJson(Map<String, dynamic> j, String clientUsed) =>
@@ -53,9 +45,8 @@ class StreamCandidate {
 }
 
 // ---------------------------------------------------------------------------
-// ResolvedStream — value object returned by MediaResolver
+// ResolvedStream
 // ---------------------------------------------------------------------------
-
 class ResolvedStream {
   final String url;
   final String mimeType;
@@ -64,8 +55,14 @@ class ResolvedStream {
   final int    expiresAt;
   final String clientUsed;
   final int    itag;
-  /// All playable candidates from the winning client (includes primary).
   final List<StreamCandidate> candidates;
+
+  // Worker v6 debug fields
+  final List<String> attemptedClients;
+  final List<String> excludedClients;
+  final String       resolvePath;    // 'fresh' | 'cache'
+  final int          candidateCount;
+  final List<Map<String, String>> clientErrors;
 
   const ResolvedStream({
     required this.url,
@@ -76,6 +73,11 @@ class ResolvedStream {
     this.clientUsed = '?',
     this.itag       = 0,
     this.candidates = const [],
+    this.attemptedClients = const [],
+    this.excludedClients  = const [],
+    this.resolvePath      = '',
+    this.candidateCount   = 0,
+    this.clientErrors     = const [],
   });
 
   bool get isExpired {
@@ -85,35 +87,21 @@ class ResolvedStream {
 
   @override
   String toString() =>
-      'ResolvedStream(client=$clientUsed itag=$itag source=$sourceType '
-      'candidates=${candidates.length} expires=$expiresAt)';
+      'ResolvedStream(client=$clientUsed itag=$itag candidates=${candidates.length} '
+      'attempted=${attemptedClients.join(",")} path=$resolvePath)';
 }
 
 // ---------------------------------------------------------------------------
 // MediaResolver
 // ---------------------------------------------------------------------------
-
 class MediaResolver {
   MediaResolver({StreamCache? cache}) : _cache = cache ?? StreamCache.instance;
 
   final StreamCache _cache;
-
   static const String _workerBase    = 'https://stream.paaxmusic.app';
   static const Duration _httpTimeout = Duration(seconds: 15);
   static const Map<String, String> _workerHeaders = {'Accept': 'application/json'};
 
-  // ---------------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------------
-
-  /// Resolves a direct CDN stream URL for [videoId].
-  ///
-  /// [preferredClient] — Worker will try this client first (bypasses CF cache)
-  /// [excludeClients]  — Worker will skip these clients entirely
-  ///
-  /// On failedBuffering the engine calls this again with [excludeClients] set
-  /// to the set of clients that produced no bytes, forcing a genuinely new
-  /// Innertube client to be tried.
   Future<ResolvedStream> resolve(
     String videoId, {
     String?       preferredClient,
@@ -124,37 +112,31 @@ class MediaResolver {
     final forceResolve = preferredClient != null ||
         (excludeClients != null && excludeClients.isNotEmpty);
 
-    // --- 1. Cache hit (skip for forced resolves) ─────────────────────────────
+    // Cache hit
     if (!forceResolve) {
       final cached = await _cache.get(videoId);
       if (cached != null) {
         if (!cached.isExpired) {
-          debugPrint('[MEDIA CACHE HIT] $videoId client=${cached.clientUsed} '
-              'itag=${cached.itag} candidates=${cached.candidates.length}');
+          debugPrint('[MEDIA CACHE HIT] $videoId client=${cached.clientUsed} itag=${cached.itag}');
           return cached;
         }
         await _cache.invalidate(videoId);
       }
     }
 
-    // --- 2. Build Worker URL ─────────────────────────────────────────────────
+    // Build URL
     final qp = <String, String>{};
-    if (preferredClient != null) qp['client'] = preferredClient;
-    if (excludeClients != null && excludeClients.isNotEmpty) {
-      qp['exclude'] = excludeClients.join(',');
-    }
-
+    if (preferredClient != null)                                qp['client']  = preferredClient;
+    if (excludeClients != null && excludeClients.isNotEmpty)   qp['exclude'] = excludeClients.join(',');
     final endpoint = Uri.parse('$_workerBase/$videoId')
         .replace(queryParameters: qp.isNotEmpty ? qp : null);
 
     debugPrint('[MEDIA RESOLVE START] $videoId → $endpoint');
 
-    // --- 3. HTTP request ─────────────────────────────────────────────────────
+    // HTTP
     final http.Response response;
     try {
-      response = await http
-          .get(endpoint, headers: _workerHeaders)
-          .timeout(_httpTimeout);
+      response = await http.get(endpoint, headers: _workerHeaders).timeout(_httpTimeout);
     } catch (e) {
       throw MediaResolveException('Network error resolving stream: $e');
     }
@@ -162,23 +144,36 @@ class MediaResolver {
     if (response.statusCode != 200) {
       String code = 'WORKER_ERROR';
       String? errorBody;
+      List<String>            attemptedClients = [];
+      List<Map<String, String>> clientErrors  = [];
       try {
         final b = jsonDecode(response.body) as Map<String, dynamic>;
-        code      = (b['code']    as String?) ?? code;
-        errorBody = (b['message'] as String?) ?? (b['error'] as String?);
+        code             = (b['code']             as String?) ?? code;
+        errorBody        = (b['error']             as String?);
+        attemptedClients = (b['attemptedClients']  as List?)?.cast<String>() ?? [];
+        final rawErrs    =  b['clientErrors']      as List? ?? [];
+        clientErrors     = rawErrs.map((e) {
+          final m = e as Map;
+          return {'client': m['client']?.toString() ?? '', 'code': m['code']?.toString() ?? '', 'msg': m['msg']?.toString() ?? ''};
+        }).toList();
       } catch (_) {
         errorBody = response.body.length > 120
             ? '${response.body.substring(0, 120)}…'
             : response.body;
       }
-      debugPrint('[MEDIA RESOLVE FAIL] $videoId HTTP=${response.statusCode} code=$code');
+      final clientErrorStr = clientErrors.map((e) => '${e['client']}:${e['code']}').join(', ');
+      debugPrint('[MEDIA RESOLVE FAIL] $videoId HTTP=${response.statusCode} code=$code '
+          'attempted=[${attemptedClients.join(',')}] clientErrors={$clientErrorStr}');
       throw MediaResolveException(
         _workerErrorMessage(code, response.statusCode),
-        code: code, httpStatus: response.statusCode, errorBody: errorBody,
+        code: code, httpStatus: response.statusCode,
+        errorBody: errorBody,
+        attemptedClients: attemptedClients,
+        clientErrors: clientErrors,
       );
     }
 
-    // --- 4. Parse JSON ───────────────────────────────────────────────────────
+    // Parse JSON
     final Map<String, dynamic> body;
     try {
       body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -197,59 +192,51 @@ class MediaResolver {
       throw const MediaResolveException('Stream resolver returned an empty URL');
     }
 
-    // Parse candidates array from Worker v5
+    // Parse candidates
     final rawCandidates = body['candidates'] as List<dynamic>? ?? [];
-    final candidates = rawCandidates.map((c) {
-      final m = c as Map<String, dynamic>;
-      return StreamCandidate.fromJson(m, clientUsed);
-    }).toList();
-
-    // If Worker didn't return candidates (old Worker version), synthesize one
+    final candidates = rawCandidates
+        .map((c) => StreamCandidate.fromJson(c as Map<String, dynamic>, clientUsed))
+        .toList();
     if (candidates.isEmpty) {
-      candidates.add(StreamCandidate(
-        url: cdnUrl, itag: itag, mimeType: mimeType,
-        sourceType: srcType, clientUsed: clientUsed,
-      ));
+      candidates.add(StreamCandidate(url: cdnUrl, itag: itag, mimeType: mimeType,
+          sourceType: srcType, clientUsed: clientUsed));
     }
 
+    // Parse Worker v6 debug fields
+    final attemptedClients = (body['attemptedClients'] as List?)?.cast<String>() ?? [];
+    final excludedClients  = (body['excludedClients']  as List?)?.cast<String>() ?? [];
+    final resolvePath      = body['resolvePath']     as String? ?? '';
+    final candidateCount   = (body['candidateCount'] as num?)?.toInt() ?? candidates.length;
+    final rawClientErrors  = body['clientErrors'] as List? ?? [];
+    final clientErrors     = rawClientErrors.map((e) {
+      final m = e as Map;
+      return {'client': m['client']?.toString() ?? '', 'code': m['code']?.toString() ?? '', 'msg': m['msg']?.toString() ?? ''};
+    }).toList();
+
     final resolved = ResolvedStream(
-      url:        cdnUrl,
-      mimeType:   mimeType,
-      sourceType: srcType,
-      resolvedAt: DateTime.now(),
-      expiresAt:  expiresAt,
-      clientUsed: clientUsed,
-      itag:       itag,
-      candidates: candidates,
+      url: cdnUrl, mimeType: mimeType, sourceType: srcType,
+      resolvedAt: DateTime.now(), expiresAt: expiresAt,
+      clientUsed: clientUsed, itag: itag, candidates: candidates,
+      attemptedClients: attemptedClients, excludedClients: excludedClients,
+      resolvePath: resolvePath, candidateCount: candidateCount,
+      clientErrors: clientErrors,
     );
 
     debugPrint('[MEDIA RESOLVE OK] $videoId client=$clientUsed itag=$itag '
-        'candidates=${candidates.length} expiresAt=$expiresAt');
+        'candidates=${candidates.length} attempted=${attemptedClients.join(",")} path=$resolvePath');
 
-    // --- 5. Cache (only for non-forced resolves) ─────────────────────────────
-    if (!forceResolve) {
-      await _cache.put(videoId, resolved);
-    }
-
+    if (!forceResolve) await _cache.put(videoId, resolved);
     return resolved;
   }
 
   Future<ResolvedStream> resolveForPrefetch(String videoId) async {
     final cached = await _cache.get(videoId);
     if (cached != null && !cached.isExpired) return cached;
-    try {
-      final r = await resolve(videoId);
-      debugPrint('[MEDIA PREFETCH] $videoId — cached');
-      return r;
-    } catch (e) {
-      debugPrint('[MEDIA PREFETCH] $videoId — failed: $e');
-      rethrow;
-    }
+    return resolve(videoId);
   }
 
   Future<void> invalidate(String videoId) => _cache.invalidate(videoId);
 
-  // ---------------------------------------------------------------------------
   String _workerErrorMessage(String code, int status) {
     const msgs = {
       'PLAYABILITY_UNAVAILABLE': 'This track is no longer available.',
@@ -271,12 +258,16 @@ class MediaResolveException implements Exception {
   final String? code;
   final int     httpStatus;
   final String? errorBody;
+  final List<String>              attemptedClients;
+  final List<Map<String, String>> clientErrors;
 
   const MediaResolveException(
     this.message, {
     this.code,
-    this.httpStatus = 0,
+    this.httpStatus       = 0,
     this.errorBody,
+    this.attemptedClients = const [],
+    this.clientErrors     = const [],
   });
 
   @override String toString() => message;
