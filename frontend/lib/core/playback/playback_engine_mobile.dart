@@ -10,32 +10,38 @@ import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
 // ---------------------------------------------------------------------------
-// PlaybackEngineImpl — diverse-retry, truthful state machine
+// PlaybackEngineImpl — diverse retry, truthful state machine
 // ---------------------------------------------------------------------------
 //
-// Retry strategy (max 3 total attempts = initial + 2 retries):
+// RETRY POLICY (max 4 total attempts):
+// ─────────────────────────────────────────────────────────────────────────────
+//   Attempt 1 — Initial resolve (uses ClientPreferenceCache hint)
+//     plays: candidates[0] from initial resolve (e.g. ANDROID:140)
+//     on stall:  blacklist ANDROID:140 → move to Attempt 2
 //
-//   Attempt 1 (initial):
-//     resolve(videoId, preferredClient: ClientPreferenceCache.preferred)
-//     → ResolvedStream{ url, clientUsed, itag, candidates: [...] }
-//     play(candidates[0])   ← primary candidate
-//     3s stall guard fires → blacklist("CLIENT:itag")
+//   Attempt 2 — ONE local same-client format fallback
+//     picks: next non-blacklisted candidate from same local list (ANDROID:139)
+//     on stall:  blacklist ANDROID:139 → move to Attempt 3
+//     *** THIS IS THE LAST LOCAL PICK ***  After attempt 2, we ALWAYS force
+//     a new-client re-resolve regardless of remaining local candidates.
 //
-//   Attempt 2 (local fallback — same client, different format):
-//     pick next non-blacklisted candidate from candidates[]
-//     → if found: play(nextCandidate) without a Worker call
-//     → if not found: go to Attempt 3
+//   Attempt 3 — Guaranteed new Innertube client
+//     calls: resolve(videoId, excludeClients: [ANDROID])
+//     → Worker skips ANDROID, picks ANDROID_VR / IOS / etc.
+//     plays: new candidate (e.g. ANDROID_VR:140)
+//     on stall:  blacklist → move to Attempt 4
 //
-//   Attempt 3 (new client — different Innertube client):
-//     resolve(videoId, excludeClients: blacklist.failedClients(videoId))
-//     → Worker skips blacklisted clients → returns different client's URL
-//     play(newCandidate)
-//     3s stall guard → fallbackRetryFailed (exhausted)
+//   Attempt 4 — Final new-client attempt
+//     (same pattern, excludes more clients)
+//     on stall:  fallbackRetryFailed (exhausted)
 //
-// "playing" stage set ONLY when playerStateStream confirms:
-//   ProcessingState.ready + isPlaying + (pos > 0 OR buf > 0)
+// KEY INVARIANT: _tryNextCandidate("force new client") is triggered when
+//   attempt >= 2, regardless of whether the local candidates list still has
+//   entries from the same client.  This guarantees attempt 3 is ALWAYS a
+//   different Innertube client.
 //
-// ExoPlayer headers: Android YouTube app fingerprint for direct CDN access.
+// "playing" stage set ONLY when ExoPlayer confirms bytes are moving:
+//   ProcessingState.ready/buffering + isPlaying + (pos>0 OR buf>0)
 // ---------------------------------------------------------------------------
 
 const _kMobileHeaders = {
@@ -48,7 +54,12 @@ const _kMobileHeaders = {
   'Connection':      'keep-alive',
 };
 
-const int _kMaxAttempts = 3;
+// Total attempts allowed: 1 initial + 1 same-client local + 2 new-client resolves
+const int _kMaxAttempts = 4;
+
+// After this many consecutive stalls, stop picking local candidates and force
+// a new-client re-resolve. Set to 1 = only attempt 1 uses local; attempt 2+ always new-client.
+const int _kLocalFallbackLimit = 1;
 
 class PlaybackEngineImpl implements PlaybackEngine {
   PlaybackEngineImpl({MediaResolver? resolver})
@@ -62,18 +73,16 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   bool _isDisposed = false;
   final _subs      = <StreamSubscription>[];
+  int  _loadId     = 0;
 
-  // Load-lock
-  int _loadId = 0;
-
-  // Candidate list from the most recent resolve — shared across retries
+  // Candidates from initial resolve only — cleared on each new load
   List<StreamCandidate> _candidates = [];
 
-  // ── PlaybackEngine streams ─────────────────────────────────────────────────
-  @override Stream<Duration> get positionStream   => _player.positionStream;
-  @override Stream<Duration> get durationStream   => _player.durationStream
+  // ── Streams ────────────────────────────────────────────────────────────────
+  @override Stream<Duration> get positionStream  => _player.positionStream;
+  @override Stream<Duration> get durationStream  => _player.durationStream
       .where((d) => d != null && d > Duration.zero).map((d) => d!);
-  @override Stream<bool>     get playingStream    => _player.playingStream;
+  @override Stream<bool>     get playingStream   => _player.playingStream;
   @override Stream<void>     get completionStream => _completionCtrl.stream;
 
   // ── initialize ─────────────────────────────────────────────────────────────
@@ -91,7 +100,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
         _player.play();
       }
     }));
-
     _subs.add(session.becomingNoisyEventStream.listen((_) {
       if (_isDisposed) return;
       _player.pause();
@@ -99,15 +107,15 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
     _subs.add(_player.playerStateStream.listen((state) {
       if (_isDisposed) return;
-      debugPrint('[PLAYER STATE] playing=${state.playing} state=${state.processingState.name}');
       if (state.processingState == ProcessingState.completed) {
         _completionCtrl.add(null);
         if (kDebugMode) {
           final prev = PlaybackDiagnosticsNotifier.value;
           if (prev != null) {
             PlaybackDiagnosticsNotifier.value = prev.copyWith(
-              stage: PlaybackStage.completed, processingState: 'completed',
-              isPlaying: false, stageEnteredAt: DateTime.now(),
+              stage: PlaybackStage.completed,
+              processingState: 'completed', isPlaying: false,
+              stageEnteredAt: DateTime.now(),
             );
           }
         }
@@ -144,22 +152,18 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (videoId.isEmpty) return;
     final myId = ++_loadId;
 
-    // Clear blacklist from any previous playback of this track
     _blacklist.clearForVideo(videoId);
     _candidates = [];
 
-    debugPrint('[PLAYER STOP] >>> $videoId');
     await _player.stop();
     if (_loadId != myId) return;
 
     final resolveStart = DateTime.now();
     if (kDebugMode) {
-      PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(
-        videoId, resolveStartedAt: resolveStart, attempt: 1,
-      );
+      PlaybackDiagnosticsNotifier.value =
+          PlaybackDiagnostics.resolving(videoId, resolveStartedAt: resolveStart, attempt: 1);
     }
 
-    // ── Resolve (attempt 1) ────────────────────────────────────────────────
     final preferred = _clientPrefs.preferred(videoId);
     ResolvedStream resolved;
     try {
@@ -174,14 +178,12 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
     _emitResolved(videoId, resolved, resolveStart, attempt: 1);
 
-    // Take first non-blacklisted candidate from list
-    final primary = _pickCandidate(videoId);
+    final primary = _pickLocalCandidate(videoId);
     if (primary == null) {
-      // No candidates — extremely unlikely but safe
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.fallbackRetryFailed,
-          videoId: videoId, lastError: 'No playable candidates returned by Worker',
+          videoId: videoId, lastError: 'Worker returned no playable candidates',
         );
       }
       throw const _EngineException('No playable candidates returned by Worker');
@@ -194,8 +196,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
   }
 
   // ── _playCandidate ─────────────────────────────────────────────────────────
-  // Plays a specific (client, itag) candidate. On stall triggers either
-  // local format fallback or a new-client re-resolve.
   Future<void> _playCandidate({
     required String          videoId,
     required StreamCandidate candidate,
@@ -210,8 +210,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
         PlaybackStage.settingSource,
-        videoId:           videoId,
-        attempt:           attempt,
+        videoId: videoId, attempt: attempt,
         candidateKey:      candidate.key,
         blacklistCount:    _blacklist.count(videoId),
         sourceType:        candidate.sourceType,
@@ -233,20 +232,13 @@ class PlaybackEngineImpl implements PlaybackEngine {
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.sourceReady,
-          videoId:            videoId,
-          attempt:            attempt,
-          candidateKey:       candidate.key,
-          blacklistCount:     _blacklist.count(videoId),
-          sourceType:         candidate.sourceType,
-          mimeType:           candidate.mimeType,
-          clientUsed:         candidate.clientUsed,
-          itag:               candidate.itag,
-          urlHost:            uri.host,
-          resolveStartedAt:   resolveStart,
-          resolveFinishedAt:  resolveEnd,
-          setSourceCalled:    true,
-          setSourceSucceeded: true,
-          processingState:    _player.processingState.name,
+          videoId: videoId, attempt: attempt,
+          candidateKey:       candidate.key, blacklistCount: _blacklist.count(videoId),
+          sourceType:         candidate.sourceType, mimeType: candidate.mimeType,
+          clientUsed:         candidate.clientUsed, itag: candidate.itag,
+          urlHost:            uri.host, resolveStartedAt: resolveStart,
+          resolveFinishedAt:  resolveEnd, setSourceCalled: true,
+          setSourceSucceeded: true, processingState: _player.processingState.name,
         );
       }
     } on PlayerException catch (e) {
@@ -256,64 +248,50 @@ class PlaybackEngineImpl implements PlaybackEngine {
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.failedSetSource,
-          videoId:       videoId, attempt: attempt,
-          candidateKey:  candidate.key,
-          blacklistCount: _blacklist.count(videoId),
-          clientUsed:    candidate.clientUsed, itag: candidate.itag,
-          urlHost:       uri.host,
-          setSourceCalled: true, setSourceSucceeded: false,
-          setSourceError: errMsg, lastError: errMsg,
-          failureSource:  FailureSource.playback,
+          videoId: videoId, attempt: attempt,
+          candidateKey: candidate.key, blacklistCount: _blacklist.count(videoId),
+          clientUsed: candidate.clientUsed, itag: candidate.itag, urlHost: uri.host,
+          setSourceCalled: true, setSourceError: errMsg, lastError: errMsg,
+          failureSource: FailureSource.playback,
         );
       }
-      await _tryNextCandidate(
-        videoId: videoId, myId: myId,
-        resolveStart: resolveStart, resolveEnd: resolveEnd,
-        attempt: attempt, reason: errMsg, source: FailureSource.playback,
-      );
+      await _handleStall(videoId: videoId, myId: myId,
+          resolveStart: resolveStart, resolveEnd: resolveEnd,
+          attempt: attempt, candidate: candidate,
+          reason: errMsg, source: FailureSource.playback);
       return;
     } catch (e) {
       final errMsg = 'setAudioSource error: $e';
-      debugPrint('[PLAYER SET SOURCE ERROR] $videoId generic: $e');
       _blacklist.blacklist(videoId, candidate.clientUsed, candidate.itag);
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.failedSetSource,
           videoId: videoId, attempt: attempt,
           candidateKey: candidate.key, blacklistCount: _blacklist.count(videoId),
-          setSourceCalled: true, lastError: errMsg,
-          failureSource: FailureSource.playback,
+          setSourceCalled: true, lastError: errMsg, failureSource: FailureSource.playback,
         );
       }
-      await _tryNextCandidate(
-        videoId: videoId, myId: myId,
-        resolveStart: resolveStart, resolveEnd: resolveEnd,
-        attempt: attempt, reason: errMsg, source: FailureSource.playback,
-      );
+      await _handleStall(videoId: videoId, myId: myId,
+          resolveStart: resolveStart, resolveEnd: resolveEnd,
+          attempt: attempt, candidate: candidate,
+          reason: errMsg, source: FailureSource.playback);
       return;
     }
 
     if (_loadId != myId) return;
 
-    // ── play() — marks buffering, NOT playing ───────────────────────────────
+    // ── play() ─────────────────────────────────────────────────────────────────
     final playCallTime = DateTime.now();
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
         PlaybackStage.buffering,
-        videoId:            videoId,
-        attempt:            attempt,
-        candidateKey:       candidate.key,
-        blacklistCount:     _blacklist.count(videoId),
-        sourceType:         candidate.sourceType,
-        mimeType:           candidate.mimeType,
-        clientUsed:         candidate.clientUsed,
-        itag:               candidate.itag,
-        urlHost:            uri.host,
-        resolveStartedAt:   resolveStart,
-        resolveFinishedAt:  resolveEnd,
-        setSourceCalled:    true,
-        setSourceSucceeded: true,
-        playCalled:         true,
+        videoId: videoId, attempt: attempt,
+        candidateKey:       candidate.key, blacklistCount: _blacklist.count(videoId),
+        sourceType:         candidate.sourceType, mimeType: candidate.mimeType,
+        clientUsed:         candidate.clientUsed, itag: candidate.itag,
+        urlHost:            uri.host, resolveStartedAt: resolveStart,
+        resolveFinishedAt:  resolveEnd, setSourceCalled: true,
+        setSourceSucceeded: true, playCalled: true,
         processingState:    _player.processingState.name,
       );
     }
@@ -324,44 +302,36 @@ class PlaybackEngineImpl implements PlaybackEngine {
       await _player.play();
       playOk = true;
       debugPrint('[PLAYER PLAY] $videoId attempt=$attempt candidate=${candidate.key} '
-          'state=${_player.processingState.name}');
+          'state=${_player.processingState.name} playing=${_player.playing}');
     } catch (e) {
-      debugPrint('[PLAYER PLAY ERROR] $videoId: $e');
       _blacklist.blacklist(videoId, candidate.clientUsed, candidate.itag);
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.failedBuffering,
           videoId: videoId, attempt: attempt,
           candidateKey: candidate.key, blacklistCount: _blacklist.count(videoId),
-          clientUsed: candidate.clientUsed, itag: candidate.itag,
-          urlHost: uri.host, setSourceCalled: true, setSourceSucceeded: true,
-          playCalled: true, playSucceeded: false,
-          playError: 'play() threw: $e', lastError: 'play() threw: $e',
+          clientUsed: candidate.clientUsed, itag: candidate.itag, urlHost: uri.host,
+          setSourceCalled: true, setSourceSucceeded: true,
+          playCalled: true, lastError: 'play() threw: $e',
           failureSource: FailureSource.playback,
         );
       }
-      await _tryNextCandidate(
-        videoId: videoId, myId: myId,
-        resolveStart: resolveStart, resolveEnd: resolveEnd,
-        attempt: attempt,
-        reason: 'play() threw: $e', source: FailureSource.playback,
-      );
+      await _handleStall(videoId: videoId, myId: myId,
+          resolveStart: resolveStart, resolveEnd: resolveEnd,
+          attempt: attempt, candidate: candidate,
+          reason: 'play() threw: $e', source: FailureSource.playback);
       return;
     }
 
     if (_loadId != myId) return;
 
-    // Update buffering snapshot with play() result
     if (kDebugMode) {
       final prev = PlaybackDiagnosticsNotifier.value;
       if (prev != null) {
         PlaybackDiagnosticsNotifier.value = prev.copyWith(
-          playSucceeded:   true,
-          processingState: _player.processingState.name,
-          isPlaying:       _player.playing,
-          position:        _player.position,
-          buffered:        _player.bufferedPosition,
-          duration:        _player.duration ?? Duration.zero,
+          playSucceeded: true, processingState: _player.processingState.name,
+          isPlaying: _player.playing, position: _player.position,
+          buffered: _player.bufferedPosition, duration: _player.duration ?? Duration.zero,
         );
       }
     }
@@ -377,8 +347,10 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
     Future.delayed(const Duration(seconds: 3), () async {
       if (_isDisposed || _loadId != guardId) return;
-      final d = PlaybackDiagnosticsNotifier.value;
-      if (d == null || d.videoId != guardVideoId) return;
+      if (kDebugMode) {
+        final d = PlaybackDiagnosticsNotifier.value;
+        if (d == null || d.videoId != guardVideoId) return;
+      }
 
       final pos     = _player.position;
       final buf     = _player.bufferedPosition;
@@ -388,24 +360,21 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
       debugPrint('[STALL GUARD] $guardVideoId attempt=$guardAttempt '
           'candidate=${guardCandidate.key} pos=${pos.inMilliseconds}ms '
-          'buf=${buf.inMilliseconds}ms state=${state.name}');
+          'buf=${buf.inMilliseconds}ms state=${state.name} bytes=$bytesMoving');
 
-      if (bytesMoving) return; // bytes flowing → all good
+      if (bytesMoving) return;
 
-      // Blacklist this candidate
       _blacklist.blacklist(guardVideoId, guardCandidate.clientUsed, guardCandidate.itag);
       final elapsed = DateTime.now().difference(playCallTime).inSeconds;
-      final isFalsePlaying = d.stage == PlaybackStage.playing;
+      final isFalsePlaying = kDebugMode &&
+          PlaybackDiagnosticsNotifier.value?.stage == PlaybackStage.playing;
 
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           isFalsePlaying ? PlaybackStage.falsePlayingDetected : PlaybackStage.failedBuffering,
-          videoId:        guardVideoId,
-          attempt:        guardAttempt,
-          candidateKey:   guardCandidate.key,
-          blacklistCount: _blacklist.count(guardVideoId),
-          clientUsed:     guardCandidate.clientUsed,
-          itag:           guardCandidate.itag,
+          videoId:        guardVideoId, attempt: guardAttempt,
+          candidateKey:   guardCandidate.key, blacklistCount: _blacklist.count(guardVideoId),
+          clientUsed:     guardCandidate.clientUsed, itag: guardCandidate.itag,
           urlHost:        guardUri.host,
           resolveStartedAt: guardRStart, resolveFinishedAt: guardREnd,
           setSourceCalled: true, setSourceSucceeded: true,
@@ -417,35 +386,40 @@ class PlaybackEngineImpl implements PlaybackEngine {
         );
       }
 
-      await _tryNextCandidate(
+      await _handleStall(
         videoId: guardVideoId, myId: guardId,
         resolveStart: guardRStart, resolveEnd: guardREnd,
-        attempt: guardAttempt,
+        attempt: guardAttempt, candidate: guardCandidate,
         reason: 'no bytes after ${elapsed}s (state=${state.name})',
         source: FailureSource.playback,
       );
     });
   }
 
-  // ── _tryNextCandidate ──────────────────────────────────────────────────────
-  // Picks next candidate: local first (same client, diff itag), then new-client resolve.
-  Future<void> _tryNextCandidate({
-    required String       videoId,
-    required int          myId,
-    required DateTime     resolveStart,
-    required DateTime     resolveEnd,
-    required int          attempt,
-    required String       reason,
-    required FailureSource source,
+  // ── _handleStall ────────────────────────────────────────────────────────────
+  // Decides whether to pick another local candidate or force a new-client resolve.
+  //
+  // LOCAL PICK:  only for attempt 1 → attempt 2  (attempt < 1 + _kLocalFallbackLimit)
+  // CLIENT SWITCH: attempt 2 onwards always forces new-client re-resolve
+  //
+  // This is the critical fix: prevents attempt 3 from picking ANDROID:599 locally.
+  Future<void> _handleStall({
+    required String          videoId,
+    required int             myId,
+    required DateTime        resolveStart,
+    required DateTime        resolveEnd,
+    required int             attempt,
+    required StreamCandidate candidate,
+    required String          reason,
+    required FailureSource   source,
   }) async {
     if (_loadId != myId || _isDisposed) return;
     if (attempt >= _kMaxAttempts) {
-      debugPrint('[PLAYER RETRY] $videoId exhausted max $_kMaxAttempts attempts');
+      debugPrint('[PLAYER RETRY] $videoId max attempts ($attempt/$_kMaxAttempts) reached');
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.fallbackRetryFailed,
-          videoId:        videoId,
-          attempt:        attempt,
+          videoId:        videoId, attempt: attempt,
           blacklistCount: _blacklist.count(videoId),
           failureSource:  source,
           lastError:      'All $_kMaxAttempts attempts exhausted. Last: $reason',
@@ -455,65 +429,82 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
 
     final nextAttempt = attempt + 1;
-    debugPrint('[PLAYER RETRY] $videoId attempt=$nextAttempt reason=$reason');
+    debugPrint('[PLAYER RETRY] $videoId attempt=$nextAttempt reason=$reason '
+        'localAllowed=${attempt <= _kLocalFallbackLimit}');
 
-    // Emit retryStarted
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
         PlaybackStage.fallbackRetryStarted,
-        videoId:        videoId,
-        attempt:        nextAttempt,
+        videoId:        videoId, attempt: nextAttempt,
         blacklistCount: _blacklist.count(videoId),
-        failureSource:  source,
-        lastError:      reason,
+        failureSource:  source, lastError: reason,
       );
     }
 
     await _player.stop();
     if (_loadId != myId) return;
 
-    // ── Option A: local candidate (no Worker call) ─────────────────────────
-    final local = _pickCandidate(videoId);
-    if (local != null) {
-      debugPrint('[PLAYER RETRY] $videoId using local candidate=${local.key}');
-      await _playCandidate(
-        videoId: videoId, candidate: local, myId: myId,
-        resolveStart: resolveStart, resolveEnd: resolveEnd,
-        attempt: nextAttempt,
-      );
-      return;
+    // ── Option A: ONE local format fallback (only transition 1→2) ──────────
+    // Uses local candidates so we avoid a Worker round-trip for a cheap second try.
+    if (attempt <= _kLocalFallbackLimit) {
+      final local = _pickLocalCandidate(videoId);
+      if (local != null) {
+        debugPrint('[PLAYER RETRY] $videoId → local candidate=${local.key} (same client, diff format)');
+        await _playCandidate(
+          videoId: videoId, candidate: local, myId: myId,
+          resolveStart: resolveStart, resolveEnd: resolveEnd, attempt: nextAttempt,
+        );
+        return;
+      }
+      // No local candidate available — fall through to new-client resolve
+      debugPrint('[PLAYER RETRY] $videoId no local candidate found — going to new-client resolve');
     }
+    // ── Option B: New Innertube client (always for attempt 2+ stalls) ───────
+    await _resolveWithNewClient(
+      videoId: videoId, myId: myId,
+      resolveStart: resolveStart, attempt: nextAttempt,
+      source: source,
+    );
+  }
 
-    // ── Option B: new-client resolve (Worker with exclude list) ────────────
+  // ── _resolveWithNewClient ─────────────────────────────────────────────────
+  Future<void> _resolveWithNewClient({
+    required String       videoId,
+    required int          myId,
+    required DateTime     resolveStart,
+    required int          attempt,
+    required FailureSource source,
+  }) async {
+    if (_loadId != myId || _isDisposed) return;
+
     final failedClients = _blacklist.failedClients(videoId).toList();
-    debugPrint('[PLAYER RETRY] $videoId all local candidates exhausted — '
-        're-resolving exclude=${failedClients.join(',')}');
+    debugPrint('[PLAYER RETRY] $videoId → new-client resolve '
+        'exclude=[${failedClients.join(',')}]');
 
     final freshStart = DateTime.now();
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.resolving(
-        videoId, resolveStartedAt: freshStart, attempt: nextAttempt,
+        videoId, resolveStartedAt: freshStart, attempt: attempt,
+        excludedClients: failedClients,
       ).copyWith(blacklistCount: _blacklist.count(videoId));
     }
 
+    _clientPrefs.invalidate(videoId);
+    await _resolver.invalidate(videoId);
+
     ResolvedStream freshResolved;
     try {
-      _clientPrefs.invalidate(videoId);
-      freshResolved = await _resolver.resolve(
-        videoId, excludeClients: failedClients,
-      );
+      freshResolved = await _resolver.resolve(videoId, excludeClients: failedClients);
     } catch (e) {
       debugPrint('[PLAYER RETRY FAIL] $videoId re-resolve failed: $e');
-      _emitResolveFailure(videoId, e, freshStart, attempt: nextAttempt);
+      _emitResolveFailure(videoId, e, freshStart, attempt: attempt);
       if (kDebugMode) {
-        // Was a resolve failure — emit fallbackRetryFailed
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.fallbackRetryFailed,
-          videoId:       videoId,
-          attempt:       nextAttempt,
+          videoId:        videoId, attempt: attempt,
           blacklistCount: _blacklist.count(videoId),
           failureSource:  FailureSource.resolve,
-          lastError:     'Re-resolve failed: $e',
+          lastError:      'Re-resolve failed exclude=[${failedClients.join(',')}]: $e',
         );
       }
       return;
@@ -521,50 +512,42 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
     if (_loadId != myId) return;
 
-    // Merge new candidates into our list
+    // Merge new-client candidates into list
     for (final c in freshResolved.candidates) {
-      if (!_candidates.any((x) => x.key == c.key)) {
-        _candidates.add(c);
-      }
+      if (!_candidates.any((x) => x.key == c.key)) _candidates.add(c);
     }
 
-    _emitResolved(videoId, freshResolved, freshStart, attempt: nextAttempt);
+    _emitResolved(videoId, freshResolved, freshStart, attempt: attempt);
 
-    final nextCandidate = _pickCandidate(videoId);
+    final nextCandidate = _pickLocalCandidate(videoId);
     if (nextCandidate == null) {
-      debugPrint('[PLAYER RETRY FAIL] $videoId no non-blacklisted candidates after re-resolve');
+      debugPrint('[PLAYER RETRY FAIL] $videoId re-resolve returned only blacklisted candidates');
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.fallbackRetryFailed,
-          videoId:       videoId,
-          attempt:       nextAttempt,
+          videoId:       videoId, attempt: attempt,
           blacklistCount: _blacklist.count(videoId),
           failureSource:  FailureSource.resolve,
-          lastError:     'Re-resolve returned only already-blacklisted candidates',
+          lastError:     'No new candidate after re-resolve with different client',
         );
       }
       return;
     }
 
+    debugPrint('[PLAYER RETRY] $videoId attempt=$attempt NEW client=${nextCandidate.key}');
     await _playCandidate(
       videoId: videoId, candidate: nextCandidate, myId: myId,
-      resolveStart: freshStart, resolveEnd: DateTime.now(),
-      attempt: nextAttempt,
+      resolveStart: freshStart, resolveEnd: DateTime.now(), attempt: attempt,
     );
   }
 
-  // ── _pickCandidate ─────────────────────────────────────────────────────────
-  // Returns the first candidate in _candidates not in the blacklist.
-  // Prefers audioOnly over muxed.
-  StreamCandidate? _pickCandidate(String videoId) {
-    // Audio-only first
+  // ── _pickLocalCandidate ────────────────────────────────────────────────────
+  // Returns first non-blacklisted candidate. Prefers audioOnly over muxed.
+  StreamCandidate? _pickLocalCandidate(String videoId) {
     for (final c in _candidates) {
       if (c.sourceType == 'audioOnly' &&
-          !_blacklist.isBlacklisted(videoId, c.clientUsed, c.itag)) {
-        return c;
-      }
+          !_blacklist.isBlacklisted(videoId, c.clientUsed, c.itag)) return c;
     }
-    // Muxed as fallback
     for (final c in _candidates) {
       if (!_blacklist.isBlacklisted(videoId, c.clientUsed, c.itag)) return c;
     }
@@ -578,7 +561,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (prev == null) return;
     if (prev.stage != PlaybackStage.buffering &&
         prev.stage != PlaybackStage.stalledAfterResolved) return;
-
     final pos = _player.position;
     final buf = _player.bufferedPosition;
     if (!((state == ProcessingState.ready || state == ProcessingState.buffering) &&
@@ -607,7 +589,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
   }
 
   // ── Diagnostic helpers ─────────────────────────────────────────────────────
-  void _emitResolved(String videoId, ResolvedStream r, DateTime resolveStart, {required int attempt}) {
+  void _emitResolved(String videoId, ResolvedStream r, DateTime resolveStart,
+      {required int attempt}) {
     if (!kDebugMode) return;
     PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
       PlaybackStage.resolved,
@@ -621,33 +604,46 @@ class PlaybackEngineImpl implements PlaybackEngine {
       itag:              r.itag,
       expiresAt:         r.expiresAt,
       urlHost:           Uri.parse(r.url).host,
+      attemptedClients:  r.attemptedClients,
+      excludedClients:   r.excludedClients,
+      resolvePath:       r.resolvePath,
+      candidateCount:    r.candidateCount,
+      clientErrors:      r.clientErrors,
       resolveStartedAt:  resolveStart,
       resolveFinishedAt: DateTime.now(),
     );
   }
 
-  void _emitResolveFailure(String videoId, Object e, DateTime resolveStart, {required int attempt}) {
+  void _emitResolveFailure(String videoId, Object e, DateTime resolveStart,
+      {required int attempt}) {
     if (!kDebugMode) return;
     final isTimeout = e.toString().toLowerCase().contains('timeout');
+    final re    = e is MediaResolveException ? e : null;
     final stage = isTimeout
         ? PlaybackStage.failedResolveTimeout
         : PlaybackStage.failedResolveHttp;
-    final re = e is MediaResolveException ? e : null;
+    // Build per-client error display from exception fields
+    final clientErrors = re?.clientErrors ?? [];
+    final clientErrorStr = clientErrors.isNotEmpty
+        ? clientErrors.map((e) => '${e['client']}: ${e['code']}').join(' | ')
+        : null;
     PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
       stage,
-      videoId:           videoId,
-      attempt:           attempt,
-      blacklistCount:    _blacklist.count(videoId),
-      resolveStartedAt:  resolveStart,
-      resolveFinishedAt: DateTime.now(),
-      workerHttpStatus:  re?.httpStatus ?? 0,
-      workerErrorBody:   re?.errorBody,
-      lastError:         e.toString(),
-      failureSource:     FailureSource.resolve,
+      videoId:            videoId,
+      attempt:            attempt,
+      blacklistCount:     _blacklist.count(videoId),
+      resolveStartedAt:   resolveStart,
+      resolveFinishedAt:  DateTime.now(),
+      workerHttpStatus:   re?.httpStatus ?? 0,
+      workerErrorBody:    clientErrorStr ?? re?.errorBody,
+      attemptedClients:   re?.attemptedClients ?? [],
+      clientErrors:       clientErrors,
+      lastError:          e.toString(),
+      failureSource:      FailureSource.resolve,
     );
   }
 
-  // ── Controls ───────────────────────────────────────────────────────────────
+  // ── Controls ────────────────────────────────────────────────────────────────
   @override Future<void> play()  async { await _player.play(); }
   @override Future<void> pause() async { await _player.pause(); }
   @override Future<void> seek(Duration position) async { await _player.seek(position); }
@@ -666,7 +662,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Widget buildPlayerView(BuildContext context) => const SizedBox.shrink();
 }
 
-// ---------------------------------------------------------------------------
 class _EngineException implements Exception {
   final String message;
   const _EngineException(this.message);
