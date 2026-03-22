@@ -42,7 +42,7 @@ class StreamCache {
   Future<void> invalidate(String videoId) async {
     _mem.remove(videoId);
     if (Hive.isBoxOpen(kBoxName)) await Hive.box(kBoxName).delete(videoId);
-    debugPrint('[MEDIA CACHE] Invalidated $videoId');
+    debugPrint('[STREAM CACHE] Invalidated $videoId');
   }
 
   Future<void> clear() async {
@@ -59,26 +59,17 @@ class StreamCache {
     'sourceType': r.sourceType,
     'resolvedAt': r.resolvedAt.toIso8601String(),
     'expiresAt':  r.expiresAt,
-    'clientUsed': r.clientUsed,
     'itag':       r.itag,
-    'candidates': r.candidates.map((c) => c.toJson()).toList(),
+    'bitrate':    r.bitrate,
   };
 
-  ResolvedStream _deserialize(Map raw) {
-    final clientUsed = (raw['clientUsed'] as String?) ?? '?';
-    final rawCandidates = (raw['candidates'] as List?)
-        ?.map((c) => StreamCandidate.fromJson(Map<String, dynamic>.from(c as Map), clientUsed))
-        .toList() ?? <StreamCandidate>[];
-
-    return ResolvedStream(
-      url:        raw['url']        as String,
-      mimeType:   (raw['mimeType']  as String?) ?? 'audio/mp4',
-      sourceType: raw['sourceType'] as String,
-      resolvedAt: DateTime.parse(raw['resolvedAt'] as String),
-      expiresAt:  (raw['expiresAt'] as int?)     ?? 0,
-      clientUsed: clientUsed,
-      itag:       (raw['itag']       as int?)     ?? 0,
-      candidates: rawCandidates,
-    );
-  }
+  ResolvedStream _deserialize(Map raw) => ResolvedStream(
+    url:        raw['url']        as String,
+    mimeType:   (raw['mimeType']  as String?) ?? 'audio/mp4',
+    sourceType: raw['sourceType'] as String,
+    resolvedAt: DateTime.parse(raw['resolvedAt'] as String),
+    expiresAt:  (raw['expiresAt'] as int?)  ?? 0,
+    itag:       (raw['itag']      as int?)  ?? 0,
+    bitrate:    (raw['bitrate']   as int?)  ?? 0,
+  );
 }

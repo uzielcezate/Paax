@@ -28,9 +28,8 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
       final d = _diag;
       if (d == null) { setState(() {}); return; }
       const stuck = {
-        PlaybackStage.resolving, PlaybackStage.settingSource,
-        PlaybackStage.buffering, PlaybackStage.stalledAfterResolved,
-        PlaybackStage.fallbackRetryStarted,
+        PlaybackStage.resolving, PlaybackStage.retryResolving,
+        PlaybackStage.settingSource, PlaybackStage.buffering,
       };
       setState(() { _stalled = stuck.contains(d.stage) && d.stageAge.inSeconds >= 5; });
     });
@@ -56,7 +55,7 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.90),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _border(d), width: 1.8),
+        border: Border.all(color: _borderColor(d), width: 1.8),
       ),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.white12),
@@ -67,8 +66,8 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
           title: Row(children: [
             _StageChip(d?.stage, stalled: _stalled),
             const SizedBox(width: 6),
-            if ((d?.attempt ?? 1) > 1) _Badge('#${d!.attempt}', Colors.amber),
-            if ((d?.blacklistCount ?? 0) > 0) _Badge('✕${d!.blacklistCount}', Colors.orange),
+            if ((d?.attempt ?? 1) > 1)
+              _Badge('retry#${d!.attempt}', Colors.amber),
             const SizedBox(width: 6),
             Expanded(
               child: Text(d?.videoId ?? '—',
@@ -85,44 +84,25 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
 
   Widget _buildBody(PlaybackDiagnostics? d) {
     if (d == null) return const _R('status', 'waiting for first play…');
-    final elapsed = d.resolveElapsed;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Stage / Attempt ──────────────────────────────────────────────────
-        _R('stage',     '${d.stage.name}  (+${d.stageAge.inSeconds}s)'),
-        _R('attempt',   '${d.attempt}'),
-        _R('candidate', d.candidateKey),
-        _R('blacklist', '${d.blacklistCount}', warn: d.blacklistCount > 0),
-        _R('failureSrc', d.failureSource.name, warn: d.failureSource != FailureSource.none),
+        // ── Stage ────────────────────────────────────────────────────────────
+        _R('stage',       '${d.stage.name}  (+${d.stageAge.inSeconds}s)'),
+        _R('attempt',     '${d.attempt}'),
+        _R('failureSrc',  d.failureSource.name, warn: d.failureSource != FailureSource.none),
 
         const _Div(),
 
-        // ── Resolve debug (Worker v6) ─────────────────────────────────────────
-        _R('resolve↑',  d.resolveStartedAt  != null ? _fmt(d.resolveStartedAt!)  : '—', dim: true),
-        _R('resolve↓',  d.resolveFinishedAt != null ? _fmt(d.resolveFinishedAt!) : '—', dim: true),
-        _R('resolveMs', elapsed != null ? '${elapsed.inMilliseconds} ms' : '—'),
-        _R('path',      d.resolvePath.isEmpty ? '—' : d.resolvePath),
-        _R('attempted', d.attemptedClients.isEmpty ? '—' : d.attemptedClients.join(', ')),
-        _R('excluded',  d.excludedClients.isEmpty  ? '—' : d.excludedClients.join(', ')),
-        _R('chosen',    d.clientUsed == '…' ? '—' : '${d.clientUsed}:${d.itag}'),
-        _R('candidates','${d.candidateCount}'),
-        _R('workerHTTP', d.workerHttpStatus == 0 ? '—' : '${d.workerHttpStatus}',
-            warn: d.workerHttpStatus != 0 && d.workerHttpStatus != 200),
-        if (d.workerErrorBody != null) _R('workerErr', d.workerErrorBody!, err: true),
-        // Per-client errors from Worker
-        for (final ce in d.clientErrors)
-          _R('⚠ ${ce['client'] ?? '?'}', '${ce['code'] ?? '?'}: ${ce['msg'] ?? ''}', warn: true),
-
-        const _Div(),
-
-        // ── Stream info ──────────────────────────────────────────────────────
-        _R('client',     d.clientUsed),
-        _R('itag',       d.itag == 0 ? '—' : '${d.itag}'),
-        _R('sourceType', d.sourceType),
-        _R('mimeType',   d.mimeType),
-        _R('urlHost',    d.urlHost),
-        _R('expiresAt',  _fmtExpiry(d.expiresAt), warn: d.isUrlExpired),
+        // ── Resolve info ─────────────────────────────────────────────────────
+        _R('source',      d.resolveSource),
+        _R('resolveMs',   d.resolveMs != null ? '${d.resolveMs} ms' : '—'),
+        _R('itag',        d.itag == 0    ? '—' : '${d.itag}'),
+        _R('mimeType',    d.mimeType),
+        _R('sourceType',  d.sourceType),
+        _R('bitrate',     d.bitrate == 0 ? '—' : '${d.bitrate ~/ 1000} kbps'),
+        _R('host',        d.urlHost),
+        _R('expiresAt',   _fmtExpiry(d.expiresAt), warn: d.isUrlExpired),
 
         const _Div(),
 
@@ -131,21 +111,25 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
         _R('setSrcOK', d.setSourceSucceeded ? '✓ yes'  : '—', ok: d.setSourceSucceeded),
         if (d.setSourceError != null) _R('setSrcErr', d.setSourceError!, err: true),
 
-        // ── play() ─────────────────────────────────────────────────────────────
-        _R('play()?', d.playCalled    ? 'called' : 'not yet'),
-        _R('playOK',  d.playSucceeded ? '✓ yes'  : '—', ok: d.playSucceeded),
+        // ── play() ───────────────────────────────────────────────────────────
+        _R('play()?',  d.playCalled    ? 'called' : 'not yet'),
+        _R('playOK',   d.playSucceeded ? '✓ yes'  : '—', ok: d.playSucceeded),
         if (d.playError != null) _R('playErr', d.playError!, err: true),
 
         const _Div(),
 
-        // ── Live player ─────────────────────────────────────────────────────────
+        // ── Live player ───────────────────────────────────────────────────────
         _R('exoState', d.processingState),
         _R('playing',  d.isPlaying ? '▶  true' : '⏸  false'),
         _R('position', _dur(d.position)),
         _R('buffered', _dur(d.buffered)),
         _R('duration', _dur(d.duration)),
+        _R('advanced', d.position > Duration.zero || d.buffered > Duration.zero
+            ? '✓ yes' : '✗ no',
+            ok:  d.position > Duration.zero || d.buffered > Duration.zero,
+            warn: d.playCalled && d.position == Duration.zero && d.buffered == Duration.zero),
 
-        // ── Warning banners ─────────────────────────────────────────────────────
+        // ── Warning banners ───────────────────────────────────────────────────
         if (_isBannerStage(d.stage))
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -157,7 +141,8 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
                 border: Border.all(color: Colors.orange),
               ),
               child: Text(_stageWarning(d.stage, d),
-                  style: const TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold)),
+                  style: const TextStyle(
+                      color: Colors.orange, fontSize: 11, fontWeight: FontWeight.bold)),
             ),
           ),
 
@@ -172,7 +157,8 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
   bool _isBannerStage(PlaybackStage s) => const {
     PlaybackStage.falsePlayingDetected,
     PlaybackStage.failedBuffering,
-    PlaybackStage.fallbackRetryFailed,
+    PlaybackStage.retryFailed,
+    PlaybackStage.failedResolve,
   }.contains(s);
 
   String _stageWarning(PlaybackStage s, PlaybackDiagnostics d) {
@@ -181,31 +167,31 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
         return '⚠ FALSE PLAYING — play() called but pos=0 + buf=0';
       case PlaybackStage.failedBuffering:
         return '⚠ STALL — no bytes in 3s (${d.failureSource.name})';
-      case PlaybackStage.fallbackRetryFailed:
-        return '⚠ ALL RETRIES FAILED — ${d.blacklistCount} candidate(s) tried, no bytes from any';
+      case PlaybackStage.retryFailed:
+        return '⚠ ALL RETRIES FAILED — ${d.attempt} attempt(s) tried';
+      case PlaybackStage.failedResolve:
+        return '⚠ RESOLVE FAILED — ${d.lastError ?? 'unknown error'}';
       default: return '';
     }
   }
 
-  Color _border(PlaybackDiagnostics? d) {
+  Color _borderColor(PlaybackDiagnostics? d) {
     if (d == null) return Colors.white24;
     if (_stalled)  return Colors.orange;
     switch (d.stage) {
       case PlaybackStage.playing:
-      case PlaybackStage.fallbackRetrySucceeded:    return Colors.greenAccent;
-      case PlaybackStage.failedResolveTimeout:
-      case PlaybackStage.failedResolveHttp:
+      case PlaybackStage.retrySucceeded:   return Colors.greenAccent;
+      case PlaybackStage.failedResolve:
       case PlaybackStage.failedSetSource:
       case PlaybackStage.failedBuffering:
       case PlaybackStage.falsePlayingDetected:
-      case PlaybackStage.fallbackRetryFailed:       return Colors.redAccent;
-      case PlaybackStage.stalledAfterResolved:
-      case PlaybackStage.fallbackRetryStarted:      return Colors.orange;
+      case PlaybackStage.retryFailed:      return Colors.redAccent;
+      case PlaybackStage.retryResolving:   return Colors.orange;
       case PlaybackStage.buffering:
-      case PlaybackStage.settingSource:             return Colors.amber;
+      case PlaybackStage.settingSource:    return Colors.amber;
       case PlaybackStage.resolved:
-      case PlaybackStage.sourceReady:               return Colors.blue;
-      default:                                      return Colors.white24;
+      case PlaybackStage.sourceReady:      return Colors.blue;
+      default:                             return Colors.white24;
     }
   }
 
@@ -214,9 +200,7 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
-  static String _fmt(DateTime dt) =>
-      '${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}:'
-      '${dt.second.toString().padLeft(2,'0')}.${dt.millisecond.toString().padLeft(3,'0')}';
+
   static String _fmtExpiry(int expiresAt) {
     if (expiresAt == 0) return '—';
     final exp  = DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000);
@@ -229,7 +213,7 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
   }
 }
 
-// ── Sub-widgets ───────────────────────────────────────────────────────────────
+// ── Sub-widgets ────────────────────────────────────────────────────────────────
 
 class _Badge extends StatelessWidget {
   final String text;
@@ -256,20 +240,18 @@ class _StageChip extends StatelessWidget {
     else {
       switch (stage) {
         case PlaybackStage.playing:
-        case PlaybackStage.fallbackRetrySucceeded:    bg = Colors.green.shade700;      break;
-        case PlaybackStage.failedResolveTimeout:
-        case PlaybackStage.failedResolveHttp:
+        case PlaybackStage.retrySucceeded:   bg = Colors.green.shade700;      break;
+        case PlaybackStage.failedResolve:
         case PlaybackStage.failedSetSource:
         case PlaybackStage.failedBuffering:
         case PlaybackStage.falsePlayingDetected:
-        case PlaybackStage.fallbackRetryFailed:       bg = Colors.red.shade700;        break;
-        case PlaybackStage.stalledAfterResolved:
-        case PlaybackStage.fallbackRetryStarted:      bg = Colors.deepOrange.shade700; break;
+        case PlaybackStage.retryFailed:      bg = Colors.red.shade700;        break;
+        case PlaybackStage.retryResolving:   bg = Colors.deepOrange.shade700; break;
         case PlaybackStage.buffering:
-        case PlaybackStage.settingSource:             bg = Colors.amber.shade800;      break;
+        case PlaybackStage.settingSource:    bg = Colors.amber.shade800;      break;
         case PlaybackStage.resolved:
-        case PlaybackStage.sourceReady:               bg = Colors.blue.shade700;       break;
-        default:                                      bg = Colors.grey.shade700;
+        case PlaybackStage.sourceReady:      bg = Colors.blue.shade700;       break;
+        default:                             bg = Colors.grey.shade700;
       }
     }
     return Container(
@@ -285,14 +267,13 @@ class _StageChip extends StatelessWidget {
 
 class _R extends StatelessWidget {
   final String label, value;
-  final bool err, warn, ok, dim;
-  const _R(this.label, this.value, {this.err=false, this.warn=false, this.ok=false, this.dim=false});
+  final bool err, warn, ok;
+  const _R(this.label, this.value, {this.err=false, this.warn=false, this.ok=false});
   @override
   Widget build(BuildContext context) {
     final Color col = err  ? Colors.redAccent
                     : warn ? Colors.orange
                     : ok   ? Colors.greenAccent
-                    : dim  ? Colors.white30
                            : Colors.white;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1.5),
@@ -302,7 +283,7 @@ class _R extends StatelessWidget {
         Expanded(child: Text(value,
             style: TextStyle(color: col, fontSize: 10.5, fontFamily: 'monospace',
                 fontWeight: (err || warn) ? FontWeight.bold : FontWeight.normal),
-            maxLines: 4, overflow: TextOverflow.fade)),
+            maxLines: 3, overflow: TextOverflow.fade)),
       ]),
     );
   }

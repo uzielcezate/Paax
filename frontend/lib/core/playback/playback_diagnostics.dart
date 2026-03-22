@@ -4,75 +4,85 @@ import 'package:flutter/foundation.dart';
 // TEMPORARY DEBUG-ONLY FILE — remove before shipping to production.
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// Stage enum
+// ---------------------------------------------------------------------------
 enum PlaybackStage {
   idle,
+
+  // ── Resolution ─────────────────────────────────────────────────────────────
   resolving,
   resolved,
+
+  // ── Player setup ────────────────────────────────────────────────────────────
   settingSource,
   sourceReady,
+
+  // ── Buffer / Playback ───────────────────────────────────────────────────────
   buffering,
   playing,
   completed,
-  failedResolveTimeout,
-  failedResolveHttp,
+
+  // ── Failure — resolve ────────────────────────────────────────────────────────
+  failedResolve,
+
+  // ── Failure — player ────────────────────────────────────────────────────────
   failedSetSource,
   failedBuffering,
   falsePlayingDetected,
-  stalledAfterResolved,
-  fallbackRetryStarted,
-  fallbackRetrySucceeded,
-  fallbackRetryFailed,
+
+  // ── Retry ────────────────────────────────────────────────────────────────────
+  retryResolving,       // stall detected; re-resolving with fresh URL
+  retrySucceeded,       // retry produced confirmed byte flow
+  retryFailed,          // all attempts exhausted
 }
 
 enum FailureSource { none, resolve, playback }
 
+// ---------------------------------------------------------------------------
+// PlaybackDiagnostics — full snapshot
+// ---------------------------------------------------------------------------
 class PlaybackDiagnostics {
+  // ── Stage ──────────────────────────────────────────────────────────────────
   final PlaybackStage stage;
   final DateTime      stageEnteredAt;
-  final String videoId;
-  final int    attempt;
-  final String candidateKey;
-  final int    blacklistCount;
+
+  // ── Track / Attempt ────────────────────────────────────────────────────────
+  final String        videoId;
+  final int           attempt;       // 1 = initial, 2 = retry
   final FailureSource failureSource;
 
-  // Stream info
-  final String sourceType;
+  // ── Stream info ─────────────────────────────────────────────────────────────
+  final String resolveSource; // always 'local'
+  final String sourceType;    // 'audioOnly' | 'muxed'
   final String mimeType;
-  final String clientUsed;
   final int    itag;
+  final int    bitrate;       // bits per second
   final int    expiresAt;
   final String urlHost;
 
-  // Resolve debug metadata (from Worker v6)
-  final List<String> attemptedClients; // which Innertube clients were tried
-  final List<String> excludedClients;  // which were excluded
-  final String       resolvePath;      // 'fresh' | 'cache' | ''
-  final int          candidateCount;   // how many candidates the Worker found
-  final List<Map<String, String>> clientErrors; // [{client, code, msg}]
-
-  // Resolve timing
+  // ── Resolve timing ─────────────────────────────────────────────────────────
   final DateTime? resolveStartedAt;
   final DateTime? resolveFinishedAt;
-  final int       workerHttpStatus;
-  final String?   workerErrorBody;
 
-  // setAudioSource
+  // ── setAudioSource ─────────────────────────────────────────────────────────
   final bool    setSourceCalled;
   final bool    setSourceSucceeded;
   final String? setSourceError;
 
-  // play()
+  // ── play() ──────────────────────────────────────────────────────────────────
   final bool    playCalled;
   final bool    playSucceeded;
   final String? playError;
 
-  // Live player state
+  // ── Player live state ──────────────────────────────────────────────────────
   final String   processingState;
   final bool     isPlaying;
   final Duration position;
   final Duration buffered;
   final Duration duration;
 
+  // ── Error ──────────────────────────────────────────────────────────────────
   final String? lastError;
 
   const PlaybackDiagnostics({
@@ -80,24 +90,16 @@ class PlaybackDiagnostics {
     required this.stageEnteredAt,
     required this.videoId,
     this.attempt        = 1,
-    this.candidateKey   = '…',
-    this.blacklistCount = 0,
     this.failureSource  = FailureSource.none,
+    this.resolveSource  = 'local',
     this.sourceType     = '…',
     this.mimeType       = '…',
-    this.clientUsed     = '…',
     this.itag           = 0,
+    this.bitrate        = 0,
     this.expiresAt      = 0,
     this.urlHost        = '…',
-    this.attemptedClients = const [],
-    this.excludedClients  = const [],
-    this.resolvePath      = '',
-    this.candidateCount   = 0,
-    this.clientErrors     = const [],
     this.resolveStartedAt,
     this.resolveFinishedAt,
-    this.workerHttpStatus = 0,
-    this.workerErrorBody,
     this.setSourceCalled    = false,
     this.setSourceSucceeded = false,
     this.setSourceError,
@@ -112,33 +114,31 @@ class PlaybackDiagnostics {
     this.lastError,
   });
 
+  // ── Computed ────────────────────────────────────────────────────────────────
   bool get isUrlExpired {
     if (expiresAt == 0) return false;
     return DateTime.now().millisecondsSinceEpoch ~/ 1000 >= expiresAt;
   }
-  Duration  get stageAge      => DateTime.now().difference(stageEnteredAt);
-  Duration? get resolveElapsed {
+
+  Duration  get stageAge => DateTime.now().difference(stageEnteredAt);
+
+  int? get resolveMs {
     if (resolveStartedAt == null || resolveFinishedAt == null) return null;
-    return resolveFinishedAt!.difference(resolveStartedAt!);
+    return resolveFinishedAt!.difference(resolveStartedAt!).inMilliseconds;
   }
 
+  // ── copyWith ────────────────────────────────────────────────────────────────
   PlaybackDiagnostics copyWith({
-    PlaybackStage? stage,         DateTime?     stageEnteredAt,
+    PlaybackStage? stage,        DateTime?     stageEnteredAt,
     String?        videoId,
-    int?           attempt,       String?       candidateKey,
-    int?           blacklistCount, FailureSource? failureSource,
-    String?  sourceType,   String? mimeType,   String?  clientUsed,
-    int?     itag,         int?    expiresAt,  String?  urlHost,
-    List<String>?              attemptedClients,
-    List<String>?              excludedClients,
-    String?                    resolvePath,
-    int?                       candidateCount,
-    List<Map<String, String>>? clientErrors,
-    DateTime? resolveStartedAt, DateTime? resolveFinishedAt,
-    int?     workerHttpStatus,  String?   workerErrorBody,
-    bool?    setSourceCalled,   bool?     setSourceSucceeded, String? setSourceError,
-    bool?    playCalled,        bool?     playSucceeded,      String? playError,
-    String?  processingState,   bool?     isPlaying,
+    int?           attempt,      FailureSource? failureSource,
+    String? resolveSource,
+    String? sourceType,   String? mimeType,    int? itag,
+    int?    bitrate,      int?    expiresAt,   String? urlHost,
+    DateTime? resolveStartedAt,  DateTime? resolveFinishedAt,
+    bool?    setSourceCalled,    bool? setSourceSucceeded, String? setSourceError,
+    bool?    playCalled,         bool? playSucceeded,      String? playError,
+    String?  processingState,    bool? isPlaying,
     Duration? position,  Duration? buffered,  Duration? duration,
     String?  lastError,
   }) => PlaybackDiagnostics(
@@ -146,24 +146,16 @@ class PlaybackDiagnostics {
     stageEnteredAt:     stageEnteredAt     ?? this.stageEnteredAt,
     videoId:            videoId            ?? this.videoId,
     attempt:            attempt            ?? this.attempt,
-    candidateKey:       candidateKey       ?? this.candidateKey,
-    blacklistCount:     blacklistCount     ?? this.blacklistCount,
     failureSource:      failureSource      ?? this.failureSource,
+    resolveSource:      resolveSource      ?? this.resolveSource,
     sourceType:         sourceType         ?? this.sourceType,
     mimeType:           mimeType           ?? this.mimeType,
-    clientUsed:         clientUsed         ?? this.clientUsed,
     itag:               itag               ?? this.itag,
+    bitrate:            bitrate            ?? this.bitrate,
     expiresAt:          expiresAt          ?? this.expiresAt,
     urlHost:            urlHost            ?? this.urlHost,
-    attemptedClients:   attemptedClients   ?? this.attemptedClients,
-    excludedClients:    excludedClients    ?? this.excludedClients,
-    resolvePath:        resolvePath        ?? this.resolvePath,
-    candidateCount:     candidateCount     ?? this.candidateCount,
-    clientErrors:       clientErrors       ?? this.clientErrors,
     resolveStartedAt:   resolveStartedAt   ?? this.resolveStartedAt,
     resolveFinishedAt:  resolveFinishedAt  ?? this.resolveFinishedAt,
-    workerHttpStatus:   workerHttpStatus   ?? this.workerHttpStatus,
-    workerErrorBody:    workerErrorBody    ?? this.workerErrorBody,
     setSourceCalled:    setSourceCalled    ?? this.setSourceCalled,
     setSourceSucceeded: setSourceSucceeded ?? this.setSourceSucceeded,
     setSourceError:     setSourceError     ?? this.setSourceError,
@@ -178,27 +170,19 @@ class PlaybackDiagnostics {
     lastError:          lastError          ?? this.lastError,
   );
 
+  // ── factories ───────────────────────────────────────────────────────────────
   factory PlaybackDiagnostics.atStage(
     PlaybackStage stage, {
     required String videoId,
-    int      attempt        = 1,
-    String   candidateKey   = '…',
-    int      blacklistCount = 0,
+    int      attempt = 1,
     FailureSource failureSource = FailureSource.none,
-    String?  sourceType,     String? mimeType,
-    String   clientUsed     = '…', int itag = 0,
-    int      expiresAt      = 0,   String urlHost = '…',
-    List<String>              attemptedClients = const [],
-    List<String>              excludedClients  = const [],
-    String                    resolvePath      = '',
-    int                       candidateCount   = 0,
-    List<Map<String, String>> clientErrors     = const [],
+    String resolveSource  = 'local',
+    String? sourceType,   String? mimeType, int itag = 0,
+    int     bitrate   = 0, int expiresAt = 0, String urlHost = '…',
     DateTime? resolveStartedAt, DateTime? resolveFinishedAt,
-    int     workerHttpStatus  = 0, String? workerErrorBody,
-    bool    setSourceCalled    = false,
-    bool    setSourceSucceeded = false, String? setSourceError,
-    bool    playCalled    = false,
-    bool    playSucceeded = false, String? playError,
+    bool setSourceCalled = false, bool setSourceSucceeded = false,
+    String? setSourceError,
+    bool playCalled = false, bool playSucceeded = false, String? playError,
     String  processingState = 'idle',
     bool    isPlaying   = false,
     Duration position   = Duration.zero,
@@ -210,24 +194,16 @@ class PlaybackDiagnostics {
     stageEnteredAt:     DateTime.now(),
     videoId:            videoId,
     attempt:            attempt,
-    candidateKey:       candidateKey,
-    blacklistCount:     blacklistCount,
     failureSource:      failureSource,
-    sourceType:         sourceType  ?? '…',
-    mimeType:           mimeType    ?? '…',
-    clientUsed:         clientUsed,
+    resolveSource:      resolveSource,
+    sourceType:         sourceType   ?? '…',
+    mimeType:           mimeType     ?? '…',
     itag:               itag,
+    bitrate:            bitrate,
     expiresAt:          expiresAt,
     urlHost:            urlHost,
-    attemptedClients:   attemptedClients,
-    excludedClients:    excludedClients,
-    resolvePath:        resolvePath,
-    candidateCount:     candidateCount,
-    clientErrors:       clientErrors,
     resolveStartedAt:   resolveStartedAt,
     resolveFinishedAt:  resolveFinishedAt,
-    workerHttpStatus:   workerHttpStatus,
-    workerErrorBody:    workerErrorBody,
     setSourceCalled:    setSourceCalled,
     setSourceSucceeded: setSourceSucceeded,
     setSourceError:     setSourceError,
@@ -242,19 +218,17 @@ class PlaybackDiagnostics {
     lastError:          lastError,
   );
 
-  factory PlaybackDiagnostics.resolving(
-    String videoId, {
+  factory PlaybackDiagnostics.resolving(String videoId, {
     DateTime? resolveStartedAt,
-    int attempt = 1,
-    List<String> excludedClients = const [],
+    int       attempt = 1,
   }) => PlaybackDiagnostics.atStage(
     PlaybackStage.resolving,
     videoId:          videoId,
     attempt:          attempt,
-    excludedClients:  excludedClients,
     resolveStartedAt: resolveStartedAt ?? DateTime.now(),
   );
 }
 
+/// Global notifier published by [PlaybackEngineImpl].
 // ignore: non_constant_identifier_names
 final PlaybackDiagnosticsNotifier = ValueNotifier<PlaybackDiagnostics?>(null);
