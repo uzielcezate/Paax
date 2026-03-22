@@ -3,6 +3,25 @@ import 'package:flutter/foundation.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'stream_cache.dart';
 
+// ---------------------------------------------------------------------------
+// Anti-Bot: Override YoutubeHttpClient headers so every Innertube call uses
+// the Android YouTube Music UA instead of the default Chrome/desktop UA.
+// The library's send() method injects these on every request automatically.
+// ---------------------------------------------------------------------------
+class _MusicHttpClient extends YoutubeHttpClient {
+  static const _kHeaders = {
+    'user-agent':
+        'com.google.android.apps.youtube.music/6.47.53 '
+        '(Linux; U; Android 14; es_MX) gzip',
+    'accept-language': 'es-MX,es;q=0.9,en-US;q=0.8,en;q=0.7',
+    'accept': '*/*',
+    'cookie': 'CONSENT=YES+cb',
+  };
+
+  @override
+  Map<String, String> get headers => _kHeaders;
+}
+
 // ===========================================================================
 // LocalStreamResolver — on-device YouTube audio stream extractor
 // ===========================================================================
@@ -57,11 +76,13 @@ class ResolvedStream {
 class LocalResolveException implements Exception {
   final String  message;
   final bool    is403;
+  final bool    is429; // rate-limited — back off and retry
   final String? videoId;
 
   const LocalResolveException(
     this.message, {
     this.is403  = false,
+    this.is429  = false,
     this.videoId,
   });
 
@@ -79,8 +100,13 @@ class LocalStreamResolver {
   /// Shared singleton — one YoutubeExplode for the app's entire lifecycle.
   static final LocalStreamResolver instance = LocalStreamResolver._();
 
-  /// Never call dispose() on this — it must outlive the app.
-  final _yt    = YoutubeExplode();
+  /// Never call dispose() on this — it must survive the entire app lifecycle.
+  ///
+  /// The inner HTTP client is configured with Android YouTube Music headers so
+  /// Innertube treats our player requests as a real phone app, not a bot.
+  static YoutubeExplode _buildYt() => YoutubeExplode(_MusicHttpClient());
+
+  final _yt    = _buildYt();
   final _cache = StreamCache.instance;
 
   // ---------------------------------------------------------------------------
@@ -111,9 +137,18 @@ class LocalStreamResolver {
     try {
       manifest = await _yt.videos.streamsClient.getManifest(videoId);
     } on YoutubeExplodeException catch (e) {
-      debugPrint('[LOCAL RESOLVE] YoutubeExplodeException: ${e.message}');
+      final msg = e.message.toLowerCase();
+      final is429 = msg.contains('429') ||
+                    msg.contains('rate') ||
+                    msg.contains('too many requests') ||
+                    msg.contains('bot') ||
+                    msg.contains('sign in') ||
+                    msg.contains('confirm');
+      debugPrint('[LOCAL RESOLVE] ${is429 ? '429/RATE-LIMIT' : 'ERROR'}: ${e.message}');
       throw LocalResolveException(
-        'Stream unavailable: ${e.message}',
+        is429 ? 'Rate-limited by YouTube — retrying with fresh extract'
+              : 'Stream unavailable: ${e.message}',
+        is429:   is429,
         videoId: videoId,
       );
     } catch (e) {
