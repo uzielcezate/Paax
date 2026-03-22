@@ -25,17 +25,18 @@ import 'playback_engine.dart';
 //   403 PlayerException: same path as stall — invalidate + re-resolve
 
 // Headers injected into every ExoPlayer CDN request via AudioSource.uri.
-// Must match the same YouTube Music Android client used by the resolver
-// so the googlevideo.com CDN accepts our stream request without blocking.
+// Must match the web-browser UA used by youtube_explode_dart's default client
+// so the googlevideo.com CDN accepts the web-signed stream URL without dropping
+// the connection.
 const Map<String, String> _kHeaders = {
   'User-Agent':
-      'com.google.android.apps.youtube.music/6.47.53 '
-      '(Linux; U; Android 14; es_MX) gzip',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+      'AppleWebKit/537.36 (KHTML, like Gecko) '
+      'Chrome/120.0.0.0 Safari/537.36',
   'Accept':          '*/*',
-  'Accept-Language': 'es-MX,es;q=0.9,en-US;q=0.8,en;q=0.7',
-  'Origin':          'https://music.youtube.com',
-  'Referer':         'https://music.youtube.com/',
-  'Connection':      'keep-alive',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Origin':          'https://www.youtube.com',
+  'Referer':         'https://www.youtube.com/',
 };
 
 const int _kMaxAttempts = 2;
