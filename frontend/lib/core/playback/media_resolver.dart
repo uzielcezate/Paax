@@ -3,24 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'stream_cache.dart';
 
-// ---------------------------------------------------------------------------
-// Anti-Bot: Override YoutubeHttpClient headers so every Innertube call uses
-// the Android YouTube Music UA instead of the default Chrome/desktop UA.
-// The library's send() method injects these on every request automatically.
-// ---------------------------------------------------------------------------
-class _MusicHttpClient extends YoutubeHttpClient {
-  static const _kHeaders = {
-    'user-agent':
-        'com.google.android.apps.youtube.music/6.47.53 '
-        '(Linux; U; Android 14; es_MX) gzip',
-    'accept-language': 'es-MX,es;q=0.9,en-US;q=0.8,en;q=0.7',
-    'accept': '*/*',
-    'cookie': 'CONSENT=YES+cb',
-  };
-
-  @override
-  Map<String, String> get headers => _kHeaders;
-}
 
 // ===========================================================================
 // LocalStreamResolver — on-device YouTube audio stream extractor
@@ -102,11 +84,9 @@ class LocalStreamResolver {
 
   /// Never call dispose() on this — it must survive the entire app lifecycle.
   ///
-  /// The inner HTTP client is configured with Android YouTube Music headers so
-  /// Innertube treats our player requests as a real phone app, not a bot.
-  static YoutubeExplode _buildYt() => YoutubeExplode(_MusicHttpClient());
-
-  final _yt    = _buildYt();
+  /// Use the default client so the library correctly parses web signatures
+  /// and generates web-signed CDN URLs that match the web browser UA below.
+  final _yt    = YoutubeExplode();
   final _cache = StreamCache.instance;
 
   // ---------------------------------------------------------------------------
