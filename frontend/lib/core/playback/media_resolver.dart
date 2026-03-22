@@ -1,83 +1,43 @@
-import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'stream_cache.dart';
 
-// ---------------------------------------------------------------------------
-// StreamCandidate
-// ---------------------------------------------------------------------------
-class StreamCandidate {
-  final String url;
-  final int    itag;
-  final String mimeType;
-  final String sourceType;
-  final String clientUsed;
-  final int    bitrate;
-
-  const StreamCandidate({
-    required this.url,
-    required this.itag,
-    required this.mimeType,
-    required this.sourceType,
-    required this.clientUsed,
-    this.bitrate = 0,
-  });
-
-  String get key => '$clientUsed:$itag';
-
-  Map<String, dynamic> toJson() => {
-    'url': url, 'itag': itag, 'mimeType': mimeType,
-    'sourceType': sourceType, 'clientUsed': clientUsed, 'bitrate': bitrate,
-  };
-
-  factory StreamCandidate.fromJson(Map<String, dynamic> j, String clientUsed) =>
-      StreamCandidate(
-        url:        j['url']        as String,
-        itag:       (j['itag']      as num).toInt(),
-        mimeType:   j['mimeType']   as String? ?? 'audio/mp4',
-        sourceType: j['sourceType'] as String? ?? 'audioOnly',
-        clientUsed: clientUsed,
-        bitrate:    (j['bitrate']   as num?)?.toInt() ?? 0,
-      );
-
-  @override
-  String toString() => 'StreamCandidate(key=$key sourceType=$sourceType mime=$mimeType)';
-}
+// ===========================================================================
+// LocalStreamResolver — on-device YouTube audio stream extractor
+// ===========================================================================
+//
+// Uses a single, shared YoutubeExplode instance across the app's lifetime to
+// avoid memory leaks and excessive initialisation overhead.
+//
+// Stream selection priority:
+//   1. AudioOnly itag=140  (audio/mp4, ~128 kbps AAC — most stable)
+//   2. AudioOnly, any mp4/m4a, highest bitrate
+//   3. AudioOnly, any container, highest bitrate
+//   4. Muxed mp4, lowest bitrate (last resort)
+// ===========================================================================
 
 // ---------------------------------------------------------------------------
-// ResolvedStream
+// ResolvedStream — minimal value object
 // ---------------------------------------------------------------------------
+
 class ResolvedStream {
-  final String url;
-  final String mimeType;
-  final String sourceType;
+  final String   url;
+  final String   mimeType;   // e.g. 'audio/mp4'
+  final String   sourceType; // 'audioOnly' | 'muxed'
   final DateTime resolvedAt;
-  final int    expiresAt;
-  final String clientUsed;
-  final int    itag;
-  final List<StreamCandidate> candidates;
-
-  // Worker v6 debug fields
-  final List<String> attemptedClients;
-  final List<String> excludedClients;
-  final String       resolvePath;    // 'fresh' | 'cache'
-  final int          candidateCount;
-  final List<Map<String, String>> clientErrors;
+  final int      expiresAt;  // Unix epoch seconds, 0 = unknown
+  final int      itag;
+  final int      bitrate;    // bits per second
 
   const ResolvedStream({
     required this.url,
     required this.mimeType,
     required this.sourceType,
     required this.resolvedAt,
-    this.expiresAt  = 0,
-    this.clientUsed = '?',
-    this.itag       = 0,
-    this.candidates = const [],
-    this.attemptedClients = const [],
-    this.excludedClients  = const [],
-    this.resolvePath      = '',
-    this.candidateCount   = 0,
-    this.clientErrors     = const [],
+    this.expiresAt = 0,
+    this.itag      = 0,
+    this.bitrate   = 0,
   });
 
   bool get isExpired {
@@ -87,147 +47,95 @@ class ResolvedStream {
 
   @override
   String toString() =>
-      'ResolvedStream(client=$clientUsed itag=$itag candidates=${candidates.length} '
-      'attempted=${attemptedClients.join(",")} path=$resolvePath)';
+      'ResolvedStream(itag=$itag mimeType=$mimeType sourceType=$sourceType)';
 }
 
 // ---------------------------------------------------------------------------
-// MediaResolver
+// LocalResolveException
 // ---------------------------------------------------------------------------
-class MediaResolver {
-  MediaResolver({StreamCache? cache}) : _cache = cache ?? StreamCache.instance;
 
-  final StreamCache _cache;
-  static const String _workerBase    = 'https://stream.paaxmusic.app';
-  static const Duration _httpTimeout = Duration(seconds: 15);
-  static const Map<String, String> _workerHeaders = {'Accept': 'application/json'};
+class LocalResolveException implements Exception {
+  final String  message;
+  final bool    is403;
+  final String? videoId;
 
-  Future<ResolvedStream> resolve(
-    String videoId, {
-    String?       preferredClient,
-    List<String>? excludeClients,
-  }) async {
+  const LocalResolveException(
+    this.message, {
+    this.is403  = false,
+    this.videoId,
+  });
+
+  @override
+  String toString() => message;
+}
+
+// ---------------------------------------------------------------------------
+// LocalStreamResolver
+// ---------------------------------------------------------------------------
+
+class LocalStreamResolver {
+  LocalStreamResolver._();
+
+  /// Shared singleton — one YoutubeExplode for the app's entire lifecycle.
+  static final LocalStreamResolver instance = LocalStreamResolver._();
+
+  /// Never call dispose() on this — it must outlive the app.
+  final _yt    = YoutubeExplode();
+  final _cache = StreamCache.instance;
+
+  // ---------------------------------------------------------------------------
+  // resolve
+  // ---------------------------------------------------------------------------
+
+  /// Extract and return the best audio stream for [videoId].
+  ///
+  /// Results are cached in [StreamCache] with a fixed TTL. Callers should call
+  /// [invalidate] before retrying after a 403 or playback failure.
+  Future<ResolvedStream> resolve(String videoId) async {
     assert(videoId.isNotEmpty);
 
-    final forceResolve = preferredClient != null ||
-        (excludeClients != null && excludeClients.isNotEmpty);
-
     // Cache hit
-    if (!forceResolve) {
-      final cached = await _cache.get(videoId);
-      if (cached != null) {
-        if (!cached.isExpired) {
-          debugPrint('[MEDIA CACHE HIT] $videoId client=${cached.clientUsed} itag=${cached.itag}');
-          return cached;
-        }
-        await _cache.invalidate(videoId);
+    final cached = await _cache.get(videoId);
+    if (cached != null) {
+      if (!cached.isExpired) {
+        debugPrint('[LOCAL RESOLVE] Cache hit: $videoId itag=${cached.itag}');
+        return cached;
       }
+      await _cache.invalidate(videoId);
     }
 
-    // Build URL
-    final qp = <String, String>{};
-    if (preferredClient != null)                                qp['client']  = preferredClient;
-    if (excludeClients != null && excludeClients.isNotEmpty)   qp['exclude'] = excludeClients.join(',');
-    final endpoint = Uri.parse('$_workerBase/$videoId')
-        .replace(queryParameters: qp.isNotEmpty ? qp : null);
+    debugPrint('[LOCAL RESOLVE] Fetching manifest: $videoId');
+    final resolveStart = DateTime.now();
 
-    debugPrint('[MEDIA RESOLVE START] $videoId → $endpoint');
-
-    // HTTP
-    final http.Response response;
+    StreamManifest manifest;
     try {
-      response = await http.get(endpoint, headers: _workerHeaders).timeout(_httpTimeout);
-    } catch (e) {
-      throw MediaResolveException('Network error resolving stream: $e');
-    }
-
-    if (response.statusCode != 200) {
-      String code = 'WORKER_ERROR';
-      String? errorBody;
-      List<String>            attemptedClients = [];
-      List<Map<String, String>> clientErrors  = [];
-      try {
-        final b = jsonDecode(response.body) as Map<String, dynamic>;
-        code             = (b['code']             as String?) ?? code;
-        errorBody        = (b['error']             as String?);
-        attemptedClients = (b['attemptedClients']  as List?)?.cast<String>() ?? [];
-        final rawErrs    =  b['clientErrors']      as List? ?? [];
-        clientErrors     = rawErrs.map((e) {
-          final m = e as Map;
-          return {'client': m['client']?.toString() ?? '', 'code': m['code']?.toString() ?? '', 'msg': m['msg']?.toString() ?? ''};
-        }).toList();
-      } catch (_) {
-        errorBody = response.body.length > 120
-            ? '${response.body.substring(0, 120)}…'
-            : response.body;
-      }
-      final clientErrorStr = clientErrors.map((e) => '${e['client']}:${e['code']}').join(', ');
-      debugPrint('[MEDIA RESOLVE FAIL] $videoId HTTP=${response.statusCode} code=$code '
-          'attempted=[${attemptedClients.join(',')}] clientErrors={$clientErrorStr}');
-      throw MediaResolveException(
-        _workerErrorMessage(code, response.statusCode),
-        code: code, httpStatus: response.statusCode,
-        errorBody: errorBody,
-        attemptedClients: attemptedClients,
-        clientErrors: clientErrors,
+      manifest = await _yt.videos.streamsClient.getManifest(videoId);
+    } on YoutubeExplodeException catch (e) {
+      debugPrint('[LOCAL RESOLVE] YoutubeExplodeException: ${e.message}');
+      throw LocalResolveException(
+        'Stream unavailable: ${e.message}',
+        videoId: videoId,
       );
-    }
-
-    // Parse JSON
-    final Map<String, dynamic> body;
-    try {
-      body = jsonDecode(response.body) as Map<String, dynamic>;
     } catch (e) {
-      throw const MediaResolveException('Stream resolver returned malformed response');
+      debugPrint('[LOCAL RESOLVE] Error: $e');
+      throw LocalResolveException('Failed to resolve stream: $e', videoId: videoId);
     }
 
-    final cdnUrl     = body['url']        as String?;
-    final mimeType   = body['mimeType']   as String? ?? 'audio/mp4';
-    final srcType    = body['sourceType'] as String? ?? 'audioOnly';
-    final expiresAt  = (body['expiresAt'] as num?)?.toInt() ?? 0;
-    final clientUsed = body['clientUsed'] as String? ?? '?';
-    final itag       = (body['itag']      as num?)?.toInt() ?? 0;
+    final elapsed = DateTime.now().difference(resolveStart).inMilliseconds;
+    debugPrint('[LOCAL RESOLVE] Manifest in ${elapsed}ms: $videoId');
 
-    if (cdnUrl == null || cdnUrl.isEmpty) {
-      throw const MediaResolveException('Stream resolver returned an empty URL');
-    }
+    final resolved = _selectBest(manifest, videoId);
+    debugPrint('[LOCAL RESOLVE] Selected itag=${resolved.itag} '
+        'mime=${resolved.mimeType} src=${resolved.sourceType} '
+        'bitrate=${resolved.bitrate ~/ 1000}kbps expiresAt=${resolved.expiresAt}');
 
-    // Parse candidates
-    final rawCandidates = body['candidates'] as List<dynamic>? ?? [];
-    final candidates = rawCandidates
-        .map((c) => StreamCandidate.fromJson(c as Map<String, dynamic>, clientUsed))
-        .toList();
-    if (candidates.isEmpty) {
-      candidates.add(StreamCandidate(url: cdnUrl, itag: itag, mimeType: mimeType,
-          sourceType: srcType, clientUsed: clientUsed));
-    }
-
-    // Parse Worker v6 debug fields
-    final attemptedClients = (body['attemptedClients'] as List?)?.cast<String>() ?? [];
-    final excludedClients  = (body['excludedClients']  as List?)?.cast<String>() ?? [];
-    final resolvePath      = body['resolvePath']     as String? ?? '';
-    final candidateCount   = (body['candidateCount'] as num?)?.toInt() ?? candidates.length;
-    final rawClientErrors  = body['clientErrors'] as List? ?? [];
-    final clientErrors     = rawClientErrors.map((e) {
-      final m = e as Map;
-      return {'client': m['client']?.toString() ?? '', 'code': m['code']?.toString() ?? '', 'msg': m['msg']?.toString() ?? ''};
-    }).toList();
-
-    final resolved = ResolvedStream(
-      url: cdnUrl, mimeType: mimeType, sourceType: srcType,
-      resolvedAt: DateTime.now(), expiresAt: expiresAt,
-      clientUsed: clientUsed, itag: itag, candidates: candidates,
-      attemptedClients: attemptedClients, excludedClients: excludedClients,
-      resolvePath: resolvePath, candidateCount: candidateCount,
-      clientErrors: clientErrors,
-    );
-
-    debugPrint('[MEDIA RESOLVE OK] $videoId client=$clientUsed itag=$itag '
-        'candidates=${candidates.length} attempted=${attemptedClients.join(",")} path=$resolvePath');
-
-    if (!forceResolve) await _cache.put(videoId, resolved);
+    await _cache.put(videoId, resolved);
     return resolved;
   }
+
+  // ---------------------------------------------------------------------------
+  // resolveForPrefetch — used by PrefetchManager (best-effort, fire-and-forget)
+  // ---------------------------------------------------------------------------
 
   Future<ResolvedStream> resolveForPrefetch(String videoId) async {
     final cached = await _cache.get(videoId);
@@ -235,40 +143,81 @@ class MediaResolver {
     return resolve(videoId);
   }
 
-  Future<void> invalidate(String videoId) => _cache.invalidate(videoId);
+  // ---------------------------------------------------------------------------
+  // invalidate
+  // ---------------------------------------------------------------------------
 
-  String _workerErrorMessage(String code, int status) {
-    const msgs = {
-      'PLAYABILITY_UNAVAILABLE': 'This track is no longer available.',
-      'PLAYABILITY_FAILED':      'This track is no longer available.',
-      'NO_AUDIO_FORMAT':         'No compatible audio stream found.',
-      'ALL_CLIENTS_BLOCKED':     'Stream temporarily unavailable. Please try again.',
-      'ALL_CLIENTS_EXCLUDED':    'Stream temporarily unavailable. Please try again.',
-      'NO_STREAMING_DATA':       'Playback is not available right now.',
-    };
-    return msgs[code] ?? 'Stream unavailable (HTTP $status). Please try again.';
+  Future<void> invalidate(String videoId) {
+    debugPrint('[LOCAL RESOLVE] Invalidating cache: $videoId');
+    return _cache.invalidate(videoId);
   }
-}
 
-// ---------------------------------------------------------------------------
-// MediaResolveException
-// ---------------------------------------------------------------------------
-class MediaResolveException implements Exception {
-  final String  message;
-  final String? code;
-  final int     httpStatus;
-  final String? errorBody;
-  final List<String>              attemptedClients;
-  final List<Map<String, String>> clientErrors;
+  // ---------------------------------------------------------------------------
+  // _selectBest
+  // ---------------------------------------------------------------------------
 
-  const MediaResolveException(
-    this.message, {
-    this.code,
-    this.httpStatus       = 0,
-    this.errorBody,
-    this.attemptedClients = const [],
-    this.clientErrors     = const [],
-  });
+  ResolvedStream _selectBest(StreamManifest manifest, String videoId) {
+    final audioStreams = manifest.audioOnly.toList();
 
-  @override String toString() => message;
+    // Priority 1: itag 140  (audio/mp4 128kbps AAC — most reliable)
+    for (final s in audioStreams) {
+      if (s.tag == 140) {
+        return _fromAudio(s);
+      }
+    }
+
+    // Priority 2: any mp4/m4a audio stream, highest bitrate
+    final mp4Audio = audioStreams
+        .where((s) => s.container.name.toLowerCase() == 'mp4')
+        .toList()
+      ..sort((a, b) => b.bitrate.bitsPerSecond.compareTo(a.bitrate.bitsPerSecond));
+    if (mp4Audio.isNotEmpty) return _fromAudio(mp4Audio.first);
+
+    // Priority 3: any audio stream, highest bitrate
+    audioStreams.sort(
+        (a, b) => b.bitrate.bitsPerSecond.compareTo(a.bitrate.bitsPerSecond));
+    if (audioStreams.isNotEmpty) return _fromAudio(audioStreams.first);
+
+    // Priority 4: muxed mp4 (last resort — video + audio, pick lowest bitrate)
+    final muxed = manifest.muxed
+        .where((s) => s.container.name.toLowerCase() == 'mp4')
+        .toList()
+      ..sort((a, b) => a.bitrate.bitsPerSecond.compareTo(b.bitrate.bitsPerSecond));
+    if (muxed.isNotEmpty) {
+      final m = muxed.first;
+      return ResolvedStream(
+        url:        m.url.toString(),
+        mimeType:   'video/mp4',
+        sourceType: 'muxed',
+        resolvedAt: DateTime.now(),
+        expiresAt:  _extractExpiry(m.url),
+        itag:       m.tag,
+        bitrate:    m.bitrate.bitsPerSecond,
+      );
+    }
+
+    throw LocalResolveException(
+      'No playable stream found for $videoId',
+      videoId: videoId,
+    );
+  }
+
+  ResolvedStream _fromAudio(AudioOnlyStreamInfo s) => ResolvedStream(
+    url:        s.url.toString(),
+    mimeType:   'audio/${s.container.name.toLowerCase()}',
+    sourceType: 'audioOnly',
+    resolvedAt: DateTime.now(),
+    expiresAt:  _extractExpiry(s.url),
+    itag:       s.tag,
+    bitrate:    s.bitrate.bitsPerSecond,
+  );
+
+  int _extractExpiry(Uri uri) {
+    try {
+      final v = uri.queryParameters['expire'];
+      return v != null ? (int.tryParse(v) ?? 0) : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
 }
