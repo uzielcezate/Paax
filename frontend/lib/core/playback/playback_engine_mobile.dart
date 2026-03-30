@@ -3,31 +3,28 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
-import 'media_resolver.dart';
+import 'stream_api_service.dart';
 import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
 // ---------------------------------------------------------------------------
-// PlaybackEngineImpl — local-first, youtube_explode_dart powered
+// PlaybackEngineImpl — server-first, Invidious-backed audio playback
 // ---------------------------------------------------------------------------
 //
-// Stream resolution is fully on-device via [LocalStreamResolver].
-// No Cloudflare Worker, no remote proxy.
+// All stream resolution happens on the user's own backend.
+// Flutter never touches YouTube/Invidious directly.
 //
-// Retry policy (max 2 attempts):
-//   Attempt 1: LocalStreamResolver.resolve(videoId) → cached or fresh extract
-//              play via AudioSource.uri + YouTube headers
-//              3-sec stall guard fires → invalidate cache → retry
+// Flow:
+//   load(videoId)
+//     → StreamApiService.resolveStream(videoId)
+//         GET /resolve/stream/{videoId}  (your backend → Invidious)
+//         ← { streamUrl, mimeType, provider, bitrate }
+//     → just_audio: AudioSource.uri(streamUrl, headers: {...})
+//     → 3-sec stall guard → 1 retry (fresh resolve, no cache)
+//     → stall again → retryFailed
 //
-//   Attempt 2: LocalStreamResolver.resolve(videoId) → guaranteed fresh URL
-//              3-sec stall guard fires → retryFailed
-//
-//   403 PlayerException: same path as stall — invalidate + re-resolve
+//   PlayerException 403/400 → same path as stall (1 retry)
 
-// Headers injected into every ExoPlayer CDN request via AudioSource.uri.
-// Must match the web-browser UA used by youtube_explode_dart's default client
-// so the googlevideo.com CDN accepts the web-signed stream URL without dropping
-// the connection.
 const Map<String, String> _kHeaders = {
   'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -42,10 +39,10 @@ const Map<String, String> _kHeaders = {
 const int _kMaxAttempts = 2;
 
 class PlaybackEngineImpl implements PlaybackEngine {
-  PlaybackEngineImpl({LocalStreamResolver? resolver})
-      : _resolver = resolver ?? LocalStreamResolver.instance;
+  PlaybackEngineImpl({StreamApiService? streamApi})
+      : _streamApi = streamApi ?? StreamApiService();
 
-  final LocalStreamResolver _resolver;
+  final StreamApiService _streamApi;
   final _player         = AudioPlayer();
   final _completionCtrl = StreamController<void>.broadcast();
 
@@ -148,13 +145,15 @@ class PlaybackEngineImpl implements PlaybackEngine {
       );
     }
 
-    // ── Resolve ─────────────────────────────────────────────────────────────
-    ResolvedStream resolved;
+    // ── Resolve via backend ──────────────────────────────────────────────────
+    debugPrint('[ENGINE] Resolving: $videoId (attempt $attempt)');
+    StreamResult resolved;
     try {
-      resolved = await _resolver.resolve(videoId);
+      resolved = await _streamApi.resolveStream(videoId);
     } catch (e) {
-      debugPrint('[ENGINE] Resolve failed ($attempt): $e');
+      debugPrint('[ENGINE] Resolve failed (attempt $attempt): $e');
       if (kDebugMode) {
+        final httpStatus = e is StreamResolveException ? e.httpStatus : 0;
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.failedResolve,
           videoId:           videoId,
@@ -163,9 +162,9 @@ class PlaybackEngineImpl implements PlaybackEngine {
           resolveStartedAt:  resolveStart,
           resolveFinishedAt: DateTime.now(),
           lastError:         e.toString(),
+          workerHttpStatus:  httpStatus,
         );
       }
-      // Propagate only on attempt 1 — caller (load) should surface the error
       if (attempt == 1) rethrow;
       return;
     }
@@ -173,20 +172,22 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (_loadId != myId) return;
 
     final resolveEnd = DateTime.now();
-    final uri  = Uri.parse(resolved.url);
+    final uri  = Uri.parse(resolved.streamUrl);
     final host = uri.host;
+
+    debugPrint('[ENGINE] Resolved: videoId=$videoId provider=${resolved.provider} '
+        'mime=${resolved.mimeType} bitrate=${resolved.bitrate ~/ 1000}kbps '
+        'host=$host attempt=$attempt');
 
     if (kDebugMode) {
       PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
         PlaybackStage.resolved,
         videoId:           videoId,
         attempt:           attempt,
-        resolveSource:     'local',
-        sourceType:        resolved.sourceType,
+        resolveSource:     'backend',
+        sourceType:        'audioOnly',
         mimeType:          resolved.mimeType,
-        itag:              resolved.itag,
         bitrate:           resolved.bitrate,
-        expiresAt:         resolved.expiresAt,
         urlHost:           host,
         resolveStartedAt:  resolveStart,
         resolveFinishedAt: resolveEnd,
@@ -206,36 +207,34 @@ class PlaybackEngineImpl implements PlaybackEngine {
       }
     }
 
-    debugPrint('[ENGINE] setAudioSource attempt=$attempt itag=${resolved.itag} host=$host');
+    debugPrint('[ENGINE] setAudioSource: $host attempt=$attempt');
 
     try {
       await _player.setAudioSource(source, preload: false);
     } on PlayerException catch (e) {
-      final errMsg = 'PlayerException code=${e.code}';
-      final is403  = (e.message ?? '').contains('403') ||
-                     e.code.toString().contains('403');
-      debugPrint('[ENGINE] setAudioSource failed: $errMsg is403=$is403');
+      final errMsg = 'PlayerException code=${e.code}: ${e.message}';
+      final is4xx  = e.code.toString().contains('40') ||
+                     (e.message ?? '').contains('403') ||
+                     (e.message ?? '').contains('400');
+      debugPrint('[ENGINE] setAudioSource failed ($errMsg is4xx=$is4xx)');
       if (kDebugMode) {
         PlaybackDiagnosticsNotifier.value = PlaybackDiagnostics.atStage(
           PlaybackStage.failedSetSource,
           videoId: videoId, attempt: attempt,
-          sourceType: resolved.sourceType, mimeType: resolved.mimeType,
-          itag: resolved.itag, urlHost: host,
+          mimeType: resolved.mimeType, urlHost: host,
           resolveStartedAt: resolveStart, resolveFinishedAt: resolveEnd,
           setSourceCalled: true, setSourceError: errMsg,
           failureSource: FailureSource.playback, lastError: errMsg,
         );
       }
-      await _handlePlayerFailure(
-        videoId: videoId, myId: myId, attempt: attempt,
-        reason: errMsg, force403: is403,
+      await _handleStall(
+        videoId: videoId, myId: myId, attempt: attempt, reason: errMsg,
       );
       return;
     } catch (e) {
       debugPrint('[ENGINE] setAudioSource generic error: $e');
-      await _handlePlayerFailure(
-        videoId: videoId, myId: myId, attempt: attempt,
-        reason: 'setAudioSource: $e',
+      await _handleStall(
+        videoId: videoId, myId: myId, attempt: attempt, reason: '$e',
       );
       return;
     }
@@ -268,12 +267,11 @@ class PlaybackEngineImpl implements PlaybackEngine {
     try {
       await _player.seek(Duration.zero);
       await _player.play();
-      debugPrint('[ENGINE] play() called attempt=$attempt state=${_player.processingState.name}');
+      debugPrint('[ENGINE] play() called: state=${_player.processingState.name}');
     } catch (e) {
       debugPrint('[ENGINE] play() threw: $e');
-      await _handlePlayerFailure(
-        videoId: videoId, myId: myId, attempt: attempt,
-        reason: 'play() threw: $e',
+      await _handleStall(
+        videoId: videoId, myId: myId, attempt: attempt, reason: 'play(): $e',
       );
       return;
     }
@@ -295,7 +293,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
     final guardId      = myId;
     final guardVideoId = videoId;
     final guardAttempt = attempt;
-    final guardItag    = resolved.itag;
 
     Future.delayed(const Duration(seconds: 3), () async {
       if (_isDisposed || _loadId != guardId) return;
@@ -307,14 +304,14 @@ class PlaybackEngineImpl implements PlaybackEngine {
       final bytesMoving = pos > Duration.zero || buf > Duration.zero;
 
       debugPrint('[STALL GUARD] $guardVideoId attempt=$guardAttempt '
-          'itag=$guardItag pos=${pos.inMilliseconds}ms buf=${buf.inMilliseconds}ms '
-          'state=${state.name} moving=$bytesMoving');
+          'pos=${pos.inMilliseconds}ms buf=${buf.inMilliseconds}ms '
+          'state=${state.name} bytesMoving=$bytesMoving');
 
-      if (bytesMoving) return; // bytes flowing — all good
+      if (bytesMoving) return;
 
-      final elapsed  = DateTime.now().difference(playCallTime).inSeconds;
-      final isFalse  = kDebugMode &&
-          (PlaybackDiagnosticsNotifier.value?.stage == PlaybackStage.playing);
+      final elapsed = DateTime.now().difference(playCallTime).inSeconds;
+      final isFalse = kDebugMode &&
+          PlaybackDiagnosticsNotifier.value?.stage == PlaybackStage.playing;
 
       if (kDebugMode) {
         final prev = PlaybackDiagnosticsNotifier.value;
@@ -322,30 +319,29 @@ class PlaybackEngineImpl implements PlaybackEngine {
           PlaybackStage.failedBuffering,
           videoId: guardVideoId, attempt: guardAttempt,
         )).copyWith(
-          stage:          isFalse ? PlaybackStage.falsePlayingDetected : PlaybackStage.failedBuffering,
-          stageEnteredAt: DateTime.now(),
-          failureSource:  FailureSource.playback,
+          stage:           isFalse ? PlaybackStage.falsePlayingDetected
+                                   : PlaybackStage.failedBuffering,
+          stageEnteredAt:  DateTime.now(),
+          failureSource:   FailureSource.playback,
           processingState: state.name, isPlaying: playing,
           position: pos, buffered: buf,
           lastError: '${state.name} after ${elapsed}s: pos=0 buf=0',
         );
       }
 
-      await _handlePlayerFailure(
+      await _handleStall(
         videoId: guardVideoId, myId: guardId, attempt: guardAttempt,
         reason: 'no bytes after ${elapsed}s (${state.name})',
       );
     });
   }
 
-  // ── _handlePlayerFailure ───────────────────────────────────────────────────
-  // Shared path for stall guard, 403, and play() errors.
-  Future<void> _handlePlayerFailure({
+  // ── _handleStall ───────────────────────────────────────────────────────────
+  Future<void> _handleStall({
     required String videoId,
     required int    myId,
     required int    attempt,
     required String reason,
-    bool            force403 = false,
   }) async {
     if (_isDisposed || _loadId != myId) return;
 
@@ -366,9 +362,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
       return;
     }
 
-    // Always invalidate cache before re-resolve — ensures fresh URL
-    await _resolver.invalidate(videoId);
-    debugPrint('[ENGINE] Retrying: $videoId attempt=${attempt + 1} reason=$reason');
+    debugPrint('[ENGINE] Stall detected — retrying: $videoId '
+        'attempt ${attempt + 1}/$_kMaxAttempts reason=$reason');
 
     if (kDebugMode) {
       final prev = PlaybackDiagnosticsNotifier.value;
@@ -389,7 +384,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
     await _playAttempt(videoId: videoId, myId: myId, attempt: attempt + 1);
   }
 
-  // ── _maybeConfirmPlaying ─────────────────────────────────────────────────
+  // ── _maybeConfirmPlaying ───────────────────────────────────────────────────
   void _maybeConfirmPlaying(ProcessingState state, bool isPlaying) {
     if (!kDebugMode) return;
     final prev = PlaybackDiagnosticsNotifier.value;
@@ -402,9 +397,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
     if (!((state == ProcessingState.ready || state == ProcessingState.buffering) &&
         isPlaying && (pos > Duration.zero || buf > Duration.zero))) return;
 
-    debugPrint('[ENGINE] Playback confirmed: ${prev.videoId} '
-        'itag=${prev.itag} attempt=${prev.attempt} '
-        'pos=${pos.inMilliseconds}ms buf=${buf.inMilliseconds}ms');
+    debugPrint('[ENGINE] ✓ Playback confirmed: ${prev.videoId} '
+        'attempt=${prev.attempt} pos=${pos.inMilliseconds}ms');
 
     PlaybackDiagnosticsNotifier.value = prev.copyWith(
       stage:           prev.attempt > 1
@@ -420,15 +414,13 @@ class PlaybackEngineImpl implements PlaybackEngine {
     );
   }
 
-  // ── prefetchNext ─────────────────────────────────────────────────────────
+  // ── prefetchNext ───────────────────────────────────────────────────────────
   @override
   void prefetchNext(String videoId) {
-    if (videoId.isEmpty) return;
-    _resolver.resolveForPrefetch(videoId).then((_) {
-      debugPrint('[ENGINE PREFETCH] $videoId — cached');
-    }).catchError((Object e) {
-      debugPrint('[ENGINE PREFETCH] $videoId — failed: $e');
-    });
+    // Fire-and-forget background resolve. The backend response is stateless
+    // so there is nothing to cache client-side; this is a no-op placeholder
+    // until server-side caching is implemented on the stream backend.
+    debugPrint('[ENGINE PREFETCH] $videoId — no-op (server handles caching)');
   }
 
   // ── Controls ──────────────────────────────────────────────────────────────

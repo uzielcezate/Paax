@@ -95,14 +95,14 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
         const _Div(),
 
         // ── Resolve info ─────────────────────────────────────────────────────
-        _R('source',      d.resolveSource),
+        _R('source',      d.resolveSource),   // 'backend'
         _R('resolveMs',   d.resolveMs != null ? '${d.resolveMs} ms' : '—'),
-        _R('itag',        d.itag == 0    ? '—' : '${d.itag}'),
         _R('mimeType',    d.mimeType),
         _R('sourceType',  d.sourceType),
         _R('bitrate',     d.bitrate == 0 ? '—' : '${d.bitrate ~/ 1000} kbps'),
         _R('host',        d.urlHost),
-        _R('expiresAt',   _fmtExpiry(d.expiresAt), warn: d.isUrlExpired),
+        if (d.workerHttpStatus != 0)
+          _R('backendHTTP', '${d.workerHttpStatus}', err: true),
 
         const _Div(),
 
@@ -126,7 +126,7 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
         _R('duration', _dur(d.duration)),
         _R('advanced', d.position > Duration.zero || d.buffered > Duration.zero
             ? '✓ yes' : '✗ no',
-            ok:  d.position > Duration.zero || d.buffered > Duration.zero,
+            ok:   d.position > Duration.zero || d.buffered > Duration.zero,
             warn: d.playCalled && d.position == Duration.zero && d.buffered == Duration.zero),
 
         // ── Warning banners ───────────────────────────────────────────────────
@@ -170,7 +170,8 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
       case PlaybackStage.retryFailed:
         return '⚠ ALL RETRIES FAILED — ${d.attempt} attempt(s) tried';
       case PlaybackStage.failedResolve:
-        return '⚠ RESOLVE FAILED — ${d.lastError ?? 'unknown error'}';
+        final code = d.workerHttpStatus != 0 ? ' [HTTP ${d.workerHttpStatus}]' : '';
+        return '⚠ BACKEND RESOLVE FAILED$code — ${d.lastError ?? 'unknown'}';
       default: return '';
     }
   }
@@ -199,17 +200,6 @@ class _PlaybackDebugOverlayState extends State<PlaybackDebugOverlay> {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
-  }
-
-  static String _fmtExpiry(int expiresAt) {
-    if (expiresAt == 0) return '—';
-    final exp  = DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000);
-    final diff = exp.difference(DateTime.now());
-    if (diff.isNegative) {
-      final a = diff.abs();
-      return '⚠ EXPIRED ${a.inHours}h${a.inMinutes.remainder(60)}m ago';
-    }
-    return 'OK (+${diff.inHours}h${diff.inMinutes.remainder(60)}m)';
   }
 }
 

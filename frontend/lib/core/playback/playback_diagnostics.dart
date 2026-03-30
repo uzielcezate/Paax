@@ -32,15 +32,15 @@ enum PlaybackStage {
   falsePlayingDetected,
 
   // ── Retry ────────────────────────────────────────────────────────────────────
-  retryResolving,       // stall detected; re-resolving with fresh URL
-  retrySucceeded,       // retry produced confirmed byte flow
-  retryFailed,          // all attempts exhausted
+  retryResolving,
+  retrySucceeded,
+  retryFailed,
 }
 
 enum FailureSource { none, resolve, playback }
 
 // ---------------------------------------------------------------------------
-// PlaybackDiagnostics — full snapshot
+// PlaybackDiagnostics
 // ---------------------------------------------------------------------------
 class PlaybackDiagnostics {
   // ── Stage ──────────────────────────────────────────────────────────────────
@@ -49,21 +49,23 @@ class PlaybackDiagnostics {
 
   // ── Track / Attempt ────────────────────────────────────────────────────────
   final String        videoId;
-  final int           attempt;       // 1 = initial, 2 = retry
+  final int           attempt;
   final FailureSource failureSource;
 
   // ── Stream info ─────────────────────────────────────────────────────────────
-  final String resolveSource; // always 'local'
-  final String sourceType;    // 'audioOnly' | 'muxed'
+  final String resolveSource; // 'backend'
+  final String sourceType;
   final String mimeType;
-  final int    itag;
-  final int    bitrate;       // bits per second
+  final int    bitrate;
   final int    expiresAt;
   final String urlHost;
 
   // ── Resolve timing ─────────────────────────────────────────────────────────
   final DateTime? resolveStartedAt;
   final DateTime? resolveFinishedAt;
+
+  // ── HTTP status (on resolve failure) ──────────────────────────────────────
+  final int workerHttpStatus;
 
   // ── setAudioSource ─────────────────────────────────────────────────────────
   final bool    setSourceCalled;
@@ -91,15 +93,15 @@ class PlaybackDiagnostics {
     required this.videoId,
     this.attempt        = 1,
     this.failureSource  = FailureSource.none,
-    this.resolveSource  = 'local',
+    this.resolveSource  = 'backend',
     this.sourceType     = '…',
     this.mimeType       = '…',
-    this.itag           = 0,
     this.bitrate        = 0,
     this.expiresAt      = 0,
     this.urlHost        = '…',
     this.resolveStartedAt,
     this.resolveFinishedAt,
+    this.workerHttpStatus   = 0,
     this.setSourceCalled    = false,
     this.setSourceSucceeded = false,
     this.setSourceError,
@@ -115,11 +117,6 @@ class PlaybackDiagnostics {
   });
 
   // ── Computed ────────────────────────────────────────────────────────────────
-  bool get isUrlExpired {
-    if (expiresAt == 0) return false;
-    return DateTime.now().millisecondsSinceEpoch ~/ 1000 >= expiresAt;
-  }
-
   Duration  get stageAge => DateTime.now().difference(stageEnteredAt);
 
   int? get resolveMs {
@@ -133,9 +130,10 @@ class PlaybackDiagnostics {
     String?        videoId,
     int?           attempt,      FailureSource? failureSource,
     String? resolveSource,
-    String? sourceType,   String? mimeType,    int? itag,
+    String? sourceType,   String? mimeType,
     int?    bitrate,      int?    expiresAt,   String? urlHost,
     DateTime? resolveStartedAt,  DateTime? resolveFinishedAt,
+    int?     workerHttpStatus,
     bool?    setSourceCalled,    bool? setSourceSucceeded, String? setSourceError,
     bool?    playCalled,         bool? playSucceeded,      String? playError,
     String?  processingState,    bool? isPlaying,
@@ -150,12 +148,12 @@ class PlaybackDiagnostics {
     resolveSource:      resolveSource      ?? this.resolveSource,
     sourceType:         sourceType         ?? this.sourceType,
     mimeType:           mimeType           ?? this.mimeType,
-    itag:               itag               ?? this.itag,
     bitrate:            bitrate            ?? this.bitrate,
     expiresAt:          expiresAt          ?? this.expiresAt,
     urlHost:            urlHost            ?? this.urlHost,
     resolveStartedAt:   resolveStartedAt   ?? this.resolveStartedAt,
     resolveFinishedAt:  resolveFinishedAt  ?? this.resolveFinishedAt,
+    workerHttpStatus:   workerHttpStatus   ?? this.workerHttpStatus,
     setSourceCalled:    setSourceCalled    ?? this.setSourceCalled,
     setSourceSucceeded: setSourceSucceeded ?? this.setSourceSucceeded,
     setSourceError:     setSourceError     ?? this.setSourceError,
@@ -176,10 +174,11 @@ class PlaybackDiagnostics {
     required String videoId,
     int      attempt = 1,
     FailureSource failureSource = FailureSource.none,
-    String resolveSource  = 'local',
-    String? sourceType,   String? mimeType, int itag = 0,
+    String resolveSource  = 'backend',
+    String? sourceType,   String? mimeType,
     int     bitrate   = 0, int expiresAt = 0, String urlHost = '…',
     DateTime? resolveStartedAt, DateTime? resolveFinishedAt,
+    int     workerHttpStatus = 0,
     bool setSourceCalled = false, bool setSourceSucceeded = false,
     String? setSourceError,
     bool playCalled = false, bool playSucceeded = false, String? playError,
@@ -198,12 +197,12 @@ class PlaybackDiagnostics {
     resolveSource:      resolveSource,
     sourceType:         sourceType   ?? '…',
     mimeType:           mimeType     ?? '…',
-    itag:               itag,
     bitrate:            bitrate,
     expiresAt:          expiresAt,
     urlHost:            urlHost,
     resolveStartedAt:   resolveStartedAt,
     resolveFinishedAt:  resolveFinishedAt,
+    workerHttpStatus:   workerHttpStatus,
     setSourceCalled:    setSourceCalled,
     setSourceSucceeded: setSourceSucceeded,
     setSourceError:     setSourceError,
