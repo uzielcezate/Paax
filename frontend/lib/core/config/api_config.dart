@@ -5,29 +5,27 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Available Dart defines (set at compile / run time with --dart-define):
 //
-//   ENV      → local | lan | prod          (default: prod)
-//   LAN_IP   → your PC's LAN IP address   (required for ENV=lan)
+//   ENV              → local | lan | prod          (default: prod)
+//   LAN_IP           → your PC's LAN IP address   (required for ENV=lan)
+//   STREAM_BASE_URL  → override for the stream backend URL
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// Run commands — copy/paste these:
+// Run commands:
 //
-//   ① LOCAL  (Flutter Web / Chrome, backend running on same machine)
-//       flutter run -d chrome \
-//         --dart-define=ENV=local
+//   ① LOCAL  (Flutter Web / Chrome)
+//       flutter run -d chrome --dart-define=ENV=local
 //
-//   ② LAN    (physical Android/iOS phone on same Wi-Fi, replace IP)
+//   ② LAN    (physical Android/iOS on same Wi-Fi)
 //       flutter run -d <device-id> \
 //         --dart-define=ENV=lan \
 //         --dart-define=LAN_IP=192.168.1.X
 //
-//   ③ PRODUCTION  (connects to Railway backend — default)
-//       flutter run  -d <device-id>
-//       flutter run  -d chrome
+//   ③ PRODUCTION  (Railway — default)
+//       flutter run -d <device-id>
 //
-//   ④ PRODUCTION BUILD
-//       flutter build apk
-//       flutter build web
-//       flutter build ipa
+//   ④ PRODUCTION BUILD with custom stream backend
+//       flutter build apk \
+//         --dart-define=STREAM_BASE_URL=https://your-stream-server.com
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -41,8 +39,9 @@ class ApiConfig {
 
   // ── Dart-define constants ──────────────────────────────────────────────────
 
-  static const _envRaw = String.fromEnvironment('ENV', defaultValue: 'prod');
-  static const _lanIp  = String.fromEnvironment('LAN_IP', defaultValue: '');
+  static const _envRaw         = String.fromEnvironment('ENV',              defaultValue: 'prod');
+  static const _lanIp          = String.fromEnvironment('LAN_IP',           defaultValue: '');
+  static const _streamBaseUrlOverride = String.fromEnvironment('STREAM_BASE_URL', defaultValue: '');
 
   // ── Resolved environment ───────────────────────────────────────────────────
 
@@ -54,16 +53,15 @@ class ApiConfig {
     }
   }
 
-  // ── Base URL ───────────────────────────────────────────────────────────────
+  // ── Metadata base URL ──────────────────────────────────────────────────────
 
-  /// The API base URL for this build. Every HTTP call must use this.
+  /// Base URL for search / metadata API (FastAPI on Railway).
   static String get baseUrl {
     switch (_env) {
       case _Env.local:
         return 'http://127.0.0.1:8000';
       case _Env.lan:
         if (_lanIp.isEmpty) {
-          // Fallback with clear error in debug builds
           assert(false, '[ApiConfig] ENV=lan but LAN_IP is not set. '
               'Run with: --dart-define=LAN_IP=<your-PC-IP>');
           return 'http://127.0.0.1:8000';
@@ -72,6 +70,21 @@ class ApiConfig {
       case _Env.prod:
         return 'https://paax-production.up.railway.app';
     }
+  }
+
+  // ── Stream backend URL ─────────────────────────────────────────────────────
+
+  /// Base URL for the stream resolution backend.
+  ///
+  /// Override at build time:
+  ///   --dart-define=STREAM_BASE_URL=https://your-stream-server.com
+  ///
+  /// Falls back to the Railway app URL (same host as metadata) until the
+  /// dedicated stream backend is deployed separately.
+  static String get streamBaseUrl {
+    if (_streamBaseUrlOverride.isNotEmpty) return _streamBaseUrlOverride;
+    // Default: same host as metadata backend
+    return baseUrl;
   }
 
   // ── Human-readable label for logging ──────────────────────────────────────
@@ -90,13 +103,16 @@ class ApiConfig {
   static void logStartup() {
     if (kDebugMode) {
       // ignore: avoid_print
-      print('┌─────────────────────────────────────────┐');
+      print('┌─────────────────────────────────────────────────────────────┐');
       // ignore: avoid_print
-      print('│  🌐  API Environment : ${envLabel.padRight(17)}│');
+      print('│  🌐  API Environment  : ${envLabel.padRight(38)}│');
       // ignore: avoid_print
-      print('│      Base URL        : $baseUrl');
+      print('│      Metadata URL     : $baseUrl');
       // ignore: avoid_print
-      print('└─────────────────────────────────────────┘');
+      print('│      Stream URL       : $streamBaseUrl');
+      // ignore: avoid_print
+      print('└─────────────────────────────────────────────────────────────┘');
     }
   }
 }
+

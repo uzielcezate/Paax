@@ -4,14 +4,12 @@ import 'dart:math';
 import '../../domain/entities/track.dart';
 import '../../core/playback/playback_engine.dart';
 import '../../core/playback/playback_factory.dart';
-import '../../core/playback/prefetch_manager.dart';
 
 /// Loop mode — kept local to avoid importing just_audio on web.
 enum LoopMode { off, all, one }
 
 class PlaybackController extends ChangeNotifier {
   late final PlaybackEngine _engine;
-  late final PrefetchManager _prefetchManager;
 
   List<Track> _queue = [];
   int _currentIndex = -1;
@@ -48,8 +46,7 @@ class PlaybackController extends ChangeNotifier {
   final durationNotifier = ValueNotifier<Duration>(Duration.zero);
 
   PlaybackController() {
-    _engine          = getPlaybackEngine();
-    _prefetchManager = PrefetchManager();
+    _engine = getPlaybackEngine();
     _initEngine();
   }
 
@@ -185,12 +182,11 @@ class PlaybackController extends ChangeNotifier {
     bool loadFailed = false;
     try {
       await _engine.load(track.id);
-      // Kick off background prefetch once current track is loading:
-      // pre-resolve the next 2 tracks so their stream URLs are cache-warm.
-      final upcoming = _upcomingTrackIds(count: 2);
-      if (upcoming.isNotEmpty) {
-        debugPrint('[MEDIA PREFETCH] Queuing ${upcoming.length} upcoming track(s): $upcoming');
-        _prefetchManager.prefetchList(upcoming);
+      // Kick off background prefetch for the next track (best-effort,
+      // fire-and-forget via the engine — no-op if backend handles caching).
+      final upcoming = _upcomingTrackIds(count: 1);
+      for (final id in upcoming) {
+        _engine.prefetchNext(id);
       }
     } catch (e) {
       loadFailed = true;
@@ -208,8 +204,6 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> playQueue(List<Track> tracks, {int index = 0}) async {
     if (tracks.isEmpty) return;
-    // Cancel any in-flight prefetch for the old queue
-    _prefetchManager.cancelAll();
     _queue = List.from(tracks);
     _currentIndex = index;
     if (_currentIndex < 0 || _currentIndex >= _queue.length) _currentIndex = 0;
@@ -268,7 +262,6 @@ class PlaybackController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _prefetchManager.cancelAll();
     _engine.dispose();
     super.dispose();
   }
