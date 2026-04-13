@@ -8,29 +8,36 @@ import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
 // ---------------------------------------------------------------------------
-// PlaybackEngineImpl — Hybrid Architecture (Phase 8)
+// PlaybackEngineImpl — Direct Playback (Phase 9)
 // ---------------------------------------------------------------------------
 //
-// Extraction: Client-side (youtube_explode_dart on residential IP)
-// Streaming:  Server-side (IPv6 proxy with UA rotation + Range support)
+// Extraction + Playback: 100% client-side
+//   youtube_explode_dart extracts CDN URL on the user's residential IP.
+//   just_audio plays the CDN URL directly — same IP, no 403.
+//   NO proxy involved (CDN URLs are cryptographically IP-bound).
 //
 // Flow:
 //   load(videoId)
-//     → StreamApiService.resolveStream(videoId)
+//     -> StreamApiService.resolveStream(videoId)
 //         1. youtube_explode_dart extracts stream manifest (on device)
 //         2. Selects itag 140 (128kbps M4A) CDN URL
-//         3. Wraps in proxy: /stream?url=<encoded_cdn_url>
-//         ← { streamUrl: proxy_url, mimeType, provider, bitrate }
-//     → just_audio: AudioSource.uri(proxy_url)
-//     → 3-sec stall guard → 1 retry (fresh resolve, no cache)
-//     → stall again → retryFailed
+//         <- { streamUrl: raw_cdn_url, mimeType, provider, bitrate }
+//     -> just_audio: AudioSource.uri(raw_cdn_url, headers: {...})
+//     -> 3-sec stall guard -> 1 retry (fresh resolve, no cache)
+//     -> stall again -> retryFailed
 //
-//   PlayerException 403/400 → same path as stall (1 retry)
+//   PlayerException 403/400 -> same path as stall (1 retry)
 
-// Headers for talking to our OWN proxy (not YouTube directly)
+// Headers for YouTube CDN (googlevideo.com) — must look like a real browser
 const Map<String, String> _kHeaders = {
-  'User-Agent': 'PaaxMusicApp/4.0',
-  'Accept': '*/*',
+  'User-Agent':
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8) '
+      'AppleWebKit/537.36 (KHTML, like Gecko) '
+      'Chrome/125.0.0.0 Mobile Safari/537.36',
+  'Accept':          '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Origin':          'https://www.youtube.com',
+  'Referer':         'https://www.youtube.com/',
 };
 
 const int _kMaxAttempts = 2;
