@@ -1,36 +1,31 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import '../config/api_config.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'identity_service.dart';
 
 // ===========================================================================
-// StreamApiService — single HTTP client for the stream resolution backend
+// StreamApiService — WebView-Authenticated Extraction (Phase 10)
 // ===========================================================================
 //
-// All stream resolution happens server-side (Invidious via your own backend).
-// The Flutter client never touches YouTube/Invidious directly.
+// Flow:
+//   1. IdentityService provides real browser cookies + visitorData
+//      (extracted from a hidden WebView that loaded m.youtube.com)
+//   2. We inject these into youtube_explode_dart's HTTP client
+//   3. YouTube sees a "real browser" session, not a bot
+//   4. Extraction succeeds, returns raw CDN URL for direct playback
 //
-// Endpoint:
-//   GET {streamBaseUrl}/resolve/stream/{videoId}
-//
-// Expected response shape:
-//   {
-//     "success":   true,
-//     "videoId":   "...",
-//     "provider":  "invidious-nerdvpn",
-//     "streamUrl": "https://...",
-//     "mimeType":  "audio/mp4",
-//     "container": "mp4",
-//     "bitrate":   131550
-//   }
+// Fallback:
+//   If IdentityService fails (timeout, no WebView), we try extraction
+//   without cookies. It may or may not work, but we don't crash.
 // ===========================================================================
 
 class StreamResult {
-  final String streamUrl;
-  final String mimeType;    // e.g. 'audio/mp4'
-  final String container;   // e.g. 'mp4'
-  final String provider;    // e.g. 'invidious-nerdvpn'
-  final int    bitrate;     // bits per second
+  final String streamUrl;     // Raw CDN URL (fed directly to just_audio)
+  final String mimeType;      // e.g. 'audio/mp4'
+  final String container;     // e.g. 'mp4'
+  final String provider;      // 'youtube_explode_dart'
+  final int    bitrate;       // bits per second
+  final bool   authenticated; // true if WebView cookies were used
 
   const StreamResult({
     required this.streamUrl,
@@ -38,16 +33,18 @@ class StreamResult {
     required this.container,
     required this.provider,
     this.bitrate = 0,
+    this.authenticated = false,
   });
 
   @override
   String toString() =>
-      'StreamResult(provider=$provider mimeType=$mimeType bitrate=${bitrate ~/ 1000}kbps)';
+      'StreamResult(provider=$provider mimeType=$mimeType '
+      'bitrate=${bitrate ~/ 1000}kbps auth=$authenticated)';
 }
 
 class StreamResolveException implements Exception {
   final String message;
-  final int    httpStatus; // 0 = network/parse error
+  final int    httpStatus;
   final bool   isRetriable;
 
   const StreamResolveException(
@@ -61,90 +58,178 @@ class StreamResolveException implements Exception {
 }
 
 // ---------------------------------------------------------------------------
+// Authenticated HTTP client that injects WebView cookies
+// ---------------------------------------------------------------------------
+
+/// Wraps a standard [http.Client] to add YouTube session cookies
+/// and visitor identity to every outgoing request.
+class _CookieInjectedClient extends http.BaseClient {
+  final http.Client _inner;
+  final String cookieHeader;
+  final String? visitorData;
+
+  _CookieInjectedClient({
+    required this.cookieHeader,
+    this.visitorData,
+    http.Client? inner,
+  }) : _inner = inner ?? http.Client();
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    if (cookieHeader.isNotEmpty) {
+      request.headers['Cookie'] = cookieHeader;
+    }
+    if (visitorData != null && visitorData!.isNotEmpty) {
+      request.headers['X-Goog-Visitor-Id'] = visitorData!;
+    }
+    return _inner.send(request);
+  }
+
+  @override
+  void close() => _inner.close();
+}
+
+// ---------------------------------------------------------------------------
 // StreamApiService
 // ---------------------------------------------------------------------------
 
 class StreamApiService {
-  StreamApiService({http.Client? client})
-      : _client = client ?? http.Client();
+  StreamApiService();
 
-  final http.Client _client;
-
-  static const Duration _timeout = Duration(seconds: 15);
+  static const int _kTargetItag = 140; // 128kbps AAC M4A
+  static const Duration _kIdentityTimeout = Duration(seconds: 12);
 
   // ---------------------------------------------------------------------------
   // resolveStream
   // ---------------------------------------------------------------------------
 
-  /// Resolve the audio stream URL for [videoId] by calling your stream backend.
+  /// Extract the audio stream URL for [videoId] using youtube_explode_dart,
+  /// authenticated with real browser cookies from the hidden WebView.
   ///
-  /// Throws [StreamResolveException] on any failure (network, HTTP error, or
-  /// unexpected response shape).
+  /// Returns the raw CDN URL for direct playback by just_audio.
   Future<StreamResult> resolveStream(String videoId) async {
     assert(videoId.isNotEmpty);
 
-    final endpoint = '${ApiConfig.streamBaseUrl}/resolve/stream/$videoId';
-    debugPrint('[STREAM API] → GET $endpoint');
-
-    http.Response response;
+    // ── 1. Get browser identity (cookies + visitor data) ─────────────────
+    YouTubeIdentity? identity;
     try {
-      response = await _client
-          .get(Uri.parse(endpoint))
-          .timeout(_timeout);
-    } on Exception catch (e) {
-      debugPrint('[STREAM API] Network error: $e');
+      identity = await IdentityService.instance
+          .getIdentity()
+          .timeout(_kIdentityTimeout);
+      debugPrint('[STREAM] Identity OK: '
+          '${identity.cookies.length} cookies, '
+          'visitor=${identity.visitorData != null ? "YES" : "NO"}');
+    } catch (e) {
+      debugPrint('[STREAM] Identity unavailable: $e -- trying without cookies');
+    }
+
+    // ── 2. Create youtube_explode with authenticated HTTP client ─────────
+    final bool authenticated = identity != null &&
+        identity.cookieHeader.isNotEmpty;
+
+    final YoutubeExplode yt;
+    if (authenticated) {
+      final authClient = _CookieInjectedClient(
+        cookieHeader: identity.cookieHeader,
+        visitorData: identity.visitorData,
+      );
+      yt = YoutubeExplode(YoutubeHttpClient(authClient));
+      debugPrint('[STREAM] Using AUTHENTICATED client');
+    } else {
+      yt = YoutubeExplode();
+      debugPrint('[STREAM] Using DEFAULT client (no cookies)');
+    }
+
+    // ── 3. Extract stream manifest ───────────────────────────────────────
+    debugPrint('[STREAM] Extracting manifest for videoId=$videoId');
+
+    StreamManifest manifest;
+    try {
+      manifest = await yt.videos.streamsClient.getManifest(videoId);
+    } catch (e) {
+      debugPrint('[STREAM] Manifest extraction failed: $e');
+      yt.close();
+
+      // If authenticated extraction failed, invalidate identity
+      // so next attempt gets fresh cookies
+      if (authenticated) {
+        IdentityService.instance.invalidate();
+        debugPrint('[STREAM] Identity invalidated due to extraction failure');
+      }
+
       throw StreamResolveException(
-        'Network error reaching stream backend: $e',
+        'Failed to extract stream manifest: $e',
         isRetriable: true,
       );
     }
 
-    debugPrint('[STREAM API] ← HTTP ${response.statusCode} '
-        '(${response.body.length} bytes)');
-
-    if (response.statusCode != 200) {
-      final retriable = response.statusCode >= 500 || response.statusCode == 429;
-      debugPrint('[STREAM API] Error body: ${_truncate(response.body)}');
+    // ── 4. Filter to audio-only streams ──────────────────────────────────
+    final audioStreams = manifest.audioOnly.toList();
+    if (audioStreams.isEmpty) {
+      yt.close();
+      debugPrint('[STREAM] No audio-only streams found for $videoId');
       throw StreamResolveException(
-        'Backend returned HTTP ${response.statusCode}',
-        httpStatus:  response.statusCode,
-        isRetriable: retriable,
+        'No audio-only streams found for videoId=$videoId',
       );
     }
 
-    Map<String, dynamic> json;
-    try {
-      json = jsonDecode(response.body) as Map<String, dynamic>;
-    } catch (e) {
-      debugPrint('[STREAM API] JSON parse error: $e');
-      throw const StreamResolveException('Invalid JSON from stream backend');
+    debugPrint('[STREAM] Found ${audioStreams.length} audio streams');
+
+    // ── 5. Select best stream (prefer itag 140) ──────────────────────────
+    AudioOnlyStreamInfo? selected;
+
+    // Priority 1: itag 140 (128kbps AAC M4A)
+    for (final stream in audioStreams) {
+      if (stream.tag == _kTargetItag) {
+        selected = stream;
+        debugPrint('[STREAM] itag 140 found');
+        break;
+      }
     }
 
-    final success   = json['success'] as bool? ?? false;
-    final streamUrl = json['streamUrl'] as String?;
-
-    if (!success || streamUrl == null || streamUrl.isEmpty) {
-      final reason = json['error'] ?? json['message'] ?? 'unknown';
-      debugPrint('[STREAM API] Backend failure: $reason');
-      throw StreamResolveException('Backend could not resolve stream: $reason');
+    // Priority 2: Best M4A by bitrate
+    if (selected == null) {
+      final m4aStreams = audioStreams
+          .where((s) => s.container.name.toLowerCase() == 'mp4'
+                     || s.container.name.toLowerCase() == 'm4a')
+          .toList();
+      if (m4aStreams.isNotEmpty) {
+        m4aStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+        selected = m4aStreams.first;
+        debugPrint('[STREAM] itag 140 absent -- best M4A: '
+            'itag=${selected.tag} bitrate=${selected.bitrate}');
+      }
     }
 
-    final result = StreamResult(
-      streamUrl: streamUrl,
-      mimeType:  (json['mimeType']  as String?) ?? 'audio/mp4',
-      container: (json['container'] as String?) ?? 'mp4',
-      provider:  (json['provider']  as String?) ?? 'unknown',
-      bitrate:   (json['bitrate']   as num?)?.toInt() ?? 0,
+    // Priority 3: Any audio (highest bitrate)
+    if (selected == null) {
+      final sorted = List<AudioOnlyStreamInfo>.from(audioStreams)
+        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      selected = sorted.first;
+      debugPrint('[STREAM] No M4A -- fallback: '
+          'itag=${selected.tag} container=${selected.container.name}');
+    }
+
+    yt.close();
+
+    // ── 6. Return raw CDN URL for direct playback ────────────────────────
+    final cdnUrl = selected.url.toString();
+    final bitrateKbps = selected.bitrate.kiloBitsPerSecond.round();
+    final mimeType = 'audio/${selected.container.name.toLowerCase()}';
+
+    debugPrint('[STREAM] Resolved: videoId=$videoId '
+        'itag=${selected.tag} ${bitrateKbps}kbps '
+        '${selected.container.name} '
+        'host=${selected.url.host} '
+        'auth=$authenticated');
+
+    return StreamResult(
+      streamUrl: cdnUrl,
+      mimeType:  mimeType,
+      container: selected.container.name.toLowerCase(),
+      provider:  'youtube_explode_dart',
+      bitrate:   (bitrateKbps * 1000),
+      authenticated: authenticated,
     );
-
-    debugPrint('[STREAM API] Resolved: videoId=$videoId '
-        'provider=${result.provider} mimeType=${result.mimeType} '
-        'bitrate=${result.bitrate ~/ 1000}kbps '
-        'host=${Uri.parse(streamUrl).host}');
-
-    return result;
   }
-
-  static String _truncate(String s, [int max = 200]) =>
-      s.length <= max ? s : '${s.substring(0, max)}…';
 }

@@ -4,43 +4,69 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'stream_api_service.dart';
+import 'identity_service.dart';
 import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
 // ---------------------------------------------------------------------------
-// PlaybackEngineImpl — server-first, Invidious-backed audio playback
+// PlaybackEngineImpl -- WebView-Authenticated Playback (Phase 10)
 // ---------------------------------------------------------------------------
 //
-// All stream resolution happens on the user's own backend.
-// Flutter never touches YouTube/Invidious directly.
+// Identity: Hidden WebView extracts real browser cookies from YouTube
+// Extraction: youtube_explode_dart + injected cookies (looks like Chrome)
+// Playback: just_audio plays CDN URL directly (same IP, no proxy)
 //
 // Flow:
-//   load(videoId)
-//     → StreamApiService.resolveStream(videoId)
-//         GET /resolve/stream/{videoId}  (your backend → Invidious)
-//         ← { streamUrl, mimeType, provider, bitrate }
-//     → just_audio: AudioSource.uri(streamUrl, headers: {...})
-//     → 3-sec stall guard → 1 retry (fresh resolve, no cache)
-//     → stall again → retryFailed
+//   initialize()
+//     -> IdentityService.warmUp() (fire-and-forget, pre-loads cookies)
 //
-//   PlayerException 403/400 → same path as stall (1 retry)
+//   load(videoId)
+//     -> StreamApiService.resolveStream(videoId)
+//         1. Gets WebView identity (cookies + visitorData)
+//         2. Injects into youtube_explode_dart's HTTP client
+//         3. Extracts stream manifest (looks like real browser)
+//         4. Selects itag 140 (128kbps M4A) CDN URL
+//         <- { streamUrl: raw_cdn_url, mimeType, bitrate }
+//     -> just_audio: AudioSource.uri(cdn_url, headers: { cookies })
+//     -> 3-sec stall guard -> 1 retry (fresh resolve + fresh identity)
+//     -> stall again -> retryFailed
+//
+//   PlayerException 403 -> invalidate identity + retry
 
-const Map<String, String> _kHeaders = {
+// Fallback headers (used when identity is unavailable)
+const Map<String, String> _kFallbackHeaders = {
   'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
-      'Chrome/120.0.0.0 Safari/537.36',
+      'Chrome/125.0.6422.165 Mobile Safari/537.36',
   'Accept':          '*/*',
   'Accept-Language': 'en-US,en;q=0.9',
   'Origin':          'https://www.youtube.com',
   'Referer':         'https://www.youtube.com/',
 };
 
+/// Build CDN headers using real WebView identity when available.
+Map<String, String> _buildCdnHeaders(YouTubeIdentity? identity) {
+  if (identity == null) return Map.of(_kFallbackHeaders);
+  return {
+    'User-Agent':      identity.userAgent,
+    'Accept':          '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Origin':          'https://www.youtube.com',
+    'Referer':         'https://www.youtube.com/',
+    if (identity.cookieHeader.isNotEmpty)
+      'Cookie': identity.cookieHeader,
+    if (identity.visitorData != null)
+      'X-Goog-Visitor-Id': identity.visitorData!,
+  };
+}
+
 const int _kMaxAttempts = 2;
 
 class PlaybackEngineImpl implements PlaybackEngine {
   PlaybackEngineImpl({StreamApiService? streamApi})
-      : _streamApi = streamApi ?? StreamApiService();
+      : _streamApi = streamApi ?? StreamApiService(),
+        super();
 
   final StreamApiService _streamApi;
   final _player         = AudioPlayer();
@@ -116,6 +142,9 @@ class PlaybackEngineImpl implements PlaybackEngine {
         isPlaying: _player.playing,
       );
     }));
+
+    // Pre-load WebView identity (fire-and-forget)
+    IdentityService.instance.warmUp();
   }
 
   // ── load ───────────────────────────────────────────────────────────────────
@@ -195,7 +224,16 @@ class PlaybackEngineImpl implements PlaybackEngine {
     }
 
     // ── setAudioSource ───────────────────────────────────────────────────────
-    final source = AudioSource.uri(uri, headers: _kHeaders);
+    // Get identity for CDN headers (should be cached from resolveStream)
+    YouTubeIdentity? identity;
+    try {
+      identity = await IdentityService.instance.getIdentity()
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Non-fatal: use fallback headers
+    }
+    final cdnHeaders = _buildCdnHeaders(identity);
+    final source = AudioSource.uri(uri, headers: cdnHeaders);
 
     if (kDebugMode) {
       final prev = PlaybackDiagnosticsNotifier.value;
