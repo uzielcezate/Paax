@@ -151,6 +151,21 @@ class IdentityService {
   /// This method is safe to call concurrently — only one WebView
   /// session runs at a time.
   Future<YouTubeIdentity> getIdentity() async {
+    // ── Web: the browser IS the identity ────────────────────────────────
+    // On web, HTTP requests go through the browser's XHR/fetch which
+    // automatically includes cookies, proper UA, and passes CORS preflight.
+    // No WebView extraction needed.
+    if (kIsWeb) {
+      _identity ??= YouTubeIdentity(
+        cookies: const {},
+        userAgent: 'Browser',  // XHR uses the real browser UA automatically
+        createdAt: DateTime.now(),
+      );
+      debugPrint('[IDENTITY] Web platform -- using native browser identity');
+      return _identity!;
+    }
+
+    // ── Mobile: HeadlessInAppWebView extraction ─────────────────────────
     // Return cached if still fresh
     if (_identity != null && !_identity!.isExpired) {
       debugPrint('[IDENTITY] Cache HIT '
