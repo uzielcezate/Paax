@@ -1,13 +1,14 @@
 {
-    "name": "beaty",
-    "short_name": "beaty",
+    "name": "Paax Music",
+    "short_name": "Paax",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0D0D0D",
+    "theme_color": "#0D0D0D",
+    "description": "Stream music for free. Discover, play, and save your favorite tracks.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
+    "categories": ["music", "entertainment"],
     "icons": [
         {
             "src": "icons/Icon-192.png",
