@@ -8,39 +8,37 @@ import 'playback_diagnostics.dart';
 import 'playback_engine.dart';
 
 // ---------------------------------------------------------------------------
-// PlaybackEngineImpl — server-first, Invidious-backed audio playback
+// PlaybackEngineImpl — Hybrid Architecture (Phase 8)
 // ---------------------------------------------------------------------------
 //
-// All stream resolution happens on the user's own backend.
-// Flutter never touches YouTube/Invidious directly.
+// Extraction: Client-side (youtube_explode_dart on residential IP)
+// Streaming:  Server-side (IPv6 proxy with UA rotation + Range support)
 //
 // Flow:
 //   load(videoId)
 //     → StreamApiService.resolveStream(videoId)
-//         GET /resolve/stream/{videoId}  (your backend → Invidious)
-//         ← { streamUrl, mimeType, provider, bitrate }
-//     → just_audio: AudioSource.uri(streamUrl, headers: {...})
+//         1. youtube_explode_dart extracts stream manifest (on device)
+//         2. Selects itag 140 (128kbps M4A) CDN URL
+//         3. Wraps in proxy: /stream?url=<encoded_cdn_url>
+//         ← { streamUrl: proxy_url, mimeType, provider, bitrate }
+//     → just_audio: AudioSource.uri(proxy_url)
 //     → 3-sec stall guard → 1 retry (fresh resolve, no cache)
 //     → stall again → retryFailed
 //
 //   PlayerException 403/400 → same path as stall (1 retry)
 
+// Headers for talking to our OWN proxy (not YouTube directly)
 const Map<String, String> _kHeaders = {
-  'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-      'AppleWebKit/537.36 (KHTML, like Gecko) '
-      'Chrome/120.0.0.0 Safari/537.36',
-  'Accept':          '*/*',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Origin':          'https://www.youtube.com',
-  'Referer':         'https://www.youtube.com/',
+  'User-Agent': 'PaaxMusicApp/4.0',
+  'Accept': '*/*',
 };
 
 const int _kMaxAttempts = 2;
 
 class PlaybackEngineImpl implements PlaybackEngine {
   PlaybackEngineImpl({StreamApiService? streamApi})
-      : _streamApi = streamApi ?? StreamApiService();
+      : _streamApi = streamApi ?? StreamApiService(),
+        super();
 
   final StreamApiService _streamApi;
   final _player         = AudioPlayer();

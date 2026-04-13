@@ -1,39 +1,37 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import '../config/api_config.dart';
 
 // ===========================================================================
-// StreamApiService — single HTTP client for the stream resolution backend
+// StreamApiService — Hybrid Architecture (Phase 8)
 // ===========================================================================
 //
-// All stream resolution happens server-side (Invidious via your own backend).
-// The Flutter client never touches YouTube/Invidious directly.
+// Extraction:  Client-side via youtube_explode_dart (residential IP)
+// Streaming:   Server-side via IPv6 proxy (datacenter, 16 IPv6 addresses)
 //
-// Endpoint:
-//   GET {streamBaseUrl}/resolve/stream/{videoId}
+// Flow:
+//   1. youtube_explode_dart extracts the stream manifest on the user's device
+//      (residential IP — bypasses YouTube's datacenter IP blocks)
+//   2. Selects the best audio-only stream (itag 140 preferred: 128kbps M4A)
+//   3. URL-encodes the raw googlevideo.com CDN URL
+//   4. Constructs the proxy URL:
+//        https://resolver.paaxmusic.app/stream?url=<encoded_cdn_url>
+//   5. Returns this proxy URL to the playback engine
 //
-// Expected response shape:
-//   {
-//     "success":   true,
-//     "videoId":   "...",
-//     "provider":  "invidious-nerdvpn",
-//     "streamUrl": "https://...",
-//     "mimeType":  "audio/mp4",
-//     "container": "mp4",
-//     "bitrate":   131550
-//   }
+// The proxy handles IPv6 rotation, User-Agent spoofing, and Range requests.
 // ===========================================================================
 
 class StreamResult {
-  final String streamUrl;
-  final String mimeType;    // e.g. 'audio/mp4'
-  final String container;   // e.g. 'mp4'
-  final String provider;    // e.g. 'invidious-nerdvpn'
-  final int    bitrate;     // bits per second
+  final String streamUrl;     // The proxy URL (not the raw CDN URL)
+  final String rawCdnUrl;     // The raw googlevideo.com URL (for debug)
+  final String mimeType;      // e.g. 'audio/mp4'
+  final String container;     // e.g. 'mp4'
+  final String provider;      // 'youtube_explode_dart'
+  final int    bitrate;       // bits per second
 
   const StreamResult({
     required this.streamUrl,
+    required this.rawCdnUrl,
     required this.mimeType,
     required this.container,
     required this.provider,
@@ -42,7 +40,8 @@ class StreamResult {
 
   @override
   String toString() =>
-      'StreamResult(provider=$provider mimeType=$mimeType bitrate=${bitrate ~/ 1000}kbps)';
+      'StreamResult(provider=$provider mimeType=$mimeType '
+      'bitrate=${bitrate ~/ 1000}kbps)';
 }
 
 class StreamResolveException implements Exception {
@@ -65,86 +64,111 @@ class StreamResolveException implements Exception {
 // ---------------------------------------------------------------------------
 
 class StreamApiService {
-  StreamApiService({http.Client? client})
-      : _client = client ?? http.Client();
+  StreamApiService();
 
-  final http.Client _client;
+  final YoutubeExplode _yt = YoutubeExplode();
 
-  static const Duration _timeout = Duration(seconds: 15);
+  // ── Target itag: 140 = 128kbps AAC M4A (gold standard for music) ──────────
+  static const int _kTargetItag = 140;
 
   // ---------------------------------------------------------------------------
   // resolveStream
   // ---------------------------------------------------------------------------
 
-  /// Resolve the audio stream URL for [videoId] by calling your stream backend.
+  /// Extract the audio stream URL for [videoId] locally using
+  /// youtube_explode_dart, then wrap it in the IPv6 proxy URL.
   ///
-  /// Throws [StreamResolveException] on any failure (network, HTTP error, or
-  /// unexpected response shape).
+  /// Throws [StreamResolveException] on any failure.
   Future<StreamResult> resolveStream(String videoId) async {
     assert(videoId.isNotEmpty);
 
-    final endpoint = '${ApiConfig.streamBaseUrl}/resolve/stream/$videoId';
-    debugPrint('[STREAM API] → GET $endpoint');
+    debugPrint('[STREAM API] Extracting manifest for videoId=$videoId '
+        '(client-side, youtube_explode_dart)');
 
-    http.Response response;
+    // ── 1. Get stream manifest ──────────────────────────────────────────────
+    StreamManifest manifest;
     try {
-      response = await _client
-          .get(Uri.parse(endpoint))
-          .timeout(_timeout);
-    } on Exception catch (e) {
-      debugPrint('[STREAM API] Network error: $e');
+      manifest = await _yt.videos.streamsClient.getManifest(videoId);
+    } catch (e) {
+      debugPrint('[STREAM API] Manifest extraction failed: $e');
       throw StreamResolveException(
-        'Network error reaching stream backend: $e',
+        'Failed to extract stream manifest: $e',
         isRetriable: true,
       );
     }
 
-    debugPrint('[STREAM API] ← HTTP ${response.statusCode} '
-        '(${response.body.length} bytes)');
-
-    if (response.statusCode != 200) {
-      final retriable = response.statusCode >= 500 || response.statusCode == 429;
-      debugPrint('[STREAM API] Error body: ${_truncate(response.body)}');
+    // ── 2. Filter to audio-only streams ─────────────────────────────────────
+    final audioStreams = manifest.audioOnly.toList();
+    if (audioStreams.isEmpty) {
+      debugPrint('[STREAM API] No audio-only streams found for $videoId');
       throw StreamResolveException(
-        'Backend returned HTTP ${response.statusCode}',
-        httpStatus:  response.statusCode,
-        isRetriable: retriable,
+        'No audio-only streams found for videoId=$videoId',
       );
     }
 
-    Map<String, dynamic> json;
-    try {
-      json = jsonDecode(response.body) as Map<String, dynamic>;
-    } catch (e) {
-      debugPrint('[STREAM API] JSON parse error: $e');
-      throw const StreamResolveException('Invalid JSON from stream backend');
+    debugPrint('[STREAM API] Found ${audioStreams.length} audio streams');
+
+    // ── 3. Select best stream (prefer itag 140) ─────────────────────────────
+    AudioOnlyStreamInfo? selected;
+
+    // Priority 1: itag 140 (128kbps AAC M4A)
+    for (final stream in audioStreams) {
+      if (stream.tag == _kTargetItag) {
+        selected = stream;
+        debugPrint('[STREAM API] itag 140 found — using it directly');
+        break;
+      }
     }
 
-    final success   = json['success'] as bool? ?? false;
-    final streamUrl = json['streamUrl'] as String?;
-
-    if (!success || streamUrl == null || streamUrl.isEmpty) {
-      final reason = json['error'] ?? json['message'] ?? 'unknown';
-      debugPrint('[STREAM API] Backend failure: $reason');
-      throw StreamResolveException('Backend could not resolve stream: $reason');
+    // Priority 2: Best M4A by bitrate
+    if (selected == null) {
+      final m4aStreams = audioStreams
+          .where((s) => s.container.name.toLowerCase() == 'mp4'
+                     || s.container.name.toLowerCase() == 'm4a')
+          .toList();
+      if (m4aStreams.isNotEmpty) {
+        m4aStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+        selected = m4aStreams.first;
+        debugPrint('[STREAM API] itag 140 absent — chose best M4A '
+            '(itag=${selected.tag} bitrate=${selected.bitrate})');
+      }
     }
 
-    final result = StreamResult(
-      streamUrl: streamUrl,
-      mimeType:  (json['mimeType']  as String?) ?? 'audio/mp4',
-      container: (json['container'] as String?) ?? 'mp4',
-      provider:  (json['provider']  as String?) ?? 'unknown',
-      bitrate:   (json['bitrate']   as num?)?.toInt() ?? 0,
-    );
+    // Priority 3: Any audio (highest bitrate)
+    if (selected == null) {
+      final sorted = List<AudioOnlyStreamInfo>.from(audioStreams)
+        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      selected = sorted.first;
+      debugPrint('[STREAM API] No M4A — fell back to '
+          'itag=${selected.tag} container=${selected.container.name}');
+    }
+
+    // ── 4. Build the proxy URL ──────────────────────────────────────────────
+    final rawCdnUrl = selected.url.toString();
+    final encodedUrl = Uri.encodeComponent(rawCdnUrl);
+    final proxyUrl = '${ApiConfig.streamBaseUrl}/stream?url=$encodedUrl';
+
+    final bitrateKbps = selected.bitrate.kiloBitsPerSecond.round();
+    final mimeType = 'audio/${selected.container.name.toLowerCase()}';
 
     debugPrint('[STREAM API] Resolved: videoId=$videoId '
-        'provider=${result.provider} mimeType=${result.mimeType} '
-        'bitrate=${result.bitrate ~/ 1000}kbps '
-        'host=${Uri.parse(streamUrl).host}');
+        'itag=${selected.tag} bitrate=${bitrateKbps}kbps '
+        'container=${selected.container.name} '
+        'cdn_host=${selected.url.host}');
+    debugPrint('[STREAM API] Proxy URL: ${proxyUrl.substring(0, 80)}...');
 
-    return result;
+    return StreamResult(
+      streamUrl: proxyUrl,
+      rawCdnUrl: rawCdnUrl,
+      mimeType:  mimeType,
+      container: selected.container.name.toLowerCase(),
+      provider:  'youtube_explode_dart',
+      bitrate:   (bitrateKbps * 1000),
+    );
   }
 
-  static String _truncate(String s, [int max = 200]) =>
-      s.length <= max ? s : '${s.substring(0, max)}…';
+  /// Dispose the youtube_explode client.
+  void dispose() {
+    _yt.close();
+  }
 }

@@ -72,19 +72,26 @@ class ApiConfig {
     }
   }
 
-  // ── Stream backend URL ─────────────────────────────────────────────────────
+  // ── Stream proxy URL ────────────────────────────────────────────────────────
 
-  /// Base URL for the stream resolution backend.
+  /// Base URL for the IPv6 streaming proxy (DigitalOcean VPS).
+  ///
+  /// The proxy accepts raw CDN URLs from the client and streams them
+  /// through the IPv6 rotation pool with device fingerprinting.
   ///
   /// Override at build time:
   ///   --dart-define=STREAM_BASE_URL=https://your-stream-server.com
-  ///
-  /// Falls back to the Railway app URL (same host as metadata) until the
-  /// dedicated stream backend is deployed separately.
   static String get streamBaseUrl {
     if (_streamBaseUrlOverride.isNotEmpty) return _streamBaseUrlOverride;
-    // Default: same host as metadata backend
-    return baseUrl;
+    switch (_env) {
+      case _Env.local:
+        return 'http://127.0.0.1:8080';
+      case _Env.lan:
+        if (_lanIp.isEmpty) return 'http://127.0.0.1:8080';
+        return 'http://$_lanIp:8080';
+      case _Env.prod:
+        return 'https://resolver.paaxmusic.app';
+    }
   }
 
   // ── Human-readable label for logging ──────────────────────────────────────
