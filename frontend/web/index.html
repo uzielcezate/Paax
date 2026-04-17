@@ -17,8 +17,11 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="description" content="Paax — Stream music for free. Discover, play, and save your favorite tracks.">
-  <meta name="theme-color" content="#0D0D0D">
+
+  <!-- PWA / theme color — matches manifest.json and Dart AppColors.background -->
+  <meta name="theme-color" content="#0c0b10">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="color-scheme" content="dark">
 
   <!-- iOS meta tags & icons -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -31,6 +34,48 @@
 
   <title>Paax</title>
   <link rel="manifest" href="manifest.json">
+
+  <!--
+    Branded loading screen styles.
+    The body background is set to #0c0b10 so the user never sees a white flash
+    between the OS splash screen and the Flutter engine rendering its first frame.
+    A centered logo is shown as a loading indicator and is hidden once Flutter
+    takes over the screen.
+  -->
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0c0b10;
+    }
+
+    /* Branded loading indicator — visible while Flutter engine boots */
+    .loading-indicator {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #0c0b10;
+      z-index: 9999;
+      transition: opacity 0.3s ease-out;
+    }
+    .loading-indicator.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .loading-indicator img {
+      width: 96px;
+      height: 96px;
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; transform: scale(0.92); }
+      50%      { opacity: 1;   transform: scale(1);    }
+    }
+  </style>
 
   <script>
     // The value below is injected by flutter build, do not touch.
@@ -48,8 +93,15 @@
   </script>
 </head>
 <body>
+  <!-- Branded loading screen — auto-removed when Flutter's first frame renders -->
+  <div id="loading" class="loading-indicator" aria-label="Loading Paax">
+    <img src="icons/Icon-192.png" alt="Paax logo">
+  </div>
+
   <script>
     window.addEventListener('load', function(ev) {
+      var loading = document.getElementById('loading');
+
       _flutter.loader.loadEntrypoint({
         serviceWorker: {
           serviceWorkerVersion: serviceWorkerVersion,
@@ -57,6 +109,11 @@
         onEntrypointLoaded: function(engineInitializer) {
           engineInitializer.initializeEngine().then(function(appRunner) {
             appRunner.runApp();
+            // Fade out and remove the loading indicator once Flutter is running
+            if (loading) {
+              loading.classList.add('fade-out');
+              setTimeout(function() { loading.remove(); }, 350);
+            }
           });
         }
       });
