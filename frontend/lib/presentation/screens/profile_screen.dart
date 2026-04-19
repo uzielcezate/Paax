@@ -7,7 +7,7 @@ import '../state/auth_controller.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart'; // Added
 import '../../domain/entities/track.dart'; // Added
-import 'splash_screen.dart';
+import 'auth_screen.dart';
 import '../widgets/bottom_content_padding.dart';
 import '../widgets/section_header.dart'; // Added
 import '../widgets/black_glass_blur_surface.dart'; // Added
@@ -113,7 +113,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _buildMenuItem("Log out", Icons.logout, () {
                          context.read<AuthController>().logout();
                          Navigator.of(context).pushAndRemoveUntil(
-                           MaterialPageRoute(builder: (_)=> const SplashScreen()),
+                           MaterialPageRoute(builder: (_)=> const AuthScreen()),
                            (route) => false,
                          );
                       }),
@@ -272,7 +272,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onPressed: () async {
               await context.read<AuthController>().logout(); 
                Navigator.of(context).pushAndRemoveUntil(
-                     MaterialPageRoute(builder: (_)=> const SplashScreen()),
+                     MaterialPageRoute(builder: (_)=> const AuthScreen()),
                      (route) => false,
                    );
             }, 

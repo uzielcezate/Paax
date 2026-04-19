@@ -8,7 +8,9 @@ import 'presentation/state/auth_controller.dart';
 import 'presentation/state/library_controller.dart';
 import 'presentation/state/playback_controller.dart';
 import 'presentation/state/search_controller.dart' as app_search;
-import 'presentation/screens/splash_screen.dart';
+import 'presentation/screens/onboarding_screen.dart';
+import 'presentation/screens/auth_screen.dart';
+import 'presentation/screens/main_wrapper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -57,11 +59,17 @@ class BeatyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => PlaybackController()),
       ],
       child: MaterialApp(
-        title: 'Beaty',
+        title: 'Paax',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,
         scrollBehavior: const PaaxScrollBehavior(),
-        home: const SplashScreen(),
+        home: Consumer<AuthController>(
+          builder: (context, auth, _) {
+            if (!auth.onboardingCompleted) return const OnboardingScreen();
+            if (!auth.isAuthenticated) return const AuthScreen();
+            return MainWrapper(key: MainWrapper.shellKey);
+          },
+        ),
       ),
     );
   }
