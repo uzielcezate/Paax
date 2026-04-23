@@ -92,6 +92,28 @@
     }
   </style>
 
+  <!--
+    OFFLINE-FIRST SERVICE WORKER REGISTRATION
+    Register our custom cache-first service worker as early as possible,
+    BEFORE flutter.js loads. This ensures the app shell is pre-cached on
+    the very first visit, so subsequent cold starts (even offline) serve
+    the cached UI instead of the TWA offline fallback screen.
+  -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker
+          .register('custom_service_worker.js', { scope: './' })
+          .then(function (reg) {
+            console.log('[Paax] Custom SW registered, scope:', reg.scope);
+          })
+          .catch(function (err) {
+            console.warn('[Paax] Custom SW registration failed:', err);
+          });
+      });
+    }
+  </script>
+
   <script>
     // The value below is injected by flutter build, do not touch.
     const serviceWorkerVersion = null;
@@ -121,6 +143,10 @@
       _flutter.loader.loadEntrypoint({
         serviceWorker: {
           serviceWorkerVersion: serviceWorkerVersion,
+          // Point Flutter's own SW registration at our custom worker.
+          // This prevents Flutter from registering a SECOND service worker
+          // (flutter_service_worker.js) that would compete with ours.
+          serviceWorkerUrl: 'custom_service_worker.js',
         },
         onEntrypointLoaded: function (engineInitializer) {
           engineInitializer.initializeEngine().then(function (appRunner) {
