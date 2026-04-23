@@ -1,7 +1,9 @@
 {
     "name": "Paax Music",
     "short_name": "Paax",
+    "id": "/",
     "start_url": ".",
+    "scope": ".",
     "display": "standalone",
     "background_color": "#0c0b10",
     "theme_color": "#0c0b10",
@@ -9,6 +11,11 @@
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "categories": ["music", "entertainment"],
+    "serviceworker": {
+        "src": "custom_service_worker.js",
+        "scope": ".",
+        "type": "module"
+    },
     "icons": [
         {
             "src": "icons/Icon-192.png",
