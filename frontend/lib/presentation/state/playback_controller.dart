@@ -5,6 +5,11 @@ import '../../domain/entities/track.dart';
 import '../../core/playback/playback_engine.dart';
 import '../../core/playback/playback_factory.dart';
 
+// Platform-conditional import — web gets the real Media Session API interop,
+// everything else gets a silent no-op stub.
+import '../../core/playback/media_session_stub.dart'
+    if (dart.library.html) '../../core/playback/media_session_web.dart';
+
 /// Loop mode — kept local to avoid importing just_audio on web.
 enum LoopMode { off, all, one }
 
@@ -106,6 +111,7 @@ class PlaybackController extends ChangeNotifier {
     _engine.playingStream.listen((playing) {
       if (_isPlaying != playing) {
         _isPlaying = playing;
+        updateMediaSessionPlaybackState(isPlaying: playing);
         notifyListeners();
       }
     });
@@ -198,6 +204,16 @@ class PlaybackController extends ChangeNotifier {
       if (!loadFailed) {
         _isLoadingTrack = false;
         // Don't call notifyListeners — playingStream/durationStream will
+
+        // Update the Web Media Session with track metadata + wire up
+        // lock-screen / notification controls.
+        setMediaSession(
+          track: track,
+          onPlay: () => _engine.play(),
+          onPause: () => _engine.pause(),
+          onNext: () => playNext(),
+          onPrevious: () => playPrevious(),
+        );
       }
     }
   }

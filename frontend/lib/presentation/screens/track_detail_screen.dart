@@ -11,7 +11,6 @@ import '../../domain/repositories/music_repository.dart';
 import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/music_card.dart';
 import '../widgets/add_to_playlist_sheet.dart';
-import '../widgets/playback_debug_overlay.dart';
 
 class TrackDetailScreen extends StatefulWidget {
   final Track track;
@@ -228,18 +227,6 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
   ],
       ),
 
-        // ─────────────────────────────────────────────────────────────────
-        // DEBUG-ONLY OVERLAY — TEMPORARY, remove before production.
-        // Positioned at top of screen, overlaying all scrollable content.
-        // Always visible in debug mode regardless of scroll position or state.
-        // ─────────────────────────────────────────────────────────────────
-        if (kDebugMode)
-          Positioned(
-            top: MediaQuery.of(context).padding.top + kToolbarHeight + 4,
-            left: 12,
-            right: 12,
-            child: const PlaybackDebugOverlay(),
-          ),
 
         ],
       )

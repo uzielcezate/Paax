@@ -60,8 +60,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
     });
   }
 
-  // ... (rest of methods)
-
   @override
   void prefetchNext(String videoId) {
     // No-op on web — stream resolution is handled by the YouTube iframe API.
@@ -75,7 +73,6 @@ class PlaybackEngineImpl implements PlaybackEngine {
     _durationController.close();
     _playingController.close();
     _completionController.close();
-    // _controller.close(); // iframe controller might not need explicit close or it disposes with widget
   }
 
   void _startPositionTimer() {
@@ -114,12 +111,9 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   @override
   Future<void> seek(Duration position) async {
-    // allowSeekAhead = true for smoother scrubbing
     _controller.seekTo(seconds: position.inSeconds.toDouble(), allowSeekAhead: true);
   }
-  
 
-  
   @override
   Widget buildPlayerView(BuildContext context) {
     return YoutubePlayer(
