@@ -238,10 +238,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         
                         SizedBox(height: Responsive.verticalSpacing(context) * 2),
 
-                        // ── DEBUG OVERLAY (debug builds only) ───────────────
-                        if (kDebugMode) const PlaybackDebugOverlay(),
-                        if (kDebugMode) SizedBox(height: Responsive.verticalSpacing(context)),
-                        // ────────────────────────────────────────────────────
 
                         // Controls
                         const _PlayerControls(),
