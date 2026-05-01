@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import '../../domain/repositories/music_repository.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
@@ -22,7 +23,14 @@ class MusicRepositoryImpl implements MusicRepository {
   @override
   Future<List<Track>> searchTracks(String query) async {
     final result = await _dataSource.search(query, 'songs');
-    return (result['data'] as List).map((e) => _mapTrack(e)).toList();
+    return (result['data'] as List)
+        .where((e) => !_isOfficialMusicVideo(e))
+        .map((e) {
+          try { return _mapTrack(e); }
+          catch (err) { debugPrint('[Repo] searchTracks skip bad item: $err'); return null; }
+        })
+        .whereType<Track>()
+        .toList();
   }
 
   @override
@@ -73,16 +81,23 @@ class MusicRepositoryImpl implements MusicRepository {
   }
 
   ({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists}) _mapStructuredResponse(Map<String, dynamic> result) {
-      final tracks = (result['tracks'] as List?)?.map((e) => _mapTrack(e)).toList() ?? [];
+      // Filter out OMV and safely parse each item
+      final tracks = (result['tracks'] as List?)
+          ?.where((e) => !_isOfficialMusicVideo(e))
+          .map((e) { try { return _mapTrack(e); } catch (err) { debugPrint('[Repo] chart track skip: $err'); return null; } })
+          .whereType<Track>()
+          .toList() ?? [];
       // Filter out playlists and albums by placeholder artists
       final albums = (result['albums'] as List?)
           ?.where((e) => !_isPlaylist(e))
-          .map((e) => _mapAlbum(e))
+          .map((e) { try { return _mapAlbum(e); } catch (err) { debugPrint('[Repo] album skip: $err'); return null; } })
+          .whereType<SavedAlbum>()
           .where((a) => !isPlaceholderArtist(a.artistName))
           .toList() ?? [];
       // Filter out placeholder artists
       final artists = (result['artists'] as List?)
-          ?.map((e) => _mapArtist(e))
+          ?.map((e) { try { return _mapArtist(e); } catch (err) { debugPrint('[Repo] artist skip: $err'); return null; } })
+          .whereType<Artist>()
           .where((a) => !isPlaceholderArtist(a.name))
           .toList() ?? [];
       return (tracks: tracks, albums: albums, artists: artists);
@@ -93,21 +108,17 @@ class MusicRepositoryImpl implements MusicRepository {
     final e = await _dataSource.getArtist(id);
     return Artist(
       id: id,
-      name: e['name']?.toString() ?? 'Unknown Artist',
+      name: e['name']?.toString() ?? 'Various Artists',
       picture: _findHeroThumbnail(e['thumbnails']), // High-res for artist hero
       nbFans: 0, // Set to 0 as requested (will be implemented with app backend later)
-      albums: e['albums']?['results'] != null 
-          ? (e['albums']['results'] as List).map((x) => _mapAlbum(x)).toList() 
-          : [],
-      singles: e['singles']?['results'] != null 
-          ? (e['singles']['results'] as List).map((x) => _mapAlbum(x)).toList() 
-          : [],
-      topTracks: e['songs']?['results'] != null 
-          ? (e['songs']['results'] as List).map((x) => _mapTrack(x)).toList() 
-          : [],
-      relatedArtists: e['related']?['results'] != null 
-          ? (e['related']['results'] as List).map((x) => _mapArtist(x)).toList() 
-          : [],
+      albums: _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x)),
+      singles: _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x)),
+      topTracks: _safeMapList<Track>(
+        e['songs']?['results'],
+        (x) => _mapTrack(x),
+        filter: (x) => !_isOfficialMusicVideo(x),
+      ),
+      relatedArtists: _safeMapList<Artist>(e['related']?['results'], (x) => _mapArtist(x)),
       albumsParams: e['albums']?['params']?.toString(),
       singlesParams: e['singles']?['params']?.toString(),
     );
@@ -269,7 +280,7 @@ class MusicRepositoryImpl implements MusicRepository {
 
   Track _mapTrack(Map<String, dynamic> e) {
     // Handle multi-artist
-    String artistName = 'Unknown Artist';
+    String artistName = 'Various Artists';
     String artistId = '';
     List<Map<String, String>> artistsList = [];
 
@@ -298,7 +309,7 @@ class MusicRepositoryImpl implements MusicRepository {
     }
     
     // Fallback if 'artists' is empty or missing
-    if (artistName == 'Unknown Artist') {
+    if (artistName == 'Various Artists') {
        if (e['author'] != null) {
            final author = e['author'].toString();
            // Only use author if it doesn't look like a view count
@@ -327,7 +338,7 @@ class MusicRepositoryImpl implements MusicRepository {
 
   
   Track _mapAlbumTrack(Map<String, dynamic> e, Map<String, dynamic> albumParams) {
-     String artistName = albumParams['artistName'] ?? 'Unknown';
+     String artistName = albumParams['artistName'] ?? 'Various Artists';
      String artistId = albumParams['artistId'] ?? '';
      List<Map<String, String>> artistsList = [];
      
@@ -387,17 +398,45 @@ class MusicRepositoryImpl implements MusicRepository {
   }
 
   SavedAlbum _mapAlbum(Map<String, dynamic> e) {
-    final artists = e['artists'] as List?;
-    final firstArtist = (artists != null && artists.isNotEmpty) ? artists[0] : null;
+    // Build structured artists list
+    final List<Map<String, String>> albumArtists = [];
+    if (e['artists'] != null && e['artists'] is List) {
+      for (var a in (e['artists'] as List)) {
+        final name = a['name']?.toString() ?? '';
+        final aid = a['id']?.toString() ?? '';
+        if (name.isNotEmpty && !isViewCountString(name)) {
+          albumArtists.add({'name': name, 'id': aid});
+        }
+      }
+    }
+
+    final displayName = albumArtists.isNotEmpty
+        ? albumArtists.map((a) => a['name']!).join(', ')
+        : 'Various Artists';
+    final primaryId = albumArtists.isNotEmpty ? albumArtists.first['id']! : '';
 
     return SavedAlbum(
       albumId: e['browseId']?.toString() ?? e['albumId']?.toString() ?? '',
       title: e['title']?.toString() ?? 'Unknown Album',
-      artistName: firstArtist?['name']?.toString() ?? 'Unknown Artist',
-      artistId: firstArtist?['id']?.toString() ?? '',
+      artistName: displayName,
+      artistId: primaryId,
       artworkUrl: _findThumbnail(e['thumbnails']),
+      artists: albumArtists.isNotEmpty ? albumArtists : null,
+      releaseDate: e['year']?.toString(),
+      releaseType: _normalizeReleaseType(e['type']),
     );
   }
+
+  /// Normalize release type strings from ytmusicapi to canonical values.
+  String? _normalizeReleaseType(dynamic raw) {
+    if (raw == null) return null;
+    final t = raw.toString().toLowerCase().trim();
+    if (t == 'album') return 'album';
+    if (t == 'single') return 'single';
+    if (t == 'ep') return 'ep';
+    return 'album'; // default fallback for unknown types
+  }
+
   
   // ... _mapAlbumDetail skipped (it already had some checks but good to review if needed)
 
@@ -415,19 +454,50 @@ class MusicRepositoryImpl implements MusicRepository {
   }
 
   SavedAlbum _mapAlbumDetail(Map<String, dynamic> e, String id) {
+      // Build structured artists list from API response
+      List<Map<String, String>> albumArtists = [];
+      if (e['artists'] != null && e['artists'] is List) {
+        for (var a in (e['artists'] as List)) {
+          final name = a['name']?.toString() ?? '';
+          final aid = a['id']?.toString() ?? '';
+          if (name.isNotEmpty && !isViewCountString(name)) {
+            albumArtists.add({'name': name, 'id': aid});
+          }
+        }
+      }
+
+      debugPrint('[Repo] Album "$id" raw API artists: ${e['artists']}');
+      debugPrint('[Repo] Album "$id" parsed albumArtists: $albumArtists');
+
+      // Joined display name (e.g. "Anuel AA, Ozuna") or fallback
+      String displayArtistName = albumArtists.isNotEmpty
+          ? albumArtists.map((a) => a['name']!).join(', ')
+          : 'Various Artists';
+      String primaryArtistId = albumArtists.isNotEmpty
+          ? albumArtists.first['id']!
+          : '';
+
       final List<Track> tracks = [];
       if (e['tracks'] != null && e['tracks'] is List) {
           final albumParams = {
              'albumId': id,
              'albumTitle': e['title'],
              'artworkUrl': _findThumbnail(e['thumbnails']),
-             'artistName': e['artists']?[0]?['name'] ?? 'Unknown',
-             'artistId': e['artists']?[0]?['id'] ?? '',
+             'artistName': displayArtistName,
+             'artistId': primaryArtistId,
           };
           for (var t in e['tracks']) {
-              tracks.add(_mapAlbumTrack(t, albumParams));
+              try {
+                debugPrint('[Repo] Track "${t['title']}" raw artists: ${t['artists']}');
+                tracks.add(_mapAlbumTrack(t, albumParams));
+              } catch (err) {
+                debugPrint('[Repo] Skipping malformed album track: $err');
+              }
           }
       }
+
+
+
 
       int duration = 0;
       // Prefer summing track durations for accuracy
@@ -444,8 +514,8 @@ class MusicRepositoryImpl implements MusicRepository {
       return SavedAlbum(
           albumId: id,
           title: e['title']?.toString() ?? 'Unknown Album',
-          artistName: e['artists']?[0]?['name'] ?? 'Unknown',
-          artistId: e['artists']?[0]?['id'] ?? '',
+          artistName: displayArtistName,
+          artistId: primaryArtistId,
           artworkUrl: _findThumbnail(e['thumbnails']),
           tracks: tracks,
           duration: duration,
@@ -453,6 +523,7 @@ class MusicRepositoryImpl implements MusicRepository {
           releaseDate: e['year']?.toString() ?? e['release_date']?.toString() ?? '',
           // Use 'label' or 'copyright' if present, otherwise empty. Do NOT use type.
           label: e['label']?.toString() ?? e['copyright']?.toString() ?? '', 
+          artists: albumArtists.isNotEmpty ? albumArtists : null,
       );
   }
 
@@ -461,7 +532,7 @@ class MusicRepositoryImpl implements MusicRepository {
     final name = e['name']?.toString() 
         ?? e['artist']?.toString() 
         ?? e['title']?.toString()
-        ?? 'Unknown Artist';
+        ?? 'Various Artists';
     
     return Artist(
       id: e['browseId']?.toString() ?? e['channelId']?.toString() ?? e['id']?.toString() ?? '',
@@ -501,5 +572,41 @@ class MusicRepositoryImpl implements MusicRepository {
        }
     }
     return 0;
+  }
+
+  // ── Bug 4: OMV detection ─────────────────────────────────────────────────
+
+  /// Returns true if the item is an Official Music Video (OMV) rather than
+  /// a pure Audio Track Video (ATV). We exclude OMVs from song lists.
+  bool _isOfficialMusicVideo(Map<String, dynamic> item) {
+    final videoType = item['videoType']?.toString() ?? '';
+    final resultType = item['resultType']?.toString().toLowerCase() ?? '';
+    // YouTube Music uses 'MUSIC_VIDEO_TYPE_OMV' for official music videos
+    if (videoType == 'MUSIC_VIDEO_TYPE_OMV') return true;
+    // Also filter generic "video" results from song lists
+    if (resultType == 'video') return true;
+    return false;
+  }
+
+  // ── Safe list mapper ─────────────────────────────────────────────────────
+
+  /// Maps a JSON list to typed items, catching & skipping any malformed entry.
+  /// Optional [filter] predicate runs on raw JSON before mapping.
+  List<T> _safeMapList<T>(
+    List<dynamic>? raw,
+    T Function(Map<String, dynamic>) mapper, {
+    bool Function(Map<String, dynamic>)? filter,
+  }) {
+    if (raw == null || raw.isEmpty) return [];
+    final results = <T>[];
+    for (final item in raw) {
+      try {
+        if (filter != null && !filter(item)) continue;
+        results.add(mapper(item));
+      } catch (err) {
+        debugPrint('[Repo] _safeMapList skip: $err');
+      }
+    }
+    return results;
   }
 }

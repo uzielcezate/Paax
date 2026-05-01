@@ -11,7 +11,6 @@ import '../../domain/repositories/music_repository.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
 import '../widgets/music_card.dart';
-import '../widgets/section_header.dart';
 import 'album_detail_screen.dart';
 import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/mini_player.dart'; 
@@ -20,7 +19,9 @@ import '../widgets/overflow_menu.dart';
 import '../widgets/network_image_with_fallback.dart';
 import '../widgets/bottom_content_padding.dart';
 import '../../core/utils/thumbnail_prefetcher.dart';
-import 'artist_items_screen.dart';
+import '../widgets/app_image.dart';
+import '../../core/image/lh3_url_builder.dart';
+import 'artist_discography_screen.dart';
 
 import '../../core/utils/responsive.dart';
 import '../../core/utils/string_utils.dart';
@@ -158,7 +159,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               SliverToBoxAdapter(child: const SizedBox(height: 20)),
               
               _buildTopTracksSection(context),
-              _buildAlbumsSection(context),
+              _buildLatestReleaseSection(context),
+              _buildDiscographyAlbumsSection(context),
+              _buildDiscographySinglesSection(context),
+              _buildDiscographyButton(context),
               _buildRelatedArtistsSection(context),
               const SliverToBoxAdapter(child: BottomContentPadding()),
             ],
@@ -505,83 +509,222 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     );
   }
 
-  Widget _buildAlbumsSection(BuildContext context) {
+  // ── Último lanzamiento ──────────────────────────────────────────────────
+  Widget _buildLatestReleaseSection(BuildContext context) {
     return FutureBuilder<Artist>(
       future: _artistInfoFuture,
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
-        
-        final artist = snapshot.data!;
-        final albums = (artist.albums as List).cast<SavedAlbum>();
-        final singles = (artist.singles as List).cast<SavedAlbum>();
-        
-        // Calculate responsive dimensions
+
+        final albums = (snapshot.data!.albums as List).cast<SavedAlbum>();
+        final singles = (snapshot.data!.singles as List).cast<SavedAlbum>();
+        final allReleases = [...albums, ...singles];
+        if (allReleases.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        // Sort newest first by year
+        allReleases.sort((a, b) {
+          final ya = int.tryParse(a.releaseDate ?? '') ?? 0;
+          final yb = int.tryParse(b.releaseDate ?? '') ?? 0;
+          return yb.compareTo(ya);
+        });
+        final latest = allReleases.first;
+        final typeLabel = _displayReleaseType(latest.releaseType);
+        final yearStr = latest.releaseDate ?? '';
+
+        return SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 24, bottom: 12),
+                  child: Text('Último lanzamiento',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: latest))),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceLight,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(12),
+                            bottomLeft: Radius.circular(12),
+                          ),
+                          child: AppImage(
+                            url: latest.artworkUrl,
+                            sizePx: Lh3UrlBuilder.listSize,
+                            width: 110,
+                            height: 110,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(latest.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+                                const SizedBox(height: 6),
+                                Text('$typeLabel${yearStr.isNotEmpty ? ' • $yearStr' : ''}',
+                                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Álbumes (latest 5) ─────────────────────────────────────────────────
+  Widget _buildDiscographyAlbumsSection(BuildContext context) {
+    return FutureBuilder<Artist>(
+      future: _artistInfoFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
+        final albums = (snapshot.data!.albums as List).cast<SavedAlbum>();
+        if (albums.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        final display = albums.take(5).toList();
         final cardWidth = Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
-        final cardHeight = cardWidth + 56; 
+        final cardHeight = cardWidth + 56;
 
         return SliverToBoxAdapter(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-               if (albums.isNotEmpty) ...[
-                 SectionHeader(
-                   title: "Albums",
-                   onSeeAll: artist.albumsParams != null 
-                      ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistItemsScreen(
-                          artistId: _resolvedArtistId, 
-                          title: "Albums", 
-                          initialParams: artist.albumsParams
-                      )))
-                      : null,
-                 ),
-                 SizedBox(
-                   height: cardHeight,
-                   child: ListView.builder(
-                     padding: EdgeInsets.only(left: Responsive.spacing(context)),
-                     scrollDirection: Axis.horizontal,
-                     physics: const ClampingScrollPhysics(),
-                     primary: false,
-                     itemCount: albums.length,
-                     itemBuilder: (context, index) {
-                       return _buildReleaseCard(context, albums[index], "Album", cardWidth);
-                     },
-                   ),
-                 )
-               ],
-               
-               if (singles.isNotEmpty) ...[
-                 SectionHeader(
-                   title: "Singles & EPs",
-                   onSeeAll: artist.singlesParams != null 
-                      ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistItemsScreen(
-                          artistId: _resolvedArtistId, 
-                          title: "Singles & EPs", 
-                          initialParams: artist.singlesParams
-                      )))
-                      : null,
-                 ),
-                 SizedBox(
-                   height: cardHeight,
-                   child: ListView.builder(
-                     padding: EdgeInsets.only(left: Responsive.spacing(context)),
-                     scrollDirection: Axis.horizontal,
-                     physics: const ClampingScrollPhysics(),
-                     primary: false,
-                     itemCount: singles.length,
-                     itemBuilder: (context, index) {
-                       return _buildReleaseCard(context, singles[index], "Single", cardWidth);
-                     },
-                   ),
-                 )
-               ]
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 24, 20, 12),
+                child: Text('Álbumes',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              ),
+              SizedBox(
+                height: cardHeight,
+                child: ListView.builder(
+                  padding: EdgeInsets.only(left: Responsive.spacing(context)),
+                  scrollDirection: Axis.horizontal,
+                  physics: const ClampingScrollPhysics(),
+                  primary: false,
+                  itemCount: display.length,
+                  itemBuilder: (context, index) {
+                    return _buildReleaseCard(context, display[index], cardWidth);
+                  },
+                ),
+              ),
             ],
           ),
         );
       },
     );
   }
-  
-  Widget _buildReleaseCard(BuildContext context, SavedAlbum album, String subtitle, double width) {
+
+  // ── Sencillos y EPs (latest 5) ─────────────────────────────────────────
+  Widget _buildDiscographySinglesSection(BuildContext context) {
+    return FutureBuilder<Artist>(
+      future: _artistInfoFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
+        final singles = (snapshot.data!.singles as List).cast<SavedAlbum>();
+        if (singles.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        final display = singles.take(5).toList();
+        final cardWidth = Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
+        final cardHeight = cardWidth + 56;
+
+        return SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 24, 20, 12),
+                child: Text('Sencillos y EPs',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              ),
+              SizedBox(
+                height: cardHeight,
+                child: ListView.builder(
+                  padding: EdgeInsets.only(left: Responsive.spacing(context)),
+                  scrollDirection: Axis.horizontal,
+                  physics: const ClampingScrollPhysics(),
+                  primary: false,
+                  itemCount: display.length,
+                  itemBuilder: (context, index) {
+                    return _buildReleaseCard(context, display[index], cardWidth);
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Ver toda la discografía button ─────────────────────────────────────
+  Widget _buildDiscographyButton(BuildContext context) {
+    return FutureBuilder<Artist>(
+      future: _artistInfoFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
+        final albums = (snapshot.data!.albums as List).cast<SavedAlbum>();
+        final singles = (snapshot.data!.singles as List).cast<SavedAlbum>();
+        if (albums.isEmpty && singles.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        return SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: Responsive.spacing(context),
+              vertical: 20,
+            ),
+            child: OutlinedButton(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => ArtistDiscographyScreen(
+                    artistName: widget.artistName,
+                    albums: albums,
+                    singles: singles,
+                  ),
+                ));
+              },
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.white24),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Ver toda la discografía',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildReleaseCard(BuildContext context, SavedAlbum album, double width) {
+      final yearStr = album.releaseDate ?? '';
+      final typeLabel = _displayReleaseType(album.releaseType);
+      final subtitle = yearStr.isNotEmpty ? '$typeLabel • $yearStr' : typeLabel;
       return MusicCard(
         width: width,
         title: album.title,
@@ -591,6 +734,15 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
            Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
         },
       );
+  }
+
+  String _displayReleaseType(String? type) {
+    switch (type) {
+      case 'album': return 'Álbum';
+      case 'single': return 'Sencillo';
+      case 'ep': return 'EP';
+      default: return 'Álbum';
+    }
   }
 
   Widget _buildRelatedArtistsSection(BuildContext context) {
