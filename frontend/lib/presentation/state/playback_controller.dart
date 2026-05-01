@@ -4,6 +4,7 @@ import 'dart:math';
 import '../../domain/entities/track.dart';
 import '../../core/playback/playback_engine.dart';
 import '../../core/playback/playback_factory.dart';
+import '../../core/playback/paax_audio_handler.dart';
 
 // Platform-conditional import — web gets the real Media Session API interop,
 // everything else gets a silent no-op stub.
@@ -46,6 +47,15 @@ class PlaybackController extends ChangeNotifier {
   bool get isLoadingTrack => _isLoadingTrack;
   String? get errorMessage => _errorMessage;
 
+  /// Tracks coming after the currently playing track.
+  List<Track> get upcomingQueue =>
+      _currentIndex >= 0 && _currentIndex < _queue.length - 1
+          ? _queue.sublist(_currentIndex + 1)
+          : [];
+
+  /// True if there are upcoming tracks in the queue.
+  bool get hasUpcoming => upcomingQueue.isNotEmpty;
+
   // Notifiers for high-frequency updates (avoid full rebuilds)
   final positionNotifier = ValueNotifier<Duration>(Duration.zero);
   final durationNotifier = ValueNotifier<Duration>(Duration.zero);
@@ -77,6 +87,9 @@ class PlaybackController extends ChangeNotifier {
   Future<void> _initEngine() async {
     await _engine.initialize();
 
+    // Wire AudioHandler's seek callback to our engine
+    globalAudioHandler?.onSeek = (position) => seek(position);
+
     DateTime lastUpdate = DateTime.now();
     Duration lastEmittedPosition = Duration.zero;
 
@@ -104,6 +117,11 @@ class PlaybackController extends ChangeNotifier {
       if (_duration != d) {
         _duration = d;
         durationNotifier.value = d;
+        // Dynamically update the notification's MediaItem with the real duration
+        // reported by the WebView (fixes static progress bar when track.duration was 0)
+        if (d > Duration.zero) {
+          updateMediaSessionDuration(d);
+        }
         notifyListeners();
       }
     });
@@ -111,7 +129,8 @@ class PlaybackController extends ChangeNotifier {
     _engine.playingStream.listen((playing) {
       if (_isPlaying != playing) {
         _isPlaying = playing;
-        updateMediaSessionPlaybackState(isPlaying: playing);
+        // Pass current position so the notification doesn't reset to 00:00 on pause
+        updateMediaSessionPlaybackState(isPlaying: playing, position: _position);
         notifyListeners();
       }
     });
@@ -246,9 +265,69 @@ class PlaybackController extends ChangeNotifier {
     return ids;
   }
 
+  // ── Queue management ──────────────────────────────────────────────────────
+
   void addToQueue(Track track) {
     _queue.add(track);
     notifyListeners();
+  }
+
+  /// Jump to a specific absolute index in the queue and start playing.
+  Future<void> playFromQueue(int absoluteIndex) async {
+    if (absoluteIndex < 0 || absoluteIndex >= _queue.length) return;
+    _currentIndex = absoluteIndex;
+    await _playCurrent();
+  }
+
+  /// Remove a track at [absoluteIndex] from the queue.
+  /// If removing the current track, play the next one.
+  /// If removing before the current track, adjust _currentIndex.
+  void removeFromQueue(int absoluteIndex) {
+    if (absoluteIndex < 0 || absoluteIndex >= _queue.length) return;
+    if (_queue.length <= 1) return; // Don't remove the last track
+
+    if (absoluteIndex == _currentIndex) {
+      // Removing the currently playing track — play next
+      _queue.removeAt(absoluteIndex);
+      if (_currentIndex >= _queue.length) _currentIndex = 0;
+      _playCurrent();
+    } else {
+      if (absoluteIndex < _currentIndex) {
+        _currentIndex--;
+      }
+      _queue.removeAt(absoluteIndex);
+      notifyListeners();
+    }
+  }
+
+  /// Reorder within the upcoming portion of the queue.
+  /// [oldIndex] and [newIndex] are relative to the upcoming list
+  /// (i.e., 0 = first track after current).
+  void reorderQueue(int oldIndex, int newIndex) {
+    final start = _currentIndex + 1;
+    final absOld = start + oldIndex;
+    var absNew = start + newIndex;
+
+    if (absOld < 0 || absOld >= _queue.length) return;
+    if (absNew < start) absNew = start;
+    if (absNew > _queue.length) absNew = _queue.length;
+
+    if (absOld == absNew) return;
+
+    final track = _queue.removeAt(absOld);
+    // After removal, adjust target if it was after the source
+    if (absNew > absOld) absNew--;
+    _queue.insert(absNew, track);
+    notifyListeners();
+  }
+
+  /// Clear all upcoming tracks (everything after current).
+  void clearUpcoming() {
+    if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
+    if (_currentIndex < _queue.length - 1) {
+      _queue.removeRange(_currentIndex + 1, _queue.length);
+      notifyListeners();
+    }
   }
 
   void startScrubbing() => _isScrubbing = true;
@@ -282,3 +361,4 @@ class PlaybackController extends ChangeNotifier {
     super.dispose();
   }
 }
+

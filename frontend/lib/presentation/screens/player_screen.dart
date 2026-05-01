@@ -1,5 +1,4 @@
 import 'dart:ui';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
@@ -9,7 +8,7 @@ import '../state/library_controller.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/app_image.dart';
 import '../widgets/smooth_audio_progress_bar.dart';
-import '../widgets/playback_debug_overlay.dart';
+import '../widgets/queue_bottom_sheet.dart';
 import '../screens/album_detail_screen.dart';
 import '../screens/artist_detail_screen.dart';
 import '../screens/main_wrapper.dart';
@@ -37,11 +36,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
       builder: (context, track, _) {
           if (track == null) return const Scaffold(body: Center(child: Text("No track playing")));
 
+          final screenHeight = MediaQuery.of(context).size.height;
+          final screenWidth = MediaQuery.of(context).size.width;
+          final safePadding = MediaQuery.of(context).padding;
+
+          // ── Artwork sizing ──
+          // Use most of the width minus padding, clamped for tablets
+          final contentWidth = screenWidth - 2 * kPlayerHorizontalPadding;
+          const maxArtworkWidth = 420.0;
+          final availableHeight = screenHeight - safePadding.top - safePadding.bottom - 340;
+          final maxByHeight = availableHeight * 0.82;
+          double artworkSize = contentWidth.clamp(240.0, maxArtworkWidth);
+          if (maxByHeight > 200) {
+            artworkSize = artworkSize.clamp(240.0, maxByHeight);
+          }
+
           return Scaffold(
             backgroundColor: AppColors.background,
             body: Stack(
               children: [
-                // Background Image (Static & Blurred) - Wrapped in RepaintBoundary
+                // Background Image (Static & Blurred)
                 RepaintBoundary(
                   child: Stack(
                     fit: StackFit.expand,
@@ -55,7 +69,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       BackdropFilter(
                          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
                          child: Container(
-                           color: Colors.black.withOpacity(0.6),
+                           color: Colors.black.withValues(alpha: 0.55),
                          ),
                        ),
                     ],
@@ -67,9 +81,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: kPlayerHorizontalPadding),
                     child: Column(
                       children: [
-                        // Header
+                        // ── Header ──
                         SizedBox(
-                          height: 60,
+                          height: 52,
                           child: Row(
                             children: [
                               IconButton(
@@ -77,7 +91,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                   icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 32)
                               ),
                               const Spacer(),
-                              const Text("Now Playing", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+                              const Text("Now Playing", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white70)),
                               const Spacer(),
                               OverflowMenu(
                                 type: MenuType.track, 
@@ -89,44 +103,63 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ),
                         ),
                         
-                        // Artwork (Clamped Size, Centered)
-                        Expanded(
-                          child: Center(
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(vertical: Responsive.verticalSpacing(context) * 2),
-                              child: SizedBox(
-                                width: Responsive.artworkSize(context),
-                                height: Responsive.artworkSize(context),
-                                child: Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    _ArtworkWidget(url: track.artworkUrl),
-                                    // Loading overlay while stream URL resolves
-                                    Selector<PlaybackController, bool>(
-                                      selector: (_, c) => c.isLoadingTrack,
-                                      builder: (_, isLoading, __) => isLoading
-                                          ? Container(
-                                              decoration: BoxDecoration(
-                                                color: Colors.black.withOpacity(0.45),
-                                                borderRadius: BorderRadius.circular(24),
-                                              ),
-                                              child: const Center(
-                                                child: CircularProgressIndicator(
-                                                  color: Colors.white,
-                                                  strokeWidth: 3,
-                                                ),
-                                              ),
-                                            )
-                                          : const SizedBox.shrink(),
+                        const SizedBox(height: 8),
+
+                        // ── Artwork ──
+                        SizedBox(
+                          width: artworkSize,
+                          height: artworkSize,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Container(
+                                width: artworkSize,
+                                height: artworkSize,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.5),
+                                      blurRadius: 30,
+                                      offset: const Offset(0, 12),
                                     ),
                                   ],
                                 ),
+                                child: AppImage(
+                                  url: track.artworkUrl,
+                                  sizePx: Lh3UrlBuilder.fullPlayerSize,
+                                  width: artworkSize,
+                                  height: artworkSize,
+                                  fit: BoxFit.cover,
+                                  borderRadius: 20,
+                                  forceLoad: true,
+                                ),
                               ),
-                            ),
+                              // Loading overlay
+                              Selector<PlaybackController, bool>(
+                                selector: (_, c) => c.isLoadingTrack,
+                                builder: (_, isLoading, __) => isLoading
+                                    ? Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withValues(alpha: 0.45),
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        child: const Center(
+                                          child: CircularProgressIndicator(
+                                            color: Colors.white,
+                                            strokeWidth: 3,
+                                          ),
+                                        ),
+                                      )
+                                    : const SizedBox.shrink(),
+                              ),
+                            ],
                           ),
                         ),
                         
-                        // Track Info
+                        const Spacer(),
+
+                        // ── Track Info ──
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -138,9 +171,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     behavior: HitTestBehavior.opaque,
                                     onTap: () {
                                        if (track.albumId.isNotEmpty) {
-                                          // Close the full-screen player first
                                           Navigator.pop(context);
-                                          // Push onto current tab's nested navigator — keeps bottom nav visible
                                           MainWrapper.shellKey.currentState?.navigateTo(
                                              MaterialPageRoute(
                                                builder: (_) => AlbumDetailScreen(
@@ -161,7 +192,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     child: Text(
                                       track.title, 
                                       style: TextStyle(
-                                        fontSize: Responsive.fontSize(context, 24, min: 20, max: 28), 
+                                        fontSize: Responsive.fontSize(context, 22, min: 18, max: 26), 
                                         fontWeight: FontWeight.bold,
                                         color: Colors.white,
                                       ), 
@@ -170,42 +201,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     ),
                                   ),
                                    const SizedBox(height: 4),
-                                  // Artist(s) — tappable, navigates to primary artist profile
                                   GestureDetector(
                                      behavior: HitTestBehavior.opaque,
                                      onTap: () {
-                                        // Primary artist = first entry in structured list, else fallback
+                                        if (isPlaceholderArtist(track.artistName)) return;
                                         final firstArtist = (track.artists != null && track.artists!.isNotEmpty)
                                             ? track.artists!.first
                                             : null;
-                                        final artistId   = (firstArtist?['id'] ?? track.artistId ?? '').toString();
-                                        final artistName = (firstArtist?['name'] ?? track.artistName);
-
-                                        // Guard: don't navigate for placeholder compilations
-                                        if (isPlaceholderArtist(artistName)) return;
-
-                                        // Close the full-screen player first
+                                        final artistId = (firstArtist?['id'] ?? track.artistId ?? '').toString();
+                                        final artistName = firstArtist?['name'] ?? track.artistName;
+                                        if (artistId.isEmpty) return;
                                         Navigator.pop(context);
-
-                                        // Push onto current tab's navigator — keeps bottom nav visible
                                         MainWrapper.shellKey.currentState?.navigateTo(
-                                           MaterialPageRoute(
-                                             builder: (_) => ArtistDetailScreen(
-                                                // If id is known, pass it directly.
-                                                // If empty, pass sourceTrack so ArtistDetailScreen
-                                                // can resolve the real artistId via getTrack().
-                                                artistId:   artistId,
-                                                artistName: artistName,
-                                                pictureUrl: '',
-                                                sourceTrack: artistId.isEmpty ? track : null,
-                                             ),
-                                           ),
+                                          MaterialPageRoute(builder: (_) => ArtistDetailScreen(
+                                            artistId: artistId,
+                                            artistName: artistName,
+                                          )),
                                         );
                                      },
                                      child: Text(
                                        track.displayArtist,
                                        style: TextStyle(
-                                         fontSize: Responsive.fontSize(context, 16, min: 13, max: 18),
+                                         fontSize: Responsive.fontSize(context, 15, min: 13, max: 17),
                                          color: AppColors.textSecondary,
                                        ),
                                        maxLines: 1,
@@ -215,7 +232,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 ],
                               ),
                             ),
-                            // Like Button (Needs LibraryController)
+                            // Like Button
                             Consumer<LibraryController>(
                               builder: (context, lib, _) {
                                   final isLiked = lib.isLiked(track);
@@ -223,7 +240,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                       onPressed: () => lib.toggleLike(track), 
                                       icon: Icon(
                                           isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded, 
-                                          color: isLiked ? AppColors.primaryEnd : Colors.white
+                                          color: isLiked ? AppColors.primaryEnd : Colors.white,
+                                          size: 26,
                                       )
                                   );
                               }
@@ -231,18 +249,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ],
                         ),
                         
-                        SizedBox(height: Responsive.verticalSpacing(context) * 2),
+                        const SizedBox(height: 16),
                         
-                        // Progress Bar (Isolated)
+                        // ── Progress Bar ──
                         const SmoothAudioProgressBar(), 
                         
-                        SizedBox(height: Responsive.verticalSpacing(context) * 2),
+                        const SizedBox(height: 12),
 
-
-                        // Controls
+                        // ── Controls ──
                         const _PlayerControls(),
                         
-                        SizedBox(height: Responsive.verticalSpacing(context) * 3),
+                        const SizedBox(height: 8),
+
+                        // ── Lower Actions (device output + queue) ──
+                        const _LowerActions(),
+                        
+                        SizedBox(height: Responsive.verticalSpacing(context)),
                       ],
                     ),
                   ),
@@ -255,115 +277,118 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-class _ArtworkWidget extends StatelessWidget {
-  final String url;
-  const _ArtworkWidget({required this.url});
+// ── Player Controls ─────────────────────────────────────────────────────────
+
+class _PlayerControls extends StatefulWidget {
+  const _PlayerControls();
+
+  @override
+  State<_PlayerControls> createState() => _PlayerControlsState();
+}
+
+class _PlayerControlsState extends State<_PlayerControls> {
+  double _rotationTurns = 0;
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
-    
-    // Content width = screen width - 2 * horizontal padding (matches progress bar)
-    final contentWidth = screenWidth - 2 * kPlayerHorizontalPadding;
-    
-    // Max artwork width for tablets/web
-    const maxArtworkWidth = 480.0;
-    
-    // Responsive height handling: shrink artwork on short devices
-    final availableHeight = screenHeight - 300;
-    final maxByHeight = availableHeight * 0.75;
-    
-    // Final artwork size
-    double artworkSize = contentWidth.clamp(200.0, maxArtworkWidth);
-    if (maxByHeight > 200) {
-      artworkSize = artworkSize.clamp(200.0, maxByHeight);
-    }
+    final controller = context.read<PlaybackController>();
 
-    return Container(
-      width: artworkSize,
-      height: artworkSize,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.4),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+           // Shuffle
+           Selector<PlaybackController, bool>(
+             selector: (_, c) => c.isShuffle,
+             builder: (_, isShuffle, __) => IconButton(
+               icon: Icon(Icons.shuffle, color: isShuffle ? AppColors.primaryStart : Colors.white54, size: 24),
+               onPressed: controller.toggleShuffle,
+             ),
+           ),
+           const SizedBox(width: 12),
+           // Prev
+           IconButton(
+             icon: const Icon(Icons.skip_previous_rounded, size: 36, color: Colors.white),
+             onPressed: () => controller.playPrevious(),
+           ),
+           const SizedBox(width: 8),
+           // Play/Pause — no white circle, with rotation animation
+           Selector<PlaybackController, bool>(
+             selector: (_, c) => c.isPlaying,
+             builder: (_, isPlaying, __) => GestureDetector(
+               onTap: () {
+                 setState(() => _rotationTurns += 0.5);
+                 controller.togglePlayPause();
+               },
+               child: AnimatedRotation(
+                 turns: _rotationTurns,
+                 duration: const Duration(milliseconds: 300),
+                 curve: Curves.easeOutCubic,
+                 child: Icon(
+                   isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                   size: 64,
+                   color: Colors.white,
+                 ),
+               ),
+             ),
+           ),
+           const SizedBox(width: 8),
+           // Next
+           IconButton(
+             icon: const Icon(Icons.skip_next_rounded, size: 36, color: Colors.white),
+             onPressed: () => controller.playNext(),
+           ),
+           const SizedBox(width: 12),
+           // Loop
+           Selector<PlaybackController, LoopMode>(
+             selector: (_, c) => c.loopMode,
+             builder: (_, loopMode, __) => IconButton(
+               icon: Icon(
+                   loopMode == LoopMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
+                   color: loopMode != LoopMode.off ? AppColors.primaryStart : Colors.white54,
+                   size: 24,
+               ),
+               onPressed: controller.toggleLoop,
+             ),
+           ),
         ],
-      ),
-      child: AppImage(
-        url: url,
-        sizePx: Lh3UrlBuilder.fullPlayerSize,
-        width: artworkSize,
-        height: artworkSize,
-        fit: BoxFit.cover,
-        borderRadius: 24,
-        forceLoad: true,
       ),
     );
   }
 }
 
+// ── Lower Actions (Device Output + Queue) ───────────────────────────────────
 
-
-class _PlayerControls extends StatelessWidget {
-  const _PlayerControls();
+class _LowerActions extends StatelessWidget {
+  const _LowerActions();
 
   @override
   Widget build(BuildContext context) {
-    // We use Selector to only rebuild when specific state changes
-    final controller = context.read<PlaybackController>();
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-         // Shuffle
-         Selector<PlaybackController, bool>(
-           selector: (_, c) => c.isShuffle,
-           builder: (_, isShuffle, __) => IconButton(
-             icon: Icon(Icons.shuffle, color: isShuffle ? AppColors.primaryStart : Colors.white),
-             onPressed: controller.toggleShuffle,
-           ),
-         ),
-         // Prev
-         IconButton(
-           icon: const Icon(Icons.skip_previous_rounded, size: 40),
-           onPressed: () => controller.playPrevious(),
-         ),
-         // Play/Pause
-         Container(
-           width: 72, height: 72,
-           decoration: const BoxDecoration(
-             shape: BoxShape.circle,
-             color: Colors.white,
-           ),
-           child: Selector<PlaybackController, bool>(
-             selector: (_, c) => c.isPlaying,
-             builder: (_, isPlaying, __) => IconButton(
-               icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 40, color: Colors.black),
-               onPressed: () => controller.togglePlayPause(),
-             ),
-           ),
-         ),
-         // Next
-         IconButton(
-           icon: const Icon(Icons.skip_next_rounded, size: 40),
-           onPressed: () => controller.playNext(),
-         ),
-         // Loop
-         Selector<PlaybackController, LoopMode>(
-           selector: (_, c) => c.loopMode,
-           builder: (_, loopMode, __) => IconButton(
-             icon: Icon(
-                 loopMode == LoopMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
-                 color: loopMode != LoopMode.off ? AppColors.primaryStart : Colors.white
-             ),
-             onPressed: controller.toggleLoop,
-           ),
-         ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Device output (placeholder)
+          IconButton(
+            icon: const Icon(Icons.cast_rounded, size: 22, color: Colors.white54),
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Próximamente'),
+                  duration: Duration(seconds: 1),
+                ),
+              );
+            },
+          ),
+          // Queue button
+          IconButton(
+            icon: const Icon(Icons.queue_music_rounded, size: 24, color: Colors.white54),
+            onPressed: () => showQueueSheet(context),
+          ),
+        ],
+      ),
     );
   }
 }

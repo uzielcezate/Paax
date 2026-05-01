@@ -228,13 +228,13 @@ class _MenuContent extends StatelessWidget {
           builder: (context) => AddToPlaylistSheet(tracks: [effectiveTrack]),
         );
       }),
-      _actionItem(context, icon: Icons.queue_music, label: "Add to Queue", onTap: () {
+      _actionItem(context, icon: Icons.queue_music, label: "Agregar a la cola", onTap: () {
         final playback = context.read<PlaybackController>();
         if (playback.currentTrack == null) {
            playback.playTrack(effectiveTrack);
         } else {
            playback.addToQueue(effectiveTrack);
-           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Added to queue")));
+           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Agregada a la cola"), duration: Duration(seconds: 2)));
         }
         Navigator.pop(context);
       }),
@@ -253,9 +253,12 @@ class _MenuContent extends StatelessWidget {
              album: SavedAlbum(
                albumId: effectiveTrack.albumId,
                title: effectiveTrack.albumTitle,
-               artistName: effectiveTrack.artistName, 
+               // Don't pass track.artistName here — it's the track's artists
+               // (e.g. "DUKI, Judeline"), not the album's artist.
+               // The AlbumDetailScreen will resolve the true album artist from the API.
+               artistName: '',
                artworkUrl: effectiveTrack.artworkUrl,
-               artistId: effectiveTrack.artistId
+               artistId: '',
              )
         ));
         
@@ -268,19 +271,40 @@ class _MenuContent extends StatelessWidget {
 
       if (!isPlaceholderArtist(effectiveTrack.artistName))
       _actionItem(context, icon: Icons.person, label: "Go to Artist", onTap: () {
-         Navigator.pop(context); // Close sheet
+         // Build valid artist list from track metadata
+         final validArtists = (effectiveTrack.artists ?? [])
+             .where((a) => (a['id'] ?? '').isNotEmpty && (a['name'] ?? '').isNotEmpty)
+             .toList();
+
+         // Fallback: use track-level artistId/artistName if artists list is empty
+         if (validArtists.isEmpty) {
+           final fallbackId = effectiveTrack.artistId ?? '';
+           if (fallbackId.isEmpty) {
+             Navigator.pop(context);
+             ScaffoldMessenger.of(parentContext).showSnackBar(
+               const SnackBar(content: Text("Artist info unavailable")),
+             );
+             return;
+           }
+           Navigator.pop(context);
+           if (onNavigation != null) onNavigation!();
+           _navigateToArtist(fallbackId, effectiveTrack.artistName, effectiveTrack);
+           return;
+         }
+
+         Navigator.pop(context); // Close overflow sheet
          if (onNavigation != null) onNavigation!();
 
-         final route = MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-            artistId: effectiveTrack.artistId ?? '',
-            artistName: effectiveTrack.artistName, 
-            sourceTrack: effectiveTrack, 
-         ));
-         
-         if (MainWrapper.shellKey.currentState != null) {
-            MainWrapper.shellKey.currentState!.navigateTo(route);
+         if (validArtists.length == 1) {
+           // Single artist — route directly
+           _navigateToArtist(
+             validArtists.first['id']!,
+             validArtists.first['name']!,
+             effectiveTrack,
+           );
          } else {
-            Navigator.push(parentContext, route);
+           // Multiple artists — show selection BottomSheet
+           _showArtistPicker(parentContext, validArtists, effectiveTrack);
          }
       }),
       _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
@@ -403,6 +427,81 @@ class _MenuContent extends StatelessWidget {
       leading: Icon(icon, color: color),
       title: Text(label, style: TextStyle(color: color, fontSize: 16)),
       onTap: onTap,
+    );
+  }
+
+  /// Navigate to an artist profile via the shell navigator (keeps bottom nav)
+  /// or falls back to a direct push.
+  void _navigateToArtist(String artistId, String artistName, Track? sourceTrack) {
+    final route = MaterialPageRoute(
+      builder: (_) => ArtistDetailScreen(
+        artistId: artistId,
+        artistName: artistName,
+        sourceTrack: sourceTrack,
+      ),
+    );
+    if (MainWrapper.shellKey.currentState != null) {
+      MainWrapper.shellKey.currentState!.navigateTo(route);
+    } else {
+      Navigator.push(parentContext, route);
+    }
+  }
+
+  /// Shows a multi-artist selection BottomSheet (Spotify-style).
+  void _showArtistPicker(
+    BuildContext ctx,
+    List<Map<String, String>> artists,
+    Track? sourceTrack,
+  ) {
+    showModalBottomSheet(
+      context: ctx,
+      useRootNavigator: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0A0A0A).withOpacity(0.9),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                    child: Text(
+                      "Choose Artist",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Divider(color: Colors.white.withOpacity(0.1)),
+                  ...artists.map((a) => ListTile(
+                    leading: const Icon(Icons.person_outline, color: Colors.white70),
+                    title: Text(
+                      a['name'] ?? '',
+                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetCtx); // Close picker
+                      _navigateToArtist(a['id']!, a['name']!, sourceTrack);
+                    },
+                  )),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

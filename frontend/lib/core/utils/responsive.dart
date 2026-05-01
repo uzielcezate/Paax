@@ -50,10 +50,10 @@ class Responsive {
     return (height * 0.012).clamp(8.0, 14.0);
   }
 
-  /// Artwork size for player: 68% of width, clamped 220-320
+  /// Artwork size for player: 75% of width, clamped 280-400
   static double artworkSize(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    return (width * 0.68).clamp(220.0, 320.0);
+    return (width * 0.75).clamp(280.0, 400.0);
   }
 
   /// Responsive padding (horizontal) for screens.
