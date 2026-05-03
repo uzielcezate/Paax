@@ -5,6 +5,7 @@ import '../../core/image/lh3_url_builder.dart';
 import '../../domain/entities/saved_album.dart';
 import '../widgets/app_image.dart';
 import '../widgets/bottom_content_padding.dart';
+import '../../core/utils/string_utils.dart';
 import 'album_detail_screen.dart';
 
 /// Full artist discography screen with filter chips.
@@ -26,9 +27,9 @@ class ArtistDiscographyScreen extends StatefulWidget {
 }
 
 class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
-  int _selectedFilter = 0; // 0=Todo, 1=Álbumes, 2=Sencillos y EPs
+  int _selectedFilter = 0; // 0=All, 1=Albums, 2=Singles & EPs
 
-  static const _filterLabels = ['Todo', 'Álbumes', 'Sencillos y EPs'];
+  static const _filterLabels = ['All', 'Albums', 'Singles & EPs'];
 
   /// All releases merged and sorted newest → oldest.
   late final List<SavedAlbum> _allReleases;
@@ -62,16 +63,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
   }
 
   String _displayType(String? type) {
-    switch (type) {
-      case 'album':
-        return 'Álbum';
-      case 'single':
-        return 'Sencillo';
-      case 'ep':
-        return 'EP';
-      default:
-        return 'Álbum';
-    }
+    return displayReleaseType(type);
   }
 
   @override
@@ -93,7 +85,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
               ),
             ),
             const Text(
-              'Discografía',
+              'Discography',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -152,12 +144,16 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
   }
 
   Widget _buildContent() {
+    if (_selectedFilter == 0) {
+      return _buildAllContent();
+    }
+
     final releases = _filteredReleases;
 
     if (releases.isEmpty) {
       return const Center(
         child: Text(
-          'No hay lanzamientos',
+          'No releases',
           style: TextStyle(color: AppColors.textSecondary, fontSize: 15),
         ),
       );
@@ -169,18 +165,55 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
         right: Responsive.spacing(context),
         bottom: BottomContentPadding.bottomHeight(context),
       ),
-      itemCount: releases.length + (_latestRelease != null && _selectedFilter == 0 ? 1 : 0),
+      itemCount: releases.length,
       itemBuilder: (context, index) {
-        // Show "Último lanzamiento" hero card at top only for "Todo"
-        if (_selectedFilter == 0 && _latestRelease != null && index == 0) {
-          return _buildLatestReleaseHero(_latestRelease!);
-        }
-
-        final adjustedIndex =
-            (_selectedFilter == 0 && _latestRelease != null) ? index - 1 : index;
-        final release = releases[adjustedIndex];
-        return _buildReleaseListItem(release);
+        final release = releases[index];
+        return _buildReleaseListItem(release, showType: false);
       },
+    );
+  }
+
+  /// Builds the "All" tab with section headers.
+  Widget _buildAllContent() {
+    return ListView(
+      padding: EdgeInsets.only(
+        left: Responsive.spacing(context),
+        right: Responsive.spacing(context),
+        bottom: BottomContentPadding.bottomHeight(context),
+      ),
+      children: [
+        // Latest Release hero
+        if (_latestRelease != null)
+          _buildLatestReleaseHero(_latestRelease!),
+
+        // Albums section
+        if (widget.albums.isNotEmpty) ...[
+          _buildSectionHeader('Albums'),
+          ...(widget.albums.toList()..sort(_compareByYearDesc))
+              .map((r) => _buildReleaseListItem(r, showType: false)),
+        ],
+
+        // Singles & EPs section
+        if (widget.singles.isNotEmpty) ...[
+          _buildSectionHeader('Singles & EPs'),
+          ...(widget.singles.toList()..sort(_compareByYearDesc))
+              .map((r) => _buildReleaseListItem(r, showType: false)),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 20, bottom: 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
     );
   }
 
@@ -193,7 +226,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
           const Padding(
             padding: EdgeInsets.only(bottom: 12),
             child: Text(
-              'Último lanzamiento',
+              'Latest Release',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -241,8 +274,12 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                             ),
                           ),
                           const SizedBox(height: 6),
-                          Text(
-                            '${_displayType(release.releaseType)}${release.releaseDate != null ? ' • ${release.releaseDate}' : ''}',
+                          Text(() {
+                            final type = _displayType(release.releaseType);
+                            final year = extractYear(release.releaseDate);
+                            if (year != null) return '$type \u00B7 $year';
+                            return type;
+                          }(),
                             style: const TextStyle(
                               fontSize: 13,
                               color: AppColors.textSecondary,
@@ -262,7 +299,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
     );
   }
 
-  Widget _buildReleaseListItem(SavedAlbum release) {
+  Widget _buildReleaseListItem(SavedAlbum release, {bool showType = true}) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _openAlbum(release),
@@ -297,7 +334,15 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${_displayType(release.releaseType)}${release.releaseDate != null ? ' • ${release.releaseDate}' : ''}',
+                    () {
+                      final year = extractYear(release.releaseDate);
+                      if (showType) {
+                        final type = _displayType(release.releaseType);
+                        if (year != null) return '$type \u00B7 $year';
+                        return type;
+                      }
+                      return year ?? '';
+                    }(),
                     style: const TextStyle(
                       fontSize: 12,
                       color: AppColors.textSecondary,

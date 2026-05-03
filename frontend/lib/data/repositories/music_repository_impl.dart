@@ -111,8 +111,8 @@ class MusicRepositoryImpl implements MusicRepository {
       name: e['name']?.toString() ?? 'Various Artists',
       picture: _findHeroThumbnail(e['thumbnails']), // High-res for artist hero
       nbFans: 0, // Set to 0 as requested (will be implemented with app backend later)
-      albums: _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x)),
-      singles: _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x)),
+      albums: _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x, defaultType: 'album')),
+      singles: _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x, defaultType: 'single')),
       topTracks: _safeMapList<Track>(
         e['songs']?['results'],
         (x) => _mapTrack(x),
@@ -397,7 +397,7 @@ class MusicRepositoryImpl implements MusicRepository {
      );
   }
 
-  SavedAlbum _mapAlbum(Map<String, dynamic> e) {
+  SavedAlbum _mapAlbum(Map<String, dynamic> e, {String defaultType = 'album'}) {
     // Build structured artists list
     final List<Map<String, String>> albumArtists = [];
     if (e['artists'] != null && e['artists'] is List) {
@@ -423,19 +423,12 @@ class MusicRepositoryImpl implements MusicRepository {
       artworkUrl: _findThumbnail(e['thumbnails']),
       artists: albumArtists.isNotEmpty ? albumArtists : null,
       releaseDate: e['year']?.toString(),
-      releaseType: _normalizeReleaseType(e['type']),
+      releaseType: normalizeReleaseType(e['type'], defaultType: defaultType),
     );
   }
 
-  /// Normalize release type strings from ytmusicapi to canonical values.
-  String? _normalizeReleaseType(dynamic raw) {
-    if (raw == null) return null;
-    final t = raw.toString().toLowerCase().trim();
-    if (t == 'album') return 'album';
-    if (t == 'single') return 'single';
-    if (t == 'ep') return 'ep';
-    return 'album'; // default fallback for unknown types
-  }
+  // NOTE: Release type normalization is now handled by
+  // normalizeReleaseType() in core/utils/string_utils.dart.
 
   
   // ... _mapAlbumDetail skipped (it already had some checks but good to review if needed)

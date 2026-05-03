@@ -123,3 +123,67 @@ String formatFans(int fans) {
   final m = (fans / 1000000).toStringAsFixed(1);
   return '$m M Fans';
 }
+
+// ─── Release Metadata Utilities ───────────────────────────────────────────
+
+/// Safely extracts a 4-digit year from a date string or year value.
+///
+/// Handles:
+/// - `"2025"` → `"2025"`
+/// - `"2025-03-15"` → `"2025"`
+/// - `null` / `""` → `null`
+/// - Unparseable values → `null`
+String? extractYear(String? dateOrYear) {
+  if (dateOrYear == null || dateOrYear.trim().isEmpty) return null;
+  final trimmed = dateOrYear.trim();
+
+  // Already a 4-digit year
+  final yearOnly = RegExp(r'^\d{4}$');
+  if (yearOnly.hasMatch(trimmed)) return trimmed;
+
+  // ISO date: "2025-03-15" or similar
+  final isoMatch = RegExp(r'^(\d{4})-').firstMatch(trimmed);
+  if (isoMatch != null) return isoMatch.group(1);
+
+  // Any 4-digit sequence
+  final anyYear = RegExp(r'(\d{4})').firstMatch(trimmed);
+  if (anyYear != null) return anyYear.group(1);
+
+  return null;
+}
+
+/// Returns an English display label for a normalized release type.
+///
+/// - `'album'`  → `'Album'`
+/// - `'single'` → `'Single'`
+/// - `'ep'`     → `'EP'`
+/// - default    → `'Album'`
+String displayReleaseType(String? type) {
+  switch (type) {
+    case 'album':
+      return 'Album';
+    case 'single':
+      return 'Single';
+    case 'ep':
+      return 'EP';
+    default:
+      return 'Album';
+  }
+}
+
+/// Normalizes raw release type strings to canonical lowercase values.
+///
+/// Maps:
+/// - `"album"`, `"Album"`, `"ALBUM"` → `"album"`
+/// - `"single"`, `"Single"`, `"song"`, `"Song"`, `"track"`, `"Track"` → `"single"`
+/// - `"ep"`, `"EP"`, `"Ep"`, `"extended play"` → `"ep"`
+///
+/// Returns [defaultType] for `null` or unrecognized values.
+String normalizeReleaseType(dynamic raw, {String defaultType = 'album'}) {
+  if (raw == null) return defaultType;
+  final t = raw.toString().toLowerCase().trim();
+  if (t == 'album') return 'album';
+  if (t == 'single' || t == 'song' || t == 'track') return 'single';
+  if (t == 'ep' || t == 'extended play') return 'ep';
+  return defaultType;
+}

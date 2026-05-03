@@ -509,7 +509,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     );
   }
 
-  // ── Último lanzamiento ──────────────────────────────────────────────────
+  // ── Latest Release ──────────────────────────────────────────────────
   Widget _buildLatestReleaseSection(BuildContext context) {
     return FutureBuilder<Artist>(
       future: _artistInfoFuture,
@@ -528,7 +528,6 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           return yb.compareTo(ya);
         });
         final latest = allReleases.first;
-        final typeLabel = _displayReleaseType(latest.releaseType);
         final yearStr = latest.releaseDate ?? '';
 
         return SliverToBoxAdapter(
@@ -539,7 +538,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               children: [
                 const Padding(
                   padding: EdgeInsets.only(top: 24, bottom: 12),
-                  child: Text('Último lanzamiento',
+                  child: Text('Latest Release',
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 ),
                 GestureDetector(
@@ -577,7 +576,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
                                 const SizedBox(height: 6),
-                                Text('$typeLabel${yearStr.isNotEmpty ? ' • $yearStr' : ''}',
+                                Text(() {
+                                  final type = displayReleaseType(latest.releaseType);
+                                  final year = extractYear(yearStr);
+                                  if (year != null) return '$type \u00B7 $year';
+                                  return type;
+                                }(),
                                   style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
                               ],
                             ),
@@ -613,9 +617,9 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Padding(
+               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 24, 20, 12),
-                child: Text('Álbumes',
+                child: Text('Albums',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
               SizedBox(
@@ -627,7 +631,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                   primary: false,
                   itemCount: display.length,
                   itemBuilder: (context, index) {
-                    return _buildReleaseCard(context, display[index], cardWidth);
+                    return _buildReleaseCard(context, display[index], cardWidth, showType: false);
                   },
                 ),
               ),
@@ -638,7 +642,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     );
   }
 
-  // ── Sencillos y EPs (latest 5) ─────────────────────────────────────────
+  // ── Singles & EPs (latest 5) ────────────────────────────────────────
   Widget _buildDiscographySinglesSection(BuildContext context) {
     return FutureBuilder<Artist>(
       future: _artistInfoFuture,
@@ -657,7 +661,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             children: [
               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 24, 20, 12),
-                child: Text('Sencillos y EPs',
+                child: Text('Singles & EPs',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
               SizedBox(
@@ -669,7 +673,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                   primary: false,
                   itemCount: display.length,
                   itemBuilder: (context, index) {
-                    return _buildReleaseCard(context, display[index], cardWidth);
+                    return _buildReleaseCard(context, display[index], cardWidth, showType: false);
                   },
                 ),
               ),
@@ -680,7 +684,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     );
   }
 
-  // ── Ver toda la discografía button ─────────────────────────────────────
+  // ── See full discography button ────────────────────────────────────
   Widget _buildDiscographyButton(BuildContext context) {
     return FutureBuilder<Artist>(
       future: _artistInfoFuture,
@@ -712,7 +716,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 foregroundColor: Colors.white,
               ),
-              child: const Text('Ver toda la discografía',
+              child: const Text('See full discography',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
             ),
           ),
@@ -721,10 +725,15 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     );
   }
 
-  Widget _buildReleaseCard(BuildContext context, SavedAlbum album, double width) {
-      final yearStr = album.releaseDate ?? '';
-      final typeLabel = _displayReleaseType(album.releaseType);
-      final subtitle = yearStr.isNotEmpty ? '$typeLabel • $yearStr' : typeLabel;
+  Widget _buildReleaseCard(BuildContext context, SavedAlbum album, double width, {bool showType = true}) {
+      final year = extractYear(album.releaseDate);
+      String subtitle;
+      if (showType) {
+        final typeLabel = displayReleaseType(album.releaseType);
+        subtitle = year != null ? '$typeLabel \u00B7 $year' : typeLabel;
+      } else {
+        subtitle = year ?? '';
+      }
       return MusicCard(
         width: width,
         title: album.title,
@@ -734,15 +743,6 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
            Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
         },
       );
-  }
-
-  String _displayReleaseType(String? type) {
-    switch (type) {
-      case 'album': return 'Álbum';
-      case 'single': return 'Sencillo';
-      case 'ep': return 'EP';
-      default: return 'Álbum';
-    }
   }
 
   Widget _buildRelatedArtistsSection(BuildContext context) {
