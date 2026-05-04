@@ -12,6 +12,10 @@ class MusicRepositoryImpl implements MusicRepository {
   MusicRepositoryImpl({YouTubeMusicDataSource? dataSource}) 
       : _dataSource = dataSource ?? YouTubeMusicDataSource();
 
+  /// In-memory cache for album detail responses, keyed by browseId.
+  /// Avoids repeated /album/{id} fetches during enrichment.
+  final Map<String, Map<String, dynamic>> _albumDetailCache = {};
+
   @override
   Future<(List<SavedAlbum>, String?)> getArtistAlbumsPage(String id, String? params, String? token) async {
     final result = await _dataSource.getArtistAlbumsPage(id, params, token);
@@ -106,21 +110,235 @@ class MusicRepositoryImpl implements MusicRepository {
   @override
   Future<Artist> getArtist(String id) async {
     final e = await _dataSource.getArtist(id);
+
+    // ── 1. Map initial data from artist endpoint ──
+    var albums = _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x, defaultType: 'album'));
+    var singles = _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x, defaultType: 'single'));
+    final topTracks = _safeMapList<Track>(
+      e['songs']?['results'],
+      (x) => _mapTrack(x),
+      filter: (x) => !_isOfficialMusicVideo(x),
+    );
+
+    // ── 2. Enrich releases from top tracks' album references ──
+    try {
+      final enriched = await _enrichArtistReleases(
+        existingAlbums: albums,
+        existingSingles: singles,
+        rawSongs: e['songs']?['results'] as List? ?? [],
+      );
+      albums = enriched.albums;
+      singles = enriched.singles;
+    } catch (err) {
+      debugPrint('[Repo] Release enrichment failed (non-fatal): $err');
+    }
+
     return Artist(
       id: id,
       name: e['name']?.toString() ?? 'Various Artists',
-      picture: _findHeroThumbnail(e['thumbnails']), // High-res for artist hero
-      nbFans: 0, // Set to 0 as requested (will be implemented with app backend later)
-      albums: _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x, defaultType: 'album')),
-      singles: _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x, defaultType: 'single')),
-      topTracks: _safeMapList<Track>(
-        e['songs']?['results'],
-        (x) => _mapTrack(x),
-        filter: (x) => !_isOfficialMusicVideo(x),
-      ),
+      picture: _findHeroThumbnail(e['thumbnails']),
+      nbFans: 0,
+      albums: albums,
+      singles: singles,
+      topTracks: topTracks,
       relatedArtists: _safeMapList<Artist>(e['related']?['results'], (x) => _mapArtist(x)),
       albumsParams: e['albums']?['params']?.toString(),
       singlesParams: e['singles']?['params']?.toString(),
+    );
+  }
+
+  // ── Album Enrichment Pipeline ───────────────────────────────────────────
+
+  /// Fetch album detail with caching.
+  Future<Map<String, dynamic>> _fetchAlbumCached(String browseId) async {
+    if (_albumDetailCache.containsKey(browseId)) {
+      return _albumDetailCache[browseId]!;
+    }
+    final data = await _dataSource.getAlbum(browseId);
+    final map = data is Map<String, dynamic> ? data : <String, dynamic>{};
+    _albumDetailCache[browseId] = map;
+    return map;
+  }
+
+  /// Enriches artist releases by:
+  /// 1. Collecting album IDs from song results (top tracks)
+  /// 2. Fetching /album/{id} for IDs not already in albums/singles lists
+  /// 3. Re-enriching existing items that have null year
+  /// 4. Merging and deduplicating
+  Future<({List<SavedAlbum> albums, List<SavedAlbum> singles})> _enrichArtistReleases({
+    required List<SavedAlbum> existingAlbums,
+    required List<SavedAlbum> existingSingles,
+    required List<dynamic> rawSongs,
+  }) async {
+    // Collect existing IDs for deduplication
+    final existingIds = <String>{
+      ...existingAlbums.map((a) => a.albumId),
+      ...existingSingles.map((a) => a.albumId),
+    };
+
+    // Collect unique album IDs from song results
+    final songAlbumIds = <String>{};
+    for (final song in rawSongs) {
+      if (song is Map<String, dynamic>) {
+        final albumId = song['album']?['id']?.toString();
+        if (albumId != null && albumId.isNotEmpty) {
+          songAlbumIds.add(albumId);
+        }
+      }
+    }
+
+    // IDs to fetch: new ones (not in existing) + existing with null year
+    final idsToFetch = <String>{};
+
+    // New releases from songs
+    final newIds = songAlbumIds.difference(existingIds);
+    idsToFetch.addAll(newIds);
+
+    // Existing items with missing year
+    for (final album in [...existingAlbums, ...existingSingles]) {
+      if ((album.releaseDate == null || album.releaseDate!.isEmpty) && album.albumId.isNotEmpty) {
+        idsToFetch.add(album.albumId);
+      }
+    }
+
+    if (idsToFetch.isEmpty) {
+      return (albums: existingAlbums, singles: existingSingles);
+    }
+
+    // Cap at 10 fetches to limit network usage
+    final fetchList = idsToFetch.take(10).toList();
+    debugPrint('[Repo] Enriching ${fetchList.length} releases: $fetchList');
+
+    // Fetch in parallel
+    final results = await Future.wait(
+      fetchList.map((id) async {
+        try {
+          return MapEntry(id, await _fetchAlbumCached(id));
+        } catch (err) {
+          debugPrint('[Repo] Failed to fetch album $id: $err');
+          return MapEntry(id, <String, dynamic>{});
+        }
+      }),
+    );
+    final fetchedMap = Map.fromEntries(results.where((e) => e.value.isNotEmpty));
+
+    // Build updated albums and singles lists
+    final updatedAlbums = <SavedAlbum>[];
+    final updatedSingles = <SavedAlbum>[];
+    final seenIds = <String>{};
+
+    // Helper: update existing item with fetched data
+    SavedAlbum maybeEnrich(SavedAlbum existing) {
+      final detail = fetchedMap[existing.albumId];
+      if (detail == null) return existing;
+      final enrichedYear = detail['year']?.toString() ?? existing.releaseDate;
+      final enrichedType = normalizeReleaseType(
+        detail['type'],
+        defaultType: existing.releaseType ?? 'album',
+      );
+      // Use trackCount for type fallback
+      final trackCount = detail['trackCount'] as int?;
+      String finalType = enrichedType;
+      if (detail['type'] == null && trackCount != null) {
+        if (trackCount == 1) {
+          finalType = 'single';
+        } else if (trackCount <= 6) {
+          finalType = 'ep';
+        } else {
+          finalType = 'album';
+        }
+      }
+      return SavedAlbum(
+        albumId: existing.albumId,
+        title: existing.title,
+        artistName: existing.artistName,
+        artistId: existing.artistId,
+        artworkUrl: existing.artworkUrl,
+        artists: existing.artists,
+        releaseDate: enrichedYear,
+        releaseType: finalType,
+        trackCount: trackCount ?? existing.trackCount,
+      );
+    }
+
+    // Process existing albums
+    for (final album in existingAlbums) {
+      if (seenIds.contains(album.albumId)) continue;
+      seenIds.add(album.albumId);
+      updatedAlbums.add(maybeEnrich(album));
+    }
+
+    // Process existing singles
+    for (final single in existingSingles) {
+      if (seenIds.contains(single.albumId)) continue;
+      seenIds.add(single.albumId);
+      updatedSingles.add(maybeEnrich(single));
+    }
+
+    // Process new releases from songs
+    for (final newId in newIds) {
+      if (seenIds.contains(newId)) continue;
+      seenIds.add(newId);
+      final detail = fetchedMap[newId];
+      if (detail == null || detail.isEmpty) continue;
+
+      final release = _buildReleaseFromAlbumDetail(newId, detail);
+      if (release.releaseType == 'album') {
+        updatedAlbums.add(release);
+      } else {
+        updatedSingles.add(release);
+      }
+    }
+
+    return (albums: updatedAlbums, singles: updatedSingles);
+  }
+
+  /// Build a SavedAlbum from a /album/{id} response.
+  SavedAlbum _buildReleaseFromAlbumDetail(String browseId, Map<String, dynamic> detail) {
+    // Determine type with trackCount fallback
+    final trackCount = detail['trackCount'] as int?;
+    String type;
+    if (detail['type'] != null) {
+      type = normalizeReleaseType(detail['type']);
+    } else if (trackCount != null) {
+      if (trackCount == 1) {
+        type = 'single';
+      } else if (trackCount <= 6) {
+        type = 'ep';
+      } else {
+        type = 'album';
+      }
+    } else {
+      type = 'album';
+    }
+
+    // Build artist info
+    final List<Map<String, String>> artists = [];
+    if (detail['artists'] != null && detail['artists'] is List) {
+      for (var a in (detail['artists'] as List)) {
+        final name = a['name']?.toString() ?? '';
+        final aid = a['id']?.toString() ?? '';
+        if (name.isNotEmpty && !isViewCountString(name)) {
+          artists.add({'name': name, 'id': aid});
+        }
+      }
+    }
+
+    final displayName = artists.isNotEmpty
+        ? artists.map((a) => a['name']!).join(', ')
+        : 'Various Artists';
+    final primaryId = artists.isNotEmpty ? artists.first['id']! : '';
+
+    return SavedAlbum(
+      albumId: browseId,
+      title: detail['title']?.toString() ?? 'Unknown',
+      artistName: displayName,
+      artistId: primaryId,
+      artworkUrl: _findThumbnail(detail['thumbnails']),
+      artists: artists.isNotEmpty ? artists : null,
+      releaseDate: detail['year']?.toString(),
+      releaseType: type,
+      trackCount: trackCount,
     );
   }
 
