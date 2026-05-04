@@ -159,7 +159,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ),
                         ),
                         
-                        const SizedBox(height: 16),
+                        const Spacer(flex: 2),
 
                         // ── Track Info ──
                         Row(
@@ -273,22 +273,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ],
                         ),
                         
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 20),
                         
                         // ── Progress Bar ──
                         const SmoothAudioProgressBar(), 
                         
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
 
                         // ── Controls ──
                         const _PlayerControls(),
                         
-                        const SizedBox(height: 8),
+                        const Spacer(flex: 1),
 
                         // ── Lower Actions (device output + queue) ──
                         const _LowerActions(),
                         
-                        SizedBox(height: Responsive.verticalSpacing(context)),
+                        const SizedBox(height: 8),
                       ],
                     ),
                   ),
@@ -332,7 +332,7 @@ class _PlayerControlsState extends State<_PlayerControls> {
            const SizedBox(width: 12),
            // Prev
            IconButton(
-             icon: const Icon(Icons.skip_previous_rounded, size: 36, color: Colors.white),
+             icon: const Icon(Icons.skip_previous_rounded, size: 40, color: Colors.white),
              onPressed: () => controller.playPrevious(),
            ),
            const SizedBox(width: 8),
@@ -351,7 +351,7 @@ class _PlayerControlsState extends State<_PlayerControls> {
                  child: Icon(
                    isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                    key: ValueKey<bool>(isPlaying),
-                   size: 64,
+                   size: 76,
                    color: Colors.white,
                  ),
                ),
@@ -360,7 +360,7 @@ class _PlayerControlsState extends State<_PlayerControls> {
            const SizedBox(width: 8),
            // Next
            IconButton(
-             icon: const Icon(Icons.skip_next_rounded, size: 36, color: Colors.white),
+             icon: const Icon(Icons.skip_next_rounded, size: 40, color: Colors.white),
              onPressed: () => controller.playNext(),
            ),
            const SizedBox(width: 12),
@@ -396,7 +396,7 @@ class _LowerActions extends StatelessWidget {
         children: [
           // Device output (placeholder)
           IconButton(
-            icon: const Icon(Icons.cast_rounded, size: 22, color: Colors.white54),
+            icon: const Icon(Icons.cast_rounded, size: 18, color: Colors.white38),
             onPressed: () {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
@@ -408,7 +408,7 @@ class _LowerActions extends StatelessWidget {
           ),
           // Queue button
           IconButton(
-            icon: const Icon(Icons.queue_music_rounded, size: 24, color: Colors.white54),
+            icon: const Icon(Icons.queue_music_rounded, size: 20, color: Colors.white38),
             onPressed: () => showQueueSheet(context),
           ),
         ],
