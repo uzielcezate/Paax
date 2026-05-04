@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 import '../state/playback_controller.dart';
-import '../../core/theme/app_colors.dart';
 
 class SmoothAudioProgressBar extends StatefulWidget {
   const SmoothAudioProgressBar({super.key});
@@ -138,7 +137,7 @@ class _SmoothAudioProgressBarState extends State<SmoothAudioProgressBar> with Si
                         enabledThumbRadius: 0), // hide thumb when unknown
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
                 activeTrackColor: durationKnown
-                    ? AppColors.primaryStart
+                    ? Colors.white
                     : Colors.white12, // dimmed when unknown
                 inactiveTrackColor: Colors.white24,
                 thumbColor: Colors.white,

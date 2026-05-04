@@ -228,13 +228,13 @@ class _MenuContent extends StatelessWidget {
           builder: (context) => AddToPlaylistSheet(tracks: [effectiveTrack]),
         );
       }),
-      _actionItem(context, icon: Icons.queue_music, label: "Agregar a la cola", onTap: () {
+      _actionItem(context, icon: Icons.queue_music, label: "Add to Queue", onTap: () {
         final playback = context.read<PlaybackController>();
         if (playback.currentTrack == null) {
            playback.playTrack(effectiveTrack);
         } else {
            playback.addToQueue(effectiveTrack);
-           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Agregada a la cola"), duration: Duration(seconds: 2)));
+           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Added to queue"), duration: Duration(seconds: 2)));
         }
         Navigator.pop(context);
       }),

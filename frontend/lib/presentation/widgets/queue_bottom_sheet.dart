@@ -64,7 +64,7 @@ class _QueueSheetContent extends StatelessWidget {
                     child: Row(
                       children: [
                         const Text(
-                          'Cola',
+                          'Queue',
                           style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
@@ -73,16 +73,14 @@ class _QueueSheetContent extends StatelessWidget {
                         ),
                         const Spacer(),
                         if (upcoming.isNotEmpty)
-                          TextButton(
+                          IconButton(
                             onPressed: () => _confirmClear(context, playback),
-                            child: const Text(
-                              'Limpiar cola',
-                              style: TextStyle(
-                                color: AppColors.primaryEnd,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                              ),
+                            icon: const Icon(
+                              Icons.delete_outline_rounded,
+                              color: AppColors.primaryEnd,
+                              size: 24,
                             ),
+                            tooltip: 'Clear queue',
                           ),
                       ],
                     ),
@@ -113,7 +111,7 @@ class _QueueSheetContent extends StatelessWidget {
           Icon(Icons.queue_music_rounded, size: 56, color: Colors.white24),
           SizedBox(height: 16),
           Text(
-            'No hay canciones en la cola',
+            'No tracks in queue',
             style: TextStyle(color: AppColors.textSecondary, fontSize: 15),
           ),
         ],
@@ -134,7 +132,7 @@ class _QueueSheetContent extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Text(
-              'Reproduciendo',
+              'Now Playing',
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
@@ -154,7 +152,7 @@ class _QueueSheetContent extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
               child: Text(
-                'Siguiente',
+                'Next',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -179,7 +177,7 @@ class _QueueSheetContent extends StatelessWidget {
               padding: EdgeInsets.only(top: 40),
               child: Center(
                 child: Text(
-                  'No hay más canciones',
+                  'No more tracks',
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
                 ),
               ),
@@ -195,22 +193,22 @@ class _QueueSheetContent extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Limpiar cola', style: TextStyle(color: Colors.white)),
+        title: const Text('Clear queue', style: TextStyle(color: Colors.white)),
         content: const Text(
-          '¿Eliminar todas las canciones de la cola?',
+          'Remove all upcoming tracks from the queue?',
           style: TextStyle(color: AppColors.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
           ),
           TextButton(
             onPressed: () {
               playback.clearUpcoming();
               Navigator.pop(ctx);
             },
-            child: const Text('Limpiar', style: TextStyle(color: AppColors.primaryEnd)),
+            child: const Text('Clear', style: TextStyle(color: AppColors.primaryEnd)),
           ),
         ],
       ),

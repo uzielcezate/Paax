@@ -9,6 +9,7 @@ import '../widgets/overflow_menu.dart';
 import '../widgets/app_image.dart';
 import '../widgets/smooth_audio_progress_bar.dart';
 import '../widgets/queue_bottom_sheet.dart';
+import '../widgets/add_to_playlist_sheet.dart';
 import '../screens/album_detail_screen.dart';
 import '../screens/artist_detail_screen.dart';
 import '../screens/main_wrapper.dart';
@@ -43,9 +44,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
           // ── Artwork sizing ──
           // Use most of the width minus padding, clamped for tablets
           final contentWidth = screenWidth - 2 * kPlayerHorizontalPadding;
-          const maxArtworkWidth = 420.0;
+          // Slightly wider artwork — use full content width up to max
+          const maxArtworkWidth = 440.0;
           final availableHeight = screenHeight - safePadding.top - safePadding.bottom - 340;
-          final maxByHeight = availableHeight * 0.82;
+          final maxByHeight = availableHeight * 0.85;
           double artworkSize = contentWidth.clamp(240.0, maxArtworkWidth);
           if (maxByHeight > 200) {
             artworkSize = artworkSize.clamp(240.0, maxByHeight);
@@ -157,7 +159,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ),
                         ),
                         
-                        const Spacer(),
+                        const SizedBox(height: 16),
 
                         // ── Track Info ──
                         Row(
@@ -192,7 +194,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     child: Text(
                                       track.title, 
                                       style: TextStyle(
-                                        fontSize: Responsive.fontSize(context, 22, min: 18, max: 26), 
+                                        fontSize: Responsive.fontSize(context, 24, min: 20, max: 28), 
                                         fontWeight: FontWeight.bold,
                                         color: Colors.white,
                                       ), 
@@ -222,7 +224,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                      child: Text(
                                        track.displayArtist,
                                        style: TextStyle(
-                                         fontSize: Responsive.fontSize(context, 15, min: 13, max: 17),
+                                         fontSize: Responsive.fontSize(context, 16, min: 14, max: 18),
                                          color: AppColors.textSecondary,
                                        ),
                                        maxLines: 1,
@@ -232,6 +234,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 ],
                               ),
                             ),
+                            // Add to Playlist Button
+                            IconButton(
+                              onPressed: () {
+                                showModalBottomSheet(
+                                  context: context,
+                                  useRootNavigator: true,
+                                  isScrollControlled: true,
+                                  backgroundColor: Colors.transparent,
+                                  builder: (ctx) => AddToPlaylistSheet(tracks: [track]),
+                                );
+                              },
+                              icon: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white54, width: 1.5),
+                                ),
+                                child: const Icon(Icons.add, color: Colors.white, size: 18),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
                             // Like Button
                             Consumer<LibraryController>(
                               builder: (context, lib, _) {
@@ -249,7 +273,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ],
                         ),
                         
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 12),
                         
                         // ── Progress Bar ──
                         const SmoothAudioProgressBar(), 
@@ -287,7 +311,6 @@ class _PlayerControls extends StatefulWidget {
 }
 
 class _PlayerControlsState extends State<_PlayerControls> {
-  double _rotationTurns = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -313,20 +336,21 @@ class _PlayerControlsState extends State<_PlayerControls> {
              onPressed: () => controller.playPrevious(),
            ),
            const SizedBox(width: 8),
-           // Play/Pause — no white circle, with rotation animation
+           // Play/Pause — scale transition (no rotation)
            Selector<PlaybackController, bool>(
              selector: (_, c) => c.isPlaying,
              builder: (_, isPlaying, __) => GestureDetector(
                onTap: () {
-                 setState(() => _rotationTurns += 0.5);
                  controller.togglePlayPause();
                },
-               child: AnimatedRotation(
-                 turns: _rotationTurns,
-                 duration: const Duration(milliseconds: 300),
-                 curve: Curves.easeOutCubic,
+               child: AnimatedSwitcher(
+                 duration: const Duration(milliseconds: 200),
+                 transitionBuilder: (child, animation) {
+                   return ScaleTransition(scale: animation, child: child);
+                 },
                  child: Icon(
                    isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                   key: ValueKey<bool>(isPlaying),
                    size: 64,
                    color: Colors.white,
                  ),
@@ -376,7 +400,7 @@ class _LowerActions extends StatelessWidget {
             onPressed: () {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('Próximamente'),
+                  content: Text('Coming soon'),
                   duration: Duration(seconds: 1),
                 ),
               );
