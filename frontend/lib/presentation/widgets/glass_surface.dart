@@ -9,17 +9,17 @@ class GlassTokens {
   // Blur
   static const double blurSigma = 14.0;
 
-  // Colors
-  static Color fill = Colors.white.withOpacity(0.10);
-  static Color border = Colors.white.withOpacity(0.18);
-  static Color fillLight = Colors.white.withOpacity(0.06);
+  // Colors — slightly more transparent than Phase 4 v1
+  static Color fill = Colors.white.withOpacity(0.07);
+  static Color border = Colors.white.withOpacity(0.14);
+  static Color fillLight = Colors.white.withOpacity(0.04);
 
   // Shadows
   static List<BoxShadow> softShadow = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.25),
-      blurRadius: 16,
-      offset: const Offset(0, 4),
+      color: Colors.black.withOpacity(0.22),
+      blurRadius: 14,
+      offset: const Offset(0, 3),
     ),
   ];
 }
@@ -34,6 +34,7 @@ class GlassSurface extends StatelessWidget {
   final BorderRadius borderRadius;
   final bool showBorder;
   final bool showShadow;
+  final bool enableBlur;
   final EdgeInsetsGeometry? padding;
   final Color? overrideFill;
 
@@ -45,12 +46,25 @@ class GlassSurface extends StatelessWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(16)),
     this.showBorder = true,
     this.showShadow = true,
+    this.enableBlur = true,
     this.padding,
     this.overrideFill,
   });
 
   @override
   Widget build(BuildContext context) {
+    final innerContainer = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: overrideFill ?? GlassTokens.fill,
+        borderRadius: borderRadius,
+        border: showBorder
+            ? Border.all(color: GlassTokens.border, width: 0.5)
+            : null,
+      ),
+      child: child,
+    );
+
     return Container(
       width: width,
       height: height,
@@ -60,23 +74,15 @@ class GlassSurface extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: borderRadius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: GlassTokens.blurSigma,
-            sigmaY: GlassTokens.blurSigma,
-          ),
-          child: Container(
-            padding: padding,
-            decoration: BoxDecoration(
-              color: overrideFill ?? GlassTokens.fill,
-              borderRadius: borderRadius,
-              border: showBorder
-                  ? Border.all(color: GlassTokens.border, width: 0.5)
-                  : null,
-            ),
-            child: child,
-          ),
-        ),
+        child: enableBlur
+            ? BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: GlassTokens.blurSigma,
+                  sigmaY: GlassTokens.blurSigma,
+                ),
+                child: innerContainer,
+              )
+            : innerContainer,
       ),
     );
   }
@@ -89,6 +95,7 @@ class GlassPill extends StatelessWidget {
   final double? width;
   final double height;
   final bool showShadow;
+  final bool enableBlur;
   final EdgeInsetsGeometry? padding;
 
   const GlassPill({
@@ -97,6 +104,7 @@ class GlassPill extends StatelessWidget {
     this.width,
     this.height = 56,
     this.showShadow = true,
+    this.enableBlur = true,
     this.padding,
   });
 
@@ -107,6 +115,7 @@ class GlassPill extends StatelessWidget {
       height: height,
       borderRadius: BorderRadius.circular(height / 2),
       showShadow: showShadow,
+      enableBlur: enableBlur,
       padding: padding,
       child: child,
     );
@@ -115,12 +124,16 @@ class GlassPill extends StatelessWidget {
 
 /// ─── GlassCircleButton ──────────────────────────────────────────────────────
 /// A circular frosted glass button — used for back/menu icons in top bars.
+///
+/// Set [enableBlur] to false when this button is already inside a parent glass
+/// surface (e.g. scrolled pill top bar) to avoid double-blur stacking.
 class GlassCircleButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onPressed;
   final double size;
   final double iconSize;
   final Color iconColor;
+  final bool enableBlur;
 
   const GlassCircleButton({
     super.key,
@@ -129,6 +142,7 @@ class GlassCircleButton extends StatelessWidget {
     this.size = 38,
     this.iconSize = 20,
     this.iconColor = Colors.white,
+    this.enableBlur = true,
   });
 
   @override
@@ -140,6 +154,7 @@ class GlassCircleButton extends StatelessWidget {
         height: size,
         borderRadius: BorderRadius.circular(size / 2),
         showShadow: false,
+        enableBlur: enableBlur,
         child: Center(
           child: Icon(icon, size: iconSize, color: iconColor),
         ),
@@ -148,44 +163,35 @@ class GlassCircleButton extends StatelessWidget {
   }
 }
 
-/// ─── WhiteGlassAppBar ───────────────────────────────────────────────────────
-/// Full-width frosted glass top bar used when scroll threshold is passed.
-/// Replaces BlackGlassBlurSurface with white-tinted glass.
-class WhiteGlassAppBar extends StatelessWidget {
-  final double height;
-  final double width;
+/// ─── GlassMenuButton ────────────────────────────────────────────────────────
+/// Wraps a child widget (like OverflowMenu) inside a circular glass surface.
+class GlassMenuButton extends StatelessWidget {
+  final Widget child;
+  final double size;
+  final bool enableBlur;
 
-  const WhiteGlassAppBar({
+  const GlassMenuButton({
     super.key,
-    required this.height,
-    required this.width,
+    required this.child,
+    this.size = 38,
+    this.enableBlur = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: GlassTokens.blurSigma,
-          sigmaY: GlassTokens.blurSigma,
-        ),
-        child: Container(
-          height: height,
-          width: width,
-          decoration: BoxDecoration(
-            color: GlassTokens.fillLight,
-            border: Border(
-              bottom: BorderSide(color: GlassTokens.border, width: 0.5),
-            ),
-          ),
-        ),
-      ),
+    return GlassSurface(
+      width: size,
+      height: size,
+      borderRadius: BorderRadius.circular(size / 2),
+      showShadow: false,
+      enableBlur: enableBlur,
+      child: Center(child: child),
     );
   }
 }
 
 /// ─── EdgeGradient ───────────────────────────────────────────────────────────
-/// Subtle fade gradient for top/bottom edges so content dissolves behind chrome.
+/// Fade gradient for top/bottom edges so content dissolves behind chrome.
 class EdgeGradient extends StatelessWidget {
   final bool fromTop;
   final double height;
@@ -193,7 +199,7 @@ class EdgeGradient extends StatelessWidget {
   const EdgeGradient({
     super.key,
     this.fromTop = true,
-    this.height = 60,
+    this.height = 80,
   });
 
   @override
@@ -206,8 +212,8 @@ class EdgeGradient extends StatelessWidget {
             begin: fromTop ? Alignment.topCenter : Alignment.bottomCenter,
             end: fromTop ? Alignment.bottomCenter : Alignment.topCenter,
             colors: const [
-              Color(0xFF0B0B10), // AppColors.background
-              Color(0x000B0B10),
+              Color(0xFF0B0B10), // AppColors.background — full opacity
+              Color(0x000B0B10), // fully transparent
             ],
           ),
         ),

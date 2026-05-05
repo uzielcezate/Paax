@@ -17,6 +17,7 @@ import '../widgets/thumbnail.dart';
 
 import '../widgets/bottom_content_padding.dart';
 import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/genre_card.dart';
 import 'genre_results_screen.dart';
 
@@ -79,7 +80,7 @@ class _SearchScreenState extends State<SearchScreen> {
             right: 0,
             height: headerHeight,
             child: BlackGlassBlurSurface(
-              blurSigma: 20.0,
+              blurSigma: 18.0,
               height: headerHeight,
               bottomBorder: true,
               child: Column(
@@ -93,8 +94,9 @@ class _SearchScreenState extends State<SearchScreen> {
                       height: 48,
                       child: Row(
                         children: [
-                           IconButton(
-                             icon: const Icon(Icons.arrow_back, color: Colors.white),
+                           GlassCircleButton(
+                             icon: Icons.arrow_back,
+                             size: 38,
                              onPressed: () {
                                final mainWrapper = MainWrapper.shellKey.currentState;
                                if (mainWrapper != null) {
@@ -103,43 +105,49 @@ class _SearchScreenState extends State<SearchScreen> {
                                  Navigator.maybePop(context);
                                }
                              },
-                             padding: EdgeInsets.zero,
-                             constraints: const BoxConstraints(),
+                             enableBlur: false, // parent surface already blurs
                            ),
-                           const SizedBox(width: 16),
+                           const SizedBox(width: 10),
                            Expanded(
-                             child: TextField(
-                                controller: _textController,
-                                style: const TextStyle(color: Colors.white, fontSize: 16),
-                                 decoration: InputDecoration(
-                                   hintText: "What do you want to listen to?",
-                                   hintStyle: const TextStyle(color: Colors.grey, fontSize: 15),
-                                   prefixIcon: const Icon(Icons.search, color: Colors.white70, size: 22),
-                                   filled: true,
-                                   fillColor: Colors.white.withOpacity(0.08),
-                                   border: OutlineInputBorder(
-                                     borderRadius: BorderRadius.circular(30),
-                                     borderSide: BorderSide.none,
-                                   ),
-                                   contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                                   isDense: true,
-                                   suffixIcon: ValueListenableBuilder<bool>(
-                                     valueListenable: _hasText,
-                                     builder: (_, hasText, __) => hasText
-                                         ? IconButton(
-                                             icon: const Icon(Icons.clear, color: Colors.grey, size: 20),
-                                             onPressed: () {
-                                               _textController.clear();
-                                               search.onQueryChanged("");
-                                             },
-                                           )
-                                         : const SizedBox.shrink(),
-                                   ),
+                             child: Container(
+                               height: 44,
+                               decoration: BoxDecoration(
+                                 color: Colors.white.withOpacity(0.06),
+                                 borderRadius: BorderRadius.circular(22),
+                                 border: Border.all(
+                                   color: Colors.white.withOpacity(0.10),
+                                   width: 0.5,
                                  ),
-                                 onChanged: (val) {
-                                   search.onQueryChanged(val);
-                                 },
-                              ),
+                               ),
+                               child: TextField(
+                                  controller: _textController,
+                                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                                   decoration: InputDecoration(
+                                     hintText: "What do you want to listen to?",
+                                     hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 14),
+                                     prefixIcon: Icon(Icons.search, color: Colors.white.withOpacity(0.5), size: 20),
+                                     filled: false,
+                                     border: InputBorder.none,
+                                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                     isDense: true,
+                                     suffixIcon: ValueListenableBuilder<bool>(
+                                       valueListenable: _hasText,
+                                       builder: (_, hasText, __) => hasText
+                                           ? IconButton(
+                                               icon: Icon(Icons.clear, color: Colors.white.withOpacity(0.4), size: 18),
+                                               onPressed: () {
+                                                 _textController.clear();
+                                                 search.onQueryChanged("");
+                                               },
+                                             )
+                                           : const SizedBox.shrink(),
+                                     ),
+                                   ),
+                                   onChanged: (val) {
+                                     search.onQueryChanged(val);
+                                   },
+                                ),
+                             ),
                            ),
                         ],
                       ),
@@ -163,8 +171,8 @@ class _SearchScreenState extends State<SearchScreen> {
                             label: Text(filter),
                             selected: isSelected,
                             onSelected: (_) => setState(() => _selectedFilter = filter),
-                            backgroundColor: Colors.white.withOpacity(0.05),
-                            selectedColor: AppColors.primaryStart.withOpacity(0.8),
+                            backgroundColor: Colors.white.withOpacity(0.04),
+                            selectedColor: AppColors.primaryStart.withOpacity(0.75),
                             checkmarkColor: Colors.white,
                             labelStyle: TextStyle(
                               color: isSelected ? Colors.white : Colors.grey[400],
@@ -174,8 +182,8 @@ class _SearchScreenState extends State<SearchScreen> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(20),
                               side: BorderSide(
-                                color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.1), 
-                                width: 1
+                                color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.08), 
+                                width: 0.5
                               )
                             ),
                             visualDensity: VisualDensity.compact,

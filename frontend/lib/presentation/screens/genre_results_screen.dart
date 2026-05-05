@@ -18,6 +18,7 @@ import '../../core/utils/string_utils.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import '../../core/utils/responsive.dart';
 import '../../core/utils/thumbnail_prefetcher.dart';
 
@@ -247,8 +248,17 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       pinned: true,
       expandedHeight: expandedHeight,
       backgroundColor: Colors.transparent,
+      forceMaterialTransparency: true,
       elevation: 0,
       iconTheme: const IconThemeData(color: Colors.white),
+      leading: Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: GlassCircleButton(
+          icon: Icons.arrow_back,
+          onPressed: () => Navigator.pop(context),
+          enableBlur: !_showTitle,
+        ),
+      ),
       title: AnimatedOpacity(
         duration: const Duration(milliseconds: 200),
         opacity: _showTitle ? 1.0 : 0.0,

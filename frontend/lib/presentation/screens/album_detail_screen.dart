@@ -289,6 +289,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     child: GlassCircleButton(
                       icon: Icons.arrow_back,
                       onPressed: () => Navigator.pop(context),
+                      enableBlur: !_showTitle, // disable when scrolled bar is active
                     ),
                   ),
                   flexibleSpace: Stack(
@@ -346,9 +347,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   actions: [
                      Padding(
                        padding: const EdgeInsets.only(right: 4),
-                       child: _isSingleMode 
-                         ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track)
-                         : OverflowMenu(type: MenuType.album, album: widget.album!),
+                       child: GlassMenuButton(
+                         enableBlur: !_showTitle,
+                         child: _isSingleMode 
+                           ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track)
+                           : OverflowMenu(type: MenuType.album, album: widget.album!),
+                       ),
                      ),
                   ],
                 ),

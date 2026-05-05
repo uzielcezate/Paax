@@ -296,21 +296,27 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         child: Text(widget.artistName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
       ),
       actions: [
-        OverflowMenu(
-          type: MenuType.artist,
-          artist: Artist(
-            id: _resolvedArtistId,
-            name: widget.artistName,
-            picture: widget.pictureUrl ?? '',
+        Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: GlassMenuButton(
+            enableBlur: !_showTitle,
+            child: OverflowMenu(
+              type: MenuType.artist,
+              artist: Artist(
+                id: _resolvedArtistId,
+                name: widget.artistName,
+                picture: widget.pictureUrl ?? '',
+              ),
+            ),
           ),
         ),
-        const SizedBox(width: 8),
       ],
       leading: Padding(
         padding: const EdgeInsets.only(left: 4),
         child: GlassCircleButton(
           icon: Icons.arrow_back,
           onPressed: () => Navigator.pop(context),
+          enableBlur: !_showTitle,
         ),
       ),
       flexibleSpace: Stack(

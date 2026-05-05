@@ -82,6 +82,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                child: GlassCircleButton(
                  icon: Icons.arrow_back,
                  onPressed: () => Navigator.pop(context),
+                 enableBlur: !_showTitle,
                ),
              ),
              flexibleSpace: Stack(

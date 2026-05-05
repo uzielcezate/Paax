@@ -184,6 +184,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                     child: GlassCircleButton(
                       icon: Icons.arrow_back,
                       onPressed: () => Navigator.pop(context),
+                      enableBlur: !_showTitle,
                     ),
                   ),
             actions: [
@@ -200,12 +201,18 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                   ),
                 )
               else
-                OverflowMenu(
-                  type: MenuType.playlist, 
-                  playlist: currentPlaylist,
-                  onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
-                  onDelete: () => _confirmDelete(context, library, currentPlaylist!),
-                  onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: GlassMenuButton(
+                    enableBlur: !_showTitle,
+                    child: OverflowMenu(
+                      type: MenuType.playlist, 
+                      playlist: currentPlaylist,
+                      onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
+                      onDelete: () => _confirmDelete(context, library, currentPlaylist!),
+                      onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                    ),
+                  ),
                 ),
             ],
             flexibleSpace: Stack(

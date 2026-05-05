@@ -177,15 +177,17 @@ class MainWrapperState extends State<MainWrapper> {
               bottom: 0,
               child: IgnorePointer(
                 child: Container(
-                  height: hasTrack ? 180 : 120,
+                  height: hasTrack ? 220 : 140,
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
                       colors: [
-                        Color(0xE00B0B10),
+                        Color(0xF00B0B10),
+                        Color(0x800B0B10),
                         Color(0x000B0B10),
                       ],
+                      stops: [0.0, 0.45, 1.0],
                     ),
                   ),
                 ),
@@ -218,8 +220,8 @@ class MainWrapperState extends State<MainWrapper> {
   Widget _buildFloatingNavBar(double bottomSafePadding) {
     return Padding(
       padding: EdgeInsets.only(
-        left: 24,
-        right: 24,
+        left: 12,
+        right: 12,
         bottom: bottomSafePadding + 8,
         top: 4,
       ),
