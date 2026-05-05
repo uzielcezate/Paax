@@ -34,6 +34,7 @@ class OverflowMenu extends StatelessWidget {
   final VoidCallback? onEdit;   // For playlists
   final bool isNowPlaying; // Flag to enable dynamic current track resolution
   final VoidCallback? onNavigation;
+  final Playlist? playlistContext; // When non-null, adds 'Remove from Playlist'
 
   const OverflowMenu({
     super.key,
@@ -47,6 +48,7 @@ class OverflowMenu extends StatelessWidget {
     this.onEdit,
     this.onNavigation,
     this.isNowPlaying = false, // Default false
+    this.playlistContext,
   });
 
   void _showMenu(BuildContext context) {
@@ -66,6 +68,7 @@ class OverflowMenu extends StatelessWidget {
         parentContext: context,
         onNavigation: onNavigation, 
         isNowPlaying: isNowPlaying,
+        playlistContext: playlistContext,
       ),
     );
   }
@@ -91,6 +94,7 @@ class _MenuContent extends StatelessWidget {
   final VoidCallback? onNavigation;
   final bool isNowPlaying;
   final BuildContext parentContext;
+  final Playlist? playlistContext;
 
   const _MenuContent({
     required this.type,
@@ -104,6 +108,7 @@ class _MenuContent extends StatelessWidget {
     this.onEdit,
     this.onNavigation,
     this.isNowPlaying = false,
+    this.playlistContext,
   });
 
   @override
@@ -311,6 +316,22 @@ class _MenuContent extends StatelessWidget {
          Navigator.pop(context);
          Share.share('Check out "${effectiveTrack.title}" by ${effectiveTrack.artistName} on Beaty! https://music.youtube.com/watch?v=${effectiveTrack.id}');
       }),
+      // Remove from Playlist (only shown when inside a playlist)
+      if (playlistContext != null)
+        _actionItem(context, icon: Icons.playlist_remove, label: "Remove from Playlist",
+          color: Colors.redAccent,
+          onTap: () {
+            final lib = context.read<LibraryController>();
+            lib.removeFromPlaylist(playlistContext!, effectiveTrack);
+            Navigator.pop(context);
+            ScaffoldMessenger.of(parentContext).showSnackBar(
+              const SnackBar(
+                content: Text('Removed from playlist'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+        ),
     ];
   }
 

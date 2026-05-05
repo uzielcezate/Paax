@@ -109,6 +109,7 @@ class MusicRepositoryImpl implements MusicRepository {
 
   @override
   Future<Artist> getArtist(String id) async {
+    final stopwatch = Stopwatch()..start();
     final e = await _dataSource.getArtist(id);
 
     // ── 1. Map initial data from artist endpoint ──
@@ -119,6 +120,8 @@ class MusicRepositoryImpl implements MusicRepository {
       (x) => _mapTrack(x),
       filter: (x) => !_isOfficialMusicVideo(x),
     );
+
+    debugPrint('[Perf] getArtist($id) basic data mapped in ${stopwatch.elapsedMilliseconds}ms');
 
     // ── 2. Enrich releases from top tracks' album references ──
     try {
@@ -132,6 +135,39 @@ class MusicRepositoryImpl implements MusicRepository {
     } catch (err) {
       debugPrint('[Repo] Release enrichment failed (non-fatal): $err');
     }
+
+    debugPrint('[Perf] getArtist($id) total: ${stopwatch.elapsedMilliseconds}ms');
+
+    return Artist(
+      id: id,
+      name: e['name']?.toString() ?? 'Various Artists',
+      picture: _findHeroThumbnail(e['thumbnails']),
+      nbFans: 0,
+      albums: albums,
+      singles: singles,
+      topTracks: topTracks,
+      relatedArtists: _safeMapList<Artist>(e['related']?['results'], (x) => _mapArtist(x)),
+      albumsParams: e['albums']?['params']?.toString(),
+      singlesParams: e['singles']?['params']?.toString(),
+    );
+  }
+
+  /// Returns basic artist data WITHOUT release enrichment.
+  /// UI can render this immediately while enrichment runs in background.
+  @override
+  Future<Artist> getArtistBasic(String id) async {
+    final stopwatch = Stopwatch()..start();
+    final e = await _dataSource.getArtist(id);
+
+    final albums = _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x, defaultType: 'album'));
+    final singles = _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x, defaultType: 'single'));
+    final topTracks = _safeMapList<Track>(
+      e['songs']?['results'],
+      (x) => _mapTrack(x),
+      filter: (x) => !_isOfficialMusicVideo(x),
+    );
+
+    debugPrint('[Perf] getArtistBasic($id) completed in ${stopwatch.elapsedMilliseconds}ms');
 
     return Artist(
       id: id,
@@ -152,12 +188,28 @@ class MusicRepositoryImpl implements MusicRepository {
   /// Fetch album detail with caching.
   Future<Map<String, dynamic>> _fetchAlbumCached(String browseId) async {
     if (_albumDetailCache.containsKey(browseId)) {
+      debugPrint('[Repo] Album cache HIT: $browseId');
       return _albumDetailCache[browseId]!;
     }
+    debugPrint('[Repo] Album cache MISS: $browseId');
     final data = await _dataSource.getAlbum(browseId);
     final map = data is Map<String, dynamic> ? data : <String, dynamic>{};
     _albumDetailCache[browseId] = map;
     return map;
+  }
+
+  /// Public enrichment method — can be called from UI after basic profile loads.
+  @override
+  Future<({List<SavedAlbum> albums, List<SavedAlbum> singles})> enrichArtistReleases({
+    required List<SavedAlbum> existingAlbums,
+    required List<SavedAlbum> existingSingles,
+    required List<dynamic> rawSongs,
+  }) {
+    return _enrichArtistReleases(
+      existingAlbums: existingAlbums,
+      existingSingles: existingSingles,
+      rawSongs: rawSongs,
+    );
   }
 
   /// Enriches artist releases by:
@@ -170,6 +222,8 @@ class MusicRepositoryImpl implements MusicRepository {
     required List<SavedAlbum> existingSingles,
     required List<dynamic> rawSongs,
   }) async {
+    final stopwatch = Stopwatch()..start();
+
     // Collect existing IDs for deduplication
     final existingIds = <String>{
       ...existingAlbums.map((a) => a.albumId),
@@ -202,6 +256,7 @@ class MusicRepositoryImpl implements MusicRepository {
     }
 
     if (idsToFetch.isEmpty) {
+      debugPrint('[Perf] enrichArtistReleases: nothing to enrich (${stopwatch.elapsedMilliseconds}ms)');
       return (albums: existingAlbums, singles: existingSingles);
     }
 
@@ -209,18 +264,33 @@ class MusicRepositoryImpl implements MusicRepository {
     final fetchList = idsToFetch.take(10).toList();
     debugPrint('[Repo] Enriching ${fetchList.length} releases: $fetchList');
 
-    // Fetch in parallel
-    final results = await Future.wait(
-      fetchList.map((id) async {
-        try {
-          return MapEntry(id, await _fetchAlbumCached(id));
-        } catch (err) {
-          debugPrint('[Repo] Failed to fetch album $id: $err');
-          return MapEntry(id, <String, dynamic>{});
-        }
-      }),
-    );
-    final fetchedMap = Map.fromEntries(results.where((e) => e.value.isNotEmpty));
+    // Fetch in batches of 5 for controlled concurrency
+    int cacheHits = 0;
+    int cacheMisses = 0;
+    final fetchedMap = <String, Map<String, dynamic>>{};
+
+    for (int i = 0; i < fetchList.length; i += 5) {
+      final batch = fetchList.sublist(i, (i + 5).clamp(0, fetchList.length));
+      final batchResults = await Future.wait(
+        batch.map((id) async {
+          final wasCached = _albumDetailCache.containsKey(id);
+          try {
+            final data = await _fetchAlbumCached(id);
+            if (wasCached) cacheHits++;
+            else cacheMisses++;
+            return MapEntry(id, data);
+          } catch (err) {
+            cacheMisses++;
+            debugPrint('[Repo] Failed to fetch album $id: $err');
+            return MapEntry(id, <String, dynamic>{});
+          }
+        }),
+      );
+      fetchedMap.addEntries(batchResults.where((e) => e.value.isNotEmpty));
+    }
+
+    debugPrint('[Perf] enrichArtistReleases: ${fetchList.length} fetches '
+        '(${cacheHits} hits, ${cacheMisses} misses) in ${stopwatch.elapsedMilliseconds}ms');
 
     // Build updated albums and singles lists
     final updatedAlbums = <SavedAlbum>[];

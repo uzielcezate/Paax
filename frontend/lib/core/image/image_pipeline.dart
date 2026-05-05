@@ -37,7 +37,7 @@ class ImagePipeline {
         Config(
           'beaty_images_v2',
           stalePeriod: const Duration(days: 30),
-          maxNrOfCacheObjects: 2000,
+          maxNrOfCacheObjects: 3000,
         ),
       );
     }

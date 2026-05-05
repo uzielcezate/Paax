@@ -107,11 +107,6 @@ class SearchSortHeaderDelegate extends SliverPersistentHeaderDelegate {
                 mainAxisSize: MainAxisSize.min, // Hug content
                 children: [
                    const Icon(Icons.sort_rounded, color: Colors.white70, size: 20),
-                   const SizedBox(width: 8),
-                   // Empty text for Delegate version as per original, or did I miss something?
-                   // Original had comment: "User 'Sort button (icon) to the LEFT'."
-                   // It seems the delegate version didn't implement the text label in my read, 
-                   // but the SearchSortHeader did. I will match previous content exactly but with flexible constraints.
                 ],
               ),
             ),
@@ -186,8 +181,6 @@ class SearchSortHeader extends StatelessWidget {
                  mainAxisSize: MainAxisSize.min,
                 children: [
                   const Icon(Icons.sort_rounded, color: Colors.white70, size: 20),
-                  const SizedBox(width: 8),
-                  Text(currentSort, style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
                 ],
               ),
             ),

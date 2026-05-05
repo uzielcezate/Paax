@@ -12,9 +12,26 @@ import 'presentation/screens/onboarding_screen.dart';
 import 'presentation/screens/auth_screen.dart';
 import 'presentation/screens/main_wrapper.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:audio_service/audio_service.dart';
+import 'core/playback/paax_audio_handler.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await HiveStorage.init();
+
+  // Initialize Foreground Service for background audio (mobile only)
+  if (!kIsWeb) {
+    globalAudioHandler = await AudioService.init(
+      builder: () => PaaxAudioHandler(),
+      config: const AudioServiceConfig(
+        androidNotificationChannelId: 'com.beaty.music.beaty.audio',
+        androidNotificationChannelName: 'Paax Music',
+        androidNotificationOngoing: false,
+        androidStopForegroundOnPause: false,
+      ),
+    );
+  }
 
   // Print active API environment (debug only — no-op in release builds)
   ApiConfig.logStartup();

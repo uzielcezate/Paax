@@ -347,15 +347,31 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
               ),
             )
           else
-            SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
+            SliverToBoxAdapter(
+              child: ReorderableListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                buildDefaultDragHandles: false,
+                onReorder: (oldIndex, newIndex) {
+                  library.reorderPlaylistTrack(currentPlaylist!, oldIndex, newIndex);
+                },
+                itemCount: displayTracks.length,
+                proxyDecorator: (child, index, animation) {
+                  return AnimatedBuilder(
+                    animation: animation,
+                    builder: (context, child) => Material(
+                      color: Colors.transparent,
+                      elevation: 4,
+                      shadowColor: Colors.black54,
+                      child: child,
+                    ),
+                    child: child,
+                  );
+                },
+                itemBuilder: (context, index) {
                   final track = displayTracks[index];
-                  // Need to know original index? 
-                  // TrackListTile just uses 'index' for display.
-                  
                   return Dismissible(
-                    key: ValueKey(track.id),
+                    key: ValueKey('dismiss_${track.id}_$index'),
                     direction: DismissDirection.endToStart,
                     background: Container(
                       color: Colors.red,
@@ -365,18 +381,39 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                     ),
                     onDismissed: (_) {
                        library.removeFromPlaylist(currentPlaylist!, track);
+                       ScaffoldMessenger.of(context).showSnackBar(
+                         SnackBar(
+                           content: Text('Removed "${track.title}" from playlist'),
+                           duration: const Duration(seconds: 2),
+                         ),
+                       );
                     },
-                    child: TrackListTile(
-                      track: track,
-                      index: index + 1,
-                      showArtwork: true,
-                      onTap: () {
-                         context.read<PlaybackController>().playQueue(displayTracks, index: index);
-                      },
+                    child: Row(
+                      key: ValueKey('row_${track.id}_$index'),
+                      children: [
+                        // Drag handle
+                        ReorderableDragStartListener(
+                          index: index,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: Icon(Icons.drag_handle_rounded, 
+                              color: Colors.white24, size: 20),
+                          ),
+                        ),
+                        Expanded(
+                          child: TrackListTile(
+                            track: track,
+                            index: index + 1,
+                            showArtwork: true,
+                            onTap: () {
+                               context.read<PlaybackController>().playQueue(displayTracks, index: index);
+                            },
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 },
-                childCount: displayTracks.length,
               ),
             ),
             

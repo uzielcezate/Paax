@@ -41,6 +41,62 @@ class HiveStorage {
     await Hive.openBox<Track>(recentlyPlayedBox);
     // Stream URL cache — stores resolved Worker URLs for fast repeat plays
     await Hive.openBox(streamCandidatesBox);
+
+    // Run one-time migration to fix duplicates from old .add() calls
+    await _deduplicateLikedTracks();
+    await _deduplicateRecentlyPlayed();
+  }
+
+  /// Removes duplicate liked tracks caused by old `.add()` (auto-key) saves.
+  /// Keeps the entry with the richest artist data for each unique track ID.
+  static Future<void> _deduplicateLikedTracks() async {
+    final box = Hive.box<Track>(likedTracksBox);
+    final Map<String, MapEntry<dynamic, Track>> bestByTrackId = {};
+
+    // Scan all entries, keeping the one with the most artists per unique track ID
+    for (final key in box.keys) {
+      final track = box.get(key);
+      if (track == null) continue;
+
+      final existing = bestByTrackId[track.id];
+      if (existing == null ||
+          (track.artists?.length ?? 0) > (existing.value.artists?.length ?? 0)) {
+        bestByTrackId[track.id] = MapEntry(key, track);
+      }
+    }
+
+    // If count doesn't match, we have duplicates
+    if (bestByTrackId.length < box.length) {
+      // Clear and re-add using strict ID keys
+      await box.clear();
+      for (final entry in bestByTrackId.values) {
+        await box.put(entry.value.id, entry.value.copyWith());
+      }
+    }
+  }
+
+  /// Removes duplicate recently played tracks.
+  static Future<void> _deduplicateRecentlyPlayed() async {
+    final box = Hive.box<Track>(recentlyPlayedBox);
+    final Map<String, Track> bestByTrackId = {};
+
+    for (final key in box.keys) {
+      final track = box.get(key);
+      if (track == null) continue;
+
+      final existing = bestByTrackId[track.id];
+      if (existing == null ||
+          (track.artists?.length ?? 0) > (existing.artists?.length ?? 0)) {
+        bestByTrackId[track.id] = track;
+      }
+    }
+
+    if (bestByTrackId.length < box.length) {
+      await box.clear();
+      for (final entry in bestByTrackId.entries) {
+        await box.put(entry.key, entry.value.copyWith());
+      }
+    }
   }
   
   // ... (existing code)
@@ -80,23 +136,21 @@ class HiveStorage {
   }
 
   static Future<void> addRecentlyPlayed(Track track) async {
-    // Remove if exists to bubble up
-    final existingKey = _recentlyPlayed.keys.firstWhere(
-      (k) {
-         final val = _recentlyPlayed.get(k);
-         return val?.id == track.id;
-      }, orElse: () => null
-    );
-    if (existingKey != null) {
-      await _recentlyPlayed.delete(existingKey);
+    // Upsert by track ID — delete old entry first to re-order (most recent last)
+    if (_recentlyPlayed.containsKey(track.id)) {
+      await _recentlyPlayed.delete(track.id);
     }
     
     // Store a COPY to avoid Hive "same instance in multiple boxes" error
-    await _recentlyPlayed.add(track.copyWith());
+    // Use .put() with track.id as key to prevent duplicates
+    await _recentlyPlayed.put(track.id, track.copyWith());
     
-    // Keep max 20
+    // Keep max 20 — trim oldest entries
     if (_recentlyPlayed.length > 20) {
-      await _recentlyPlayed.deleteAt(0);
+      final keys = _recentlyPlayed.keys.toList();
+      for (int i = 0; i < _recentlyPlayed.length - 20; i++) {
+        await _recentlyPlayed.delete(keys[i]);
+      }
     }
   }
 
@@ -110,7 +164,9 @@ class HiveStorage {
     if (_liked.containsKey(track.id)) {
       await _liked.delete(track.id);
     } else {
-      // Store a COPY to avoid Hive error
+      // Upsert: always use .put() with track.id as strict primary key.
+      // This ensures metadata updates (e.g. artist name fixes) propagate
+      // and prevents duplicate rows with different keys.
       await _liked.put(track.id, track.copyWith());
     }
   }
@@ -145,6 +201,7 @@ class HiveStorage {
     if (_albums.containsKey(album.albumId)) {
       await _albums.delete(album.albumId);
     } else {
+      // Upsert: strict albumId primary key prevents duplicate albums
       await _albums.put(album.albumId, album);
     }
   }

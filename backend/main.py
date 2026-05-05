@@ -517,6 +517,51 @@ def get_album(browseId: str):
                             track['duration_seconds'] = 0
                     else:
                         track['duration_seconds'] = 0
+
+            # ── Artist enrichment ─────────────────────────────────────────
+            # ytmusicapi get_album() often returns garbage artists like
+            # "32M plays" or empty arrays for tracks. Also, album tracks
+            # may have OMV (Official Music Video) videoIds instead of the
+            # ATV (Audio Track Video) ones used everywhere else.
+            # Fix: for each track with no valid artists, call
+            # get_watch_playlist to fetch the real artist data + correct videoId.
+            import re
+            _VIEW_COUNT_RE = re.compile(r'^\d[\d,.]*[KMBkmb]?\s*(plays?|views?|listens?)?$', re.IGNORECASE)
+
+            album_artists = data.get('artists', [])
+            for track in data['tracks']:
+                track_artists = track.get('artists') or []
+                # Check if ALL artists are view-count strings or empty
+                valid_artists = [
+                    a for a in track_artists
+                    if a.get('name') and not _VIEW_COUNT_RE.match(a['name'].strip())
+                ]
+
+                vid = track.get('videoId', '')
+                if vid:
+                    try:
+                        watch = yt.get_watch_playlist(videoId=vid)
+                        if watch and 'tracks' in watch and watch['tracks']:
+                            w_track = watch['tracks'][0]
+
+                            # Always correct OMV → ATV videoId
+                            w_vid = w_track.get('videoId', '')
+                            if w_vid and w_vid != vid:
+                                track['videoId'] = w_vid
+                                print(f"[Album Enrich] videoId corrected: {vid} -> {w_vid}")
+
+                            # Only adopt watch artists if track had none
+                            if not valid_artists:
+                                w_artists = w_track.get('artists') or []
+                                if w_artists:
+                                    track['artists'] = w_artists
+                                    print(f"[Album Enrich] {vid} -> artists: {[a.get('name') for a in w_artists]}")
+                    except Exception as enrich_err:
+                        print(f"[Album Enrich] Failed for {vid}: {enrich_err}")
+                        # Fallback: inherit album-level artists
+                        if not valid_artists and album_artists:
+                            track['artists'] = album_artists
+
                         
         return data
     except Exception as e:

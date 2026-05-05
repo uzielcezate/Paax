@@ -12,6 +12,7 @@ class Lh3UrlBuilder {
   static const int miniPlayerSize = 256;
   static const int fullPlayerSize = 512;
   static const int headerSize = 720;
+  static const int heroSize = 1080;
 
   static final RegExp _sizePattern = RegExp(r'=w\d+-h\d+|=s\d+');
   static final RegExp _domainPattern = RegExp(r'lh3\.googleusercontent\.com');
@@ -69,4 +70,5 @@ class Lh3UrlBuilder {
   static String forMiniPlayer(String url) => build(url, miniPlayerSize);
   static String forFullPlayer(String url) => build(url, fullPlayerSize);
   static String forHeader(String url) => build(url, headerSize);
+  static String forHero(String url) => build(url, heroSize);
 }

@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/foundation.dart';
@@ -43,17 +44,46 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool _showTitle = false;
   bool _isNavigatingToArtist = false;
 
+  // Resolved from the API — takes priority over widget.album fields
+  // to fix the context inheritance bug where track.artistName overwrites album artist.
+  String? _resolvedArtistName;
+  String? _resolvedArtistId;
+  List<Map<String, String>>? _resolvedArtists;
+
   bool get _isSingleMode => widget.singleDetail != null;
 
   String get _title => _isSingleMode ? widget.singleDetail!.title : widget.album!.title;
-  String get _artistName => _isSingleMode ? widget.singleDetail!.artistName : widget.album!.artistName;
+  // Prefer building display name from the resolved artists list (e.g. "Anuel AA, Ozuna"),
+  // then fall back to the resolved single string, then the widget's initial data.
+  String get _artistName {
+    if (_resolvedArtists != null && _resolvedArtists!.isNotEmpty) {
+      return _resolvedArtists!.map((a) => a['name']).join(', ');
+    }
+    return _resolvedArtistName
+        ?? (_isSingleMode ? widget.singleDetail!.artistName : widget.album!.artistName);
+  }
   String get _artworkUrl => _isSingleMode ? widget.singleDetail!.artworkUrl : widget.album!.artworkUrl;
 
   @override
   void initState() {
     super.initState();
     if (!_isSingleMode) {
-      _detailsFuture = _repository.getAlbum(widget.album!.albumId);
+      _detailsFuture = _repository.getAlbum(widget.album!.albumId).then((album) {
+        // Enrich album data with richer metadata from the playback queue.
+        // The YouTube Music album API often returns only the primary artist,
+        // while the search/play API returns all collaborators.
+        final enriched = _enrichFromPlayback(album);
+
+        // Update resolved artist data from the enriched result
+        if (mounted) {
+          setState(() {
+            _resolvedArtistName = enriched.artistName;
+            _resolvedArtistId = enriched.artistId;
+            _resolvedArtists = enriched.artists;
+          });
+        }
+        return enriched;
+      });
     }
     
     _scrollController.addListener(() {
@@ -72,15 +102,118 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     super.dispose();
   }
 
+  /// Cross-reference album tracks with the playback queue to get richer artist
+  /// metadata. The YouTube Music album API often returns only the primary artist,
+  /// while the search/play queue contains all collaborators.
+  SavedAlbum _enrichFromPlayback(SavedAlbum album) {
+    final controller = context.read<PlaybackController>();
+    final currentTrack = controller.currentTrack;
+    final queue = controller.queue;
+
+    if (album.tracks == null || album.tracks!.isEmpty) return album;
+
+    // Build lookup map: videoId → richest Track from playback queue
+    final Map<String, Track> richMap = {};
+    for (final t in queue) {
+      final existing = richMap[t.id];
+      if (existing == null || (t.artists?.length ?? 0) > (existing.artists?.length ?? 0)) {
+        richMap[t.id] = t;
+      }
+    }
+    if (currentTrack != null) {
+      final existing = richMap[currentTrack.id];
+      if (existing == null || (currentTrack.artists?.length ?? 0) > (existing.artists?.length ?? 0)) {
+        richMap[currentTrack.id] = currentTrack;
+      }
+    }
+
+    // Enrich each album track with richer artist data from the queue
+    final enrichedTracks = album.tracks!.map((t) {
+      final rich = richMap[t.id];
+      if (rich != null && (rich.artists?.length ?? 0) > (t.artists?.length ?? 0)) {
+        // Keep album-level fields (albumId, albumTitle, artwork), but adopt richer artists
+        return t.copyWith(
+          artistName: rich.displayArtist,
+          artistId: rich.artistId,
+          artists: rich.artists,
+        );
+      }
+      return t;
+    }).toList();
+
+    return SavedAlbum(
+      albumId: album.albumId,
+      title: album.title,
+      artistName: album.artistName,
+      artistId: album.artistId ?? '',
+      artworkUrl: album.artworkUrl,
+      tracks: enrichedTracks,
+      duration: album.duration,
+      trackCount: album.trackCount,
+      releaseDate: album.releaseDate,
+      label: album.label,
+      artists: album.artists,
+    );
+  }
+
+
+  /// Enrich a single track with richer artist data from the playback queue.
+  Track _enrichTrackFromPlayback(Track track) {
+    final controller = context.read<PlaybackController>();
+    final currentTrack = controller.currentTrack;
+
+    // Check if current playing track IS this track (same videoId)
+    if (currentTrack != null && currentTrack.id == track.id) {
+      if ((currentTrack.artists?.length ?? 0) > (track.artists?.length ?? 0)) {
+        return track.copyWith(
+          artistName: currentTrack.displayArtist,
+          artistId: currentTrack.artistId,
+          artists: currentTrack.artists,
+        );
+      }
+    }
+
+    // Also check the queue
+    for (final q in controller.queue) {
+      if (q.id == track.id && (q.artists?.length ?? 0) > (track.artists?.length ?? 0)) {
+        return track.copyWith(
+          artistName: q.displayArtist,
+          artistId: q.artistId,
+          artists: q.artists,
+        );
+      }
+    }
+
+    return track;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isSingleMode) {
+      // Enrich the single's track from playback for richer artist data
+      final enrichedTrack = _enrichTrackFromPlayback(widget.singleDetail!.track);
+
+      // Update resolved artists if the enriched track has more
+      if (_resolvedArtists == null && enrichedTrack.artists != null &&
+          enrichedTrack.artists!.length > 1) {
+        // Schedule update after build
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _resolvedArtists = enrichedTrack.artists;
+              _resolvedArtistName = enrichedTrack.displayArtist;
+              _resolvedArtistId = enrichedTrack.artistId;
+            });
+          }
+        });
+      }
+
       return _buildContent(
         releaseDate: "${widget.singleDetail!.releaseYear}",
         label: "",
         nbTracks: 1,
         duration: widget.singleDetail!.duration,
-        tracks: [widget.singleDetail!.track],
+        tracks: [enrichedTrack],
         hasData: true,
         isLoading: false
       );
@@ -444,42 +577,117 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     // Guard against placeholder artist
     if (isPlaceholderArtist(_artistName)) return;
 
-    final explicitId = widget.album?.artistId ?? widget.singleDetail?.track.artistId;
-    
-    // 1. If we have ID, go direct
-    if (explicitId != null && explicitId.isNotEmpty) {
-       Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-         artistId: explicitId!, 
-         artistName: _artistName
-       )));
-       return;
+    // Build the valid artists list from API-resolved data
+    final validArtists = (_resolvedArtists ?? [])
+        .where((a) => (a['id'] ?? '').isNotEmpty && (a['name'] ?? '').isNotEmpty)
+        .toList();
+
+    if (validArtists.isEmpty) {
+      // Fallback: try single artist ID
+      final fallbackId = _resolvedArtistId
+          ?? widget.album?.artistId
+          ?? widget.singleDetail?.track.artistId
+          ?? '';
+
+      if (fallbackId.isNotEmpty) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
+          artistId: fallbackId,
+          artistName: _artistName,
+        )));
+        return;
+      }
+
+      // Last resort: search by name
+      setState(() => _isNavigatingToArtist = true);
+      try {
+        final results = await _repository.searchArtists(_artistName);
+        if (!mounted) return;
+        setState(() => _isNavigatingToArtist = false);
+        if (results.isNotEmpty) {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
+            artistId: results.first.id,
+            artistName: results.first.name,
+            pictureUrl: results.first.picture,
+          )));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Artist info unavailable")));
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isNavigatingToArtist = false);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Artist info unavailable")));
+        }
+      }
+      return;
     }
 
-    // 2. Fetch via search
-    setState(() => _isNavigatingToArtist = true);
-    
-    try {
-      final results = await _repository.searchArtists(_artistName);
-      if (!mounted) return;
-      
-      setState(() => _isNavigatingToArtist = false);
-      
-      if (results.isNotEmpty) {
-        // Assume best match is first
-        final artist = results.first;
-        Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-           artistId: artist.id,
-           artistName: artist.name,
-           pictureUrl: artist.picture,
-        )));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Artist info unavailable")));
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isNavigatingToArtist = false);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Artist info unavailable")));
-      }
+    // Single artist → route directly
+    if (validArtists.length == 1) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
+        artistId: validArtists.first['id']!,
+        artistName: validArtists.first['name']!,
+      )));
+      return;
     }
+
+    // Multiple artists → show selection BottomSheet
+    _showAlbumArtistPicker(validArtists);
+  }
+
+  /// Multi-artist selection BottomSheet for album headers.
+  void _showAlbumArtistPicker(List<Map<String, String>> artists) {
+    showModalBottomSheet(
+      context: context,
+      useRootNavigator: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0A0A0A).withOpacity(0.9),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                    child: Text(
+                      "Choose Artist",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Divider(color: Colors.white.withOpacity(0.1)),
+                  ...artists.map((a) => ListTile(
+                    leading: const Icon(Icons.person_outline, color: Colors.white70),
+                    title: Text(
+                      a['name'] ?? '',
+                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetCtx);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
+                        artistId: a['id']!,
+                        artistName: a['name']!,
+                      )));
+                    },
+                  )),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

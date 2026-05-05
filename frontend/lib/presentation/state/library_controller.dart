@@ -93,6 +93,15 @@ class LibraryController extends ChangeNotifier {
     await playlist.save();
     notifyListeners();
   }
+
+  /// Reorder a track within a playlist. Persists new order immediately.
+  Future<void> reorderPlaylistTrack(Playlist playlist, int oldIndex, int newIndex) async {
+    if (newIndex > oldIndex) newIndex--;
+    final track = playlist.tracks.removeAt(oldIndex);
+    playlist.tracks.insert(newIndex, track);
+    await playlist.save();
+    notifyListeners();
+  }
   
   Future<void> deletePlaylist(Playlist playlist) async {
     await playlist.delete();

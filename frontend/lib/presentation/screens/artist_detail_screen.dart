@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -21,6 +22,7 @@ import '../widgets/bottom_content_padding.dart';
 import '../../core/utils/thumbnail_prefetcher.dart';
 import '../widgets/app_image.dart';
 import '../../core/image/lh3_url_builder.dart';
+import '../../core/image/image_pipeline.dart';
 import 'artist_discography_screen.dart';
 
 import '../../core/utils/responsive.dart';
@@ -56,10 +58,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   bool _showTitle = false;
   bool _isLoading = true;
   bool _hasError = false;
+  bool _isEnriching = false;
   String _resolvedArtistId = '';
   
   ThumbnailPrefetcher? _prefetcher;
   Artist? _cachedArtist;
+  // Stash raw songs for background enrichment
+  final List<dynamic> _rawSongs = [];
 
   @override
   void initState() {
@@ -98,6 +103,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
 
   // ... (_loadData, dispose unchanged)
   Future<void> _loadData() async {
+    final loadStopwatch = Stopwatch()..start();
     setState(() {
       _isLoading = true;
       _hasError = false;
@@ -115,17 +121,26 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         throw Exception("Could not resolve artist ID");
       }
 
-      _artistInfoFuture = _repository.getArtist(_resolvedArtistId);
-      
+      // Phase 1: Load basic artist data (no enrichment) — renders immediately
+      _artistInfoFuture = _repository.getArtistBasic(_resolvedArtistId);
       final artist = await _artistInfoFuture; 
       _cachedArtist = artist;
+
+      debugPrint('[Perf] ArtistDetailScreen first render in ${loadStopwatch.elapsedMilliseconds}ms');
 
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
       }
+
+      // Precache key images in background
+      _precacheImages(artist);
+
+      // Phase 2: Enrich releases in background
+      _enrichReleases(artist);
     } catch (e) {
+      debugPrint('[Perf] ArtistDetailScreen FAILED in ${loadStopwatch.elapsedMilliseconds}ms: $e');
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -133,6 +148,55 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         });
       }
     }
+  }
+
+  /// Background enrichment — updates albums/singles with year and type data.
+  Future<void> _enrichReleases(Artist basicArtist) async {
+    if (!mounted) return;
+    setState(() => _isEnriching = true);
+
+    final enrichStopwatch = Stopwatch()..start();
+    try {
+      final albums = (basicArtist.albums as List).cast<SavedAlbum>();
+      final singles = (basicArtist.singles as List).cast<SavedAlbum>();
+
+      final enriched = await _repository.enrichArtistReleases(
+        existingAlbums: albums,
+        existingSingles: singles,
+        rawSongs: _rawSongs,
+      );
+
+      if (mounted) {
+        final updated = basicArtist.copyWith(
+          albums: enriched.albums,
+          singles: enriched.singles,
+        );
+        _cachedArtist = updated;
+        // Update the future so FutureBuilders rebuild
+        _artistInfoFuture = Future.value(updated);
+        debugPrint('[Perf] ArtistDetailScreen enrichment done in ${enrichStopwatch.elapsedMilliseconds}ms');
+        setState(() => _isEnriching = false);
+      }
+    } catch (err) {
+      debugPrint('[Repo] Background enrichment failed: $err');
+      if (mounted) setState(() => _isEnriching = false);
+    }
+  }
+
+  /// Precache key images so back-navigation feels instant.
+  void _precacheImages(Artist artist) {
+    if (kIsWeb) return;
+    try {
+      final mgr = ImagePipeline.instance.cacheManager;
+      final urls = <String>[
+        if (artist.picture.isNotEmpty) Lh3UrlBuilder.build(artist.picture, Lh3UrlBuilder.headerSize),
+        ...(artist.albums as List).cast<SavedAlbum>().take(5).map((a) => Lh3UrlBuilder.forList(a.artworkUrl)),
+        ...(artist.singles as List).cast<SavedAlbum>().take(5).map((s) => Lh3UrlBuilder.forList(s.artworkUrl)),
+      ].where((u) => u.isNotEmpty).toList();
+      for (final url in urls) {
+        mgr.downloadFile(url).catchError((_) => null as dynamic);
+      }
+    } catch (_) {}
   }
   
   @override
@@ -649,7 +713,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
         final singles = (snapshot.data!.singles as List).cast<SavedAlbum>();
-        if (singles.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+        if (singles.isEmpty && !_isEnriching) return const SliverToBoxAdapter(child: SizedBox.shrink());
 
         final display = singles.take(5).toList();
         final cardWidth = Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
@@ -659,24 +723,61 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 24, 20, 12),
-                child: Text('Singles & EPs',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              ),
-              SizedBox(
-                height: cardHeight,
-                child: ListView.builder(
-                  padding: EdgeInsets.only(left: Responsive.spacing(context)),
-                  scrollDirection: Axis.horizontal,
-                  physics: const ClampingScrollPhysics(),
-                  primary: false,
-                  itemCount: display.length,
-                  itemBuilder: (context, index) {
-                    return _buildReleaseCard(context, display[index], cardWidth, showType: false);
-                  },
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+                child: Row(
+                  children: [
+                    const Text('Singles & EPs',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    if (_isEnriching) ...[
+                      const SizedBox(width: 8),
+                      const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white24,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
+              if (display.isNotEmpty)
+                SizedBox(
+                  height: cardHeight,
+                  child: ListView.builder(
+                    padding: EdgeInsets.only(left: Responsive.spacing(context)),
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    primary: false,
+                    itemCount: display.length,
+                    itemBuilder: (context, index) {
+                      return _buildReleaseCard(context, display[index], cardWidth, showType: false);
+                    },
+                  ),
+                )
+              else if (_isEnriching)
+                Shimmer.fromColors(
+                  baseColor: Colors.grey[900]!,
+                  highlightColor: Colors.grey[800]!,
+                  child: SizedBox(
+                    height: cardHeight,
+                    child: ListView.builder(
+                      padding: EdgeInsets.only(left: Responsive.spacing(context)),
+                      scrollDirection: Axis.horizontal,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: 3,
+                      itemBuilder: (_, __) => Container(
+                        width: cardWidth,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
