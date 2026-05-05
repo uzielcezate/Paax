@@ -15,6 +15,8 @@ class TrackListTile extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onCoverTap; 
   final bool showArtwork;
+  /// When true, hides the like button and overflow menu (used in edit mode).
+  final bool hideActions;
 
   const TrackListTile({
     super.key,
@@ -23,6 +25,7 @@ class TrackListTile extends StatelessWidget {
     required this.onTap,
     this.onCoverTap,
     this.showArtwork = false,
+    this.hideActions = false,
   });
 
   @override
@@ -66,25 +69,27 @@ class TrackListTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(color: Colors.grey, fontSize: fontSizeSubtitle),
       ),
-      trailing: SizedBox(
-        width: 100, // Fixed width for actions is okay, but could be responsive if needed
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Consumer<LibraryController>(
-              builder: (context, lib, _) => IconButton(
-                icon: Icon(
-                  lib.isLiked(track) ? Icons.favorite : Icons.favorite_border,
-                  size: iconSize,
-                  color: lib.isLiked(track) ? AppColors.primaryEnd : Colors.white60,
-                ),
-                onPressed: () => lib.toggleLike(track),
+      trailing: hideActions
+          ? null
+          : SizedBox(
+              width: 100, // Fixed width for actions is okay, but could be responsive if needed
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Consumer<LibraryController>(
+                    builder: (context, lib, _) => IconButton(
+                      icon: Icon(
+                        lib.isLiked(track) ? Icons.favorite : Icons.favorite_border,
+                        size: iconSize,
+                        color: lib.isLiked(track) ? AppColors.primaryEnd : Colors.white60,
+                      ),
+                      onPressed: () => lib.toggleLike(track),
+                    ),
+                  ),
+                   OverflowMenu(type: MenuType.track, track: track),
+                ],
               ),
             ),
-             OverflowMenu(type: MenuType.track, track: track),
-          ],
-        ),
-      ),
       onTap: onTap,
     );
   }

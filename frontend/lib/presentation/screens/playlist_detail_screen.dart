@@ -346,45 +346,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                      ],
                    ),
                    if (!_isEditMode) const SizedBox(height: 16),
-
-                   // Edit mode banner
-                   if (_isEditMode)
-                     Container(
-                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                       decoration: BoxDecoration(
-                         color: AppColors.primaryStart.withOpacity(0.1),
-                         borderRadius: BorderRadius.circular(12),
-                         border: Border.all(color: AppColors.primaryStart.withOpacity(0.2)),
-                       ),
-                       child: Row(
-                         children: [
-                           const Icon(Icons.edit_rounded, color: AppColors.primaryStart, size: 18),
-                           const SizedBox(width: 8),
-                           const Expanded(
-                             child: Text(
-                               'Drag to reorder • Tap ✕ to remove',
-                               style: TextStyle(color: Colors.white70, fontSize: 13),
-                             ),
-                           ),
-                           TextButton(
-                             onPressed: _exitEditMode,
-                             style: TextButton.styleFrom(
-                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                               minimumSize: Size.zero,
-                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                             ),
-                             child: const Text(
-                               'Done',
-                               style: TextStyle(
-                                 color: AppColors.primaryStart,
-                                 fontWeight: FontWeight.bold,
-                               ),
-                             ),
-                           ),
-                         ],
-                       ),
-                     ),
-                   if (_isEditMode) const SizedBox(height: 16),
                 ],
               ),
             ),
@@ -468,6 +429,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                             track: track,
                             index: index + 1,
                             showArtwork: true,
+                            hideActions: true,
                             onTap: () {}, // No playback in edit mode
                           ),
                         ),
