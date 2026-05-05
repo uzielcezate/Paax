@@ -32,6 +32,7 @@ class OverflowMenu extends StatelessWidget {
   final SingleTrackAlbumDetail? singleDetail;
   final VoidCallback? onDelete; // For playlists
   final VoidCallback? onEdit;   // For playlists
+  final VoidCallback? onEditOrder; // For playlist reorder mode
   final bool isNowPlaying; // Flag to enable dynamic current track resolution
   final VoidCallback? onNavigation;
   final Playlist? playlistContext; // When non-null, adds 'Remove from Playlist'
@@ -46,6 +47,7 @@ class OverflowMenu extends StatelessWidget {
     this.singleDetail,
     this.onDelete,
     this.onEdit,
+    this.onEditOrder,
     this.onNavigation,
     this.isNowPlaying = false, // Default false
     this.playlistContext,
@@ -65,6 +67,7 @@ class OverflowMenu extends StatelessWidget {
         playlist: playlist,
         onDelete: onDelete,
         onEdit: onEdit,
+        onEditOrder: onEditOrder,
         parentContext: context,
         onNavigation: onNavigation, 
         isNowPlaying: isNowPlaying,
@@ -91,6 +94,7 @@ class _MenuContent extends StatelessWidget {
   final SingleTrackAlbumDetail? singleDetail;
   final VoidCallback? onDelete;
   final VoidCallback? onEdit;
+  final VoidCallback? onEditOrder;
   final VoidCallback? onNavigation;
   final bool isNowPlaying;
   final BuildContext parentContext;
@@ -106,6 +110,7 @@ class _MenuContent extends StatelessWidget {
     this.singleDetail,
     this.onDelete,
     this.onEdit,
+    this.onEditOrder,
     this.onNavigation,
     this.isNowPlaying = false,
     this.playlistContext,
@@ -428,6 +433,11 @@ class _MenuContent extends StatelessWidget {
          // Play playlist logic
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Play playlist not implemented")));
       }),
+      if (onEditOrder != null)
+        _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", onTap: () {
+           Navigator.pop(context);
+           onEditOrder!();
+        }),
       _actionItem(context, icon: Icons.edit, label: "Edit Playlist", onTap: () {
          Navigator.pop(context);
          if (onEdit != null) onEdit!();

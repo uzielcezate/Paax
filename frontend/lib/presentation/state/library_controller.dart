@@ -59,7 +59,7 @@ class LibraryController extends ChangeNotifier {
       name: name,
       tracks: [],
       createdAt: DateTime.now(),
-      coverColor: 0xFF9D4EDD, // Default purple
+      coverColor: 0xFF2A2A2E, // Default neutral dark gray
     );
     await HiveStorage.savePlaylist(newPlaylist);
     _loadData();

@@ -74,14 +74,26 @@ class PlaylistCover extends StatelessWidget {
   }
 
   Widget _buildPlaceholder() {
+    final baseColor = Color(playlist.coverColor ?? 0xFF2A2A2E);
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: Color(playlist.coverColor ?? 0xFF37474F),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            baseColor,
+            Color.lerp(baseColor, Colors.black, 0.4)!,
+          ],
+        ),
         borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.06),
+          width: 1,
+        ),
       ),
-      child: Icon(Icons.music_note, color: Colors.white24, size: size * 0.5),
+      child: Icon(Icons.music_note_rounded, color: Colors.white24, size: size * 0.4),
     );
   }
 

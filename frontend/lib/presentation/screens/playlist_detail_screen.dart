@@ -35,6 +35,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   String _currentSort = "Recently added";
   final List<String> _sortOptions = ["Recently added", "Title", "Artist", "Album"];
 
+  /// Edit Order mode — shows drag handles and remove icons.
+  bool _isEditMode = false;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +61,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   // Filter & Sort Logic
   List<Track> _getFilteredTracks(List<Track> tracks) {
+    // In edit mode, always show the raw track order (no sort/filter)
+    if (_isEditMode) return List.from(tracks);
+
     List<Track> filtered = List.from(tracks);
     
     // 1. Filter
@@ -110,6 +116,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     );
   }
 
+  void _enterEditMode() {
+    setState(() => _isEditMode = true);
+  }
+
+  void _exitEditMode() {
+    setState(() => _isEditMode = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Watch library to get updates (e.g. track removed)
@@ -157,19 +171,38 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             title: AnimatedOpacity(
                duration: const Duration(milliseconds: 200),
                opacity: _showTitle ? 1.0 : 0.0,
-               child: Text(currentPlaylist.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-            ),
-            leading: IconButton(
-               icon: const Icon(Icons.arrow_back, color: Colors.white),
-               onPressed: () => Navigator.pop(context),
-            ),
-            actions: [
-               OverflowMenu(
-                 type: MenuType.playlist, 
-                 playlist: currentPlaylist,
-                 onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
-                 onDelete: () => _confirmDelete(context, library, currentPlaylist!),
+               child: Text(
+                 _isEditMode ? 'Edit Order' : currentPlaylist.name,
+                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                ),
+            ),
+            leading: _isEditMode
+                ? const SizedBox.shrink()
+                : IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+            actions: [
+              if (_isEditMode)
+                TextButton(
+                  onPressed: _exitEditMode,
+                  child: const Text(
+                    'Done',
+                    style: TextStyle(
+                      color: AppColors.primaryStart,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                )
+              else
+                OverflowMenu(
+                  type: MenuType.playlist, 
+                  playlist: currentPlaylist,
+                  onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
+                  onDelete: () => _confirmDelete(context, library, currentPlaylist!),
+                  onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                ),
             ],
             flexibleSpace: Stack(
               fit: StackFit.expand,
@@ -265,7 +298,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                    ),
                    const SizedBox(height: 24),
                    
-                   // ACTIONS ROW
+                   // ACTIONS ROW — hidden in edit mode
+                   if (!_isEditMode)
                    Row(
                      mainAxisAlignment: MainAxisAlignment.center,
                      children: [
@@ -311,14 +345,53 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                        ),
                      ],
                    ),
-                   const SizedBox(height: 16),
+                   if (!_isEditMode) const SizedBox(height: 16),
+
+                   // Edit mode banner
+                   if (_isEditMode)
+                     Container(
+                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                       decoration: BoxDecoration(
+                         color: AppColors.primaryStart.withOpacity(0.1),
+                         borderRadius: BorderRadius.circular(12),
+                         border: Border.all(color: AppColors.primaryStart.withOpacity(0.2)),
+                       ),
+                       child: Row(
+                         children: [
+                           const Icon(Icons.edit_rounded, color: AppColors.primaryStart, size: 18),
+                           const SizedBox(width: 8),
+                           const Expanded(
+                             child: Text(
+                               'Drag to reorder • Tap ✕ to remove',
+                               style: TextStyle(color: Colors.white70, fontSize: 13),
+                             ),
+                           ),
+                           TextButton(
+                             onPressed: _exitEditMode,
+                             style: TextButton.styleFrom(
+                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                               minimumSize: Size.zero,
+                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                             ),
+                             child: const Text(
+                               'Done',
+                               style: TextStyle(
+                                 color: AppColors.primaryStart,
+                                 fontWeight: FontWeight.bold,
+                               ),
+                             ),
+                           ),
+                         ],
+                       ),
+                     ),
+                   if (_isEditMode) const SizedBox(height: 16),
                 ],
               ),
             ),
           ),
           
-          // Search & Sort Controls (Scrollable)
-          if (tracks.isNotEmpty)
+          // Search & Sort Controls — hidden in edit mode
+          if (tracks.isNotEmpty && !_isEditMode)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
@@ -346,7 +419,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                 child: Center(child: Text("No tracks found.", style: TextStyle(color: Colors.grey))),
               ),
             )
-          else
+          else if (_isEditMode)
+            // ── Edit Mode: ReorderableListView with drag handles + remove icons ──
             SliverToBoxAdapter(
               child: ReorderableListView.builder(
                 shrinkWrap: true,
@@ -357,21 +431,69 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                 },
                 itemCount: displayTracks.length,
                 proxyDecorator: (child, index, animation) {
-                  return AnimatedBuilder(
-                    animation: animation,
-                    builder: (context, child) => Material(
-                      color: Colors.transparent,
-                      elevation: 4,
-                      shadowColor: Colors.black54,
-                      child: child,
-                    ),
+                  return Material(
+                    color: Colors.transparent,
+                    elevation: 4,
+                    shadowColor: Colors.black54,
                     child: child,
                   );
                 },
                 itemBuilder: (context, index) {
                   final track = displayTracks[index];
+                  return Container(
+                    key: ValueKey('edit_${track.id}_$index'),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Row(
+                      children: [
+                        // Remove button
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline_rounded,
+                            color: Colors.redAccent, size: 22),
+                          onPressed: () {
+                            library.removeFromPlaylist(currentPlaylist!, track);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Removed "${track.title}" from playlist'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          },
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        ),
+                        // Track info
+                        Expanded(
+                          child: TrackListTile(
+                            track: track,
+                            index: index + 1,
+                            showArtwork: true,
+                            onTap: () {}, // No playback in edit mode
+                          ),
+                        ),
+                        // Drag handle
+                        ReorderableDragStartListener(
+                          index: index,
+                          child: const Padding(
+                            padding: EdgeInsets.only(right: 8),
+                            child: Icon(Icons.drag_handle_rounded,
+                              color: Colors.white38, size: 24),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            )
+          else
+            // ── Normal Mode: clean list, no drag handles ──
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final track = displayTracks[index];
                   return Dismissible(
-                    key: ValueKey('dismiss_${track.id}_$index'),
+                    key: ValueKey('dismiss_${track.id}'),
                     direction: DismissDirection.endToStart,
                     background: Container(
                       color: Colors.red,
@@ -388,32 +510,17 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                          ),
                        );
                     },
-                    child: Row(
-                      key: ValueKey('row_${track.id}_$index'),
-                      children: [
-                        // Drag handle
-                        ReorderableDragStartListener(
-                          index: index,
-                          child: Padding(
-                            padding: const EdgeInsets.only(left: 4),
-                            child: Icon(Icons.drag_handle_rounded, 
-                              color: Colors.white24, size: 20),
-                          ),
-                        ),
-                        Expanded(
-                          child: TrackListTile(
-                            track: track,
-                            index: index + 1,
-                            showArtwork: true,
-                            onTap: () {
-                               context.read<PlaybackController>().playQueue(displayTracks, index: index);
-                            },
-                          ),
-                        ),
-                      ],
+                    child: TrackListTile(
+                      track: track,
+                      index: index + 1,
+                      showArtwork: true,
+                      onTap: () {
+                         context.read<PlaybackController>().playQueue(displayTracks, index: index);
+                      },
                     ),
                   );
                 },
+                childCount: displayTracks.length,
               ),
             ),
             
@@ -524,7 +631,3 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     );
   }
 }
-
-
-
-

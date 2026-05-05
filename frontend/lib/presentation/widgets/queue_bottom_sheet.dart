@@ -298,7 +298,9 @@ class _UpcomingList extends StatelessWidget {
       buildDefaultDragHandles: false,
       itemCount: upcoming.length,
       onReorder: (oldIndex, newIndex) {
-        if (newIndex > oldIndex) newIndex--;
+        // ReorderableListView passes raw Flutter indices where newIndex
+        // includes the item being moved. reorderQueue() handles the
+        // adjustment internally — do NOT pre-decrement here.
         playback.reorderQueue(oldIndex, newIndex);
       },
       proxyDecorator: (child, index, animation) {
