@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../state/playback_controller.dart';
@@ -131,14 +132,20 @@ class MainWrapperState extends State<MainWrapper> {
     final bool hasTrack = currentTrack != null;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
     
-    return WillPopScope(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Colors.transparent,
+      ),
+      child: WillPopScope(
       onWillPop: _onWillPop,
       child: Scaffold(
         extendBody: true, 
+        extendBodyBehindAppBar: true,
         resizeToAvoidBottomInset: false, 
         body: Stack(
           children: [
-            const HiddenVideoPlayer(), // Keeps player active but hidden
+            const HiddenVideoPlayer(),
             IndexedStack(
               index: _currentIndex,
               children: _rootPages.asMap().entries.map((entry) {
@@ -170,6 +177,30 @@ class MainWrapperState extends State<MainWrapper> {
               }).toList(),
             ),
 
+            // ── Top edge fade gradient ──
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                child: Container(
+                  height: 100,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0xBB0B0B10),
+                        Color(0x550B0B10),
+                        Color(0x000B0B10),
+                      ],
+                      stops: [0.0, 0.45, 1.0],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
             // ── Bottom edge gradient ──
             Positioned(
               left: 0,
@@ -183,8 +214,8 @@ class MainWrapperState extends State<MainWrapper> {
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
                       colors: [
-                        Color(0xF00B0B10),
-                        Color(0x800B0B10),
+                        Color(0xF50B0B10),
+                        Color(0x880B0B10),
                         Color(0x000B0B10),
                       ],
                       stops: [0.0, 0.45, 1.0],
@@ -214,6 +245,7 @@ class MainWrapperState extends State<MainWrapper> {
           ],
         ),
       ),
+     ),
     );
   }
 

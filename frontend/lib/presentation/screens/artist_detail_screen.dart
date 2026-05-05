@@ -13,7 +13,6 @@ import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
 import '../widgets/music_card.dart';
 import 'album_detail_screen.dart';
-import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/track_list_tile.dart';
@@ -233,6 +232,46 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             ],
           ),
           
+          // Top fade gradient
+          const TopFadeGradient(height: 110),
+          
+          // Floating controls
+          FloatingTopControls(
+            showScrolledPill: _showTitle,
+            topPadding: MediaQuery.of(context).padding.top,
+            defaultControls: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                GlassCircleButton(
+                  icon: Icons.arrow_back_ios_new,
+                  iconSize: 18,
+                  onPressed: () => Navigator.pop(context),
+                ),
+                GlassMenuButton(
+                  child: OverflowMenu(
+                    type: MenuType.artist,
+                    artist: Artist(
+                      id: _resolvedArtistId,
+                      name: widget.artistName,
+                      picture: widget.pictureUrl ?? '',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            scrolledPill: ScrolledTopPill(
+              title: widget.artistName,
+              onBack: () => Navigator.pop(context),
+              trailing: OverflowMenu(
+                type: MenuType.artist,
+                artist: Artist(
+                  id: _resolvedArtistId,
+                  name: widget.artistName,
+                  picture: widget.pictureUrl ?? '',
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -290,44 +329,17 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       backgroundColor: Colors.transparent,
       forceMaterialTransparency: true,
       elevation: 0,
-      title: AnimatedOpacity(
-        duration: const Duration(milliseconds: 200),
-        opacity: _showTitle ? 1.0 : 0.0,
-        child: Text(widget.artistName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-      ),
-      actions: [
-        Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: GlassMenuButton(
-            enableBlur: !_showTitle,
-            child: OverflowMenu(
-              type: MenuType.artist,
-              artist: Artist(
-                id: _resolvedArtistId,
-                name: widget.artistName,
-                picture: widget.pictureUrl ?? '',
-              ),
-            ),
-          ),
-        ),
-      ],
-      leading: Padding(
-        padding: const EdgeInsets.only(left: 4),
-        child: GlassCircleButton(
-          icon: Icons.arrow_back,
-          onPressed: () => Navigator.pop(context),
-          enableBlur: !_showTitle,
-        ),
-      ),
-      flexibleSpace: Stack(
-        fit: StackFit.expand,
-        children: [
-          FlexibleSpaceBar(
-            collapseMode: CollapseMode.pin,
-            background: Stack(
-              fit: StackFit.expand,
-              children: [
-                  if (widget.pictureUrl != null && widget.pictureUrl!.isNotEmpty)
+      automaticallyImplyLeading: false,
+      leadingWidth: 0,
+      leading: const SizedBox.shrink(),
+      titleSpacing: 0,
+      title: null,
+      flexibleSpace: FlexibleSpaceBar(
+        collapseMode: CollapseMode.pin,
+        background: Stack(
+          fit: StackFit.expand,
+          children: [
+              if (widget.pictureUrl != null && widget.pictureUrl!.isNotEmpty)
                    NetworkImageWithFallback(
                      imageUrl: widget.pictureUrl!.replaceAll(RegExp(r'w\d+-h\d+.*'), 'w1080-h1080'), // Force HD
                      fit: BoxFit.cover,
@@ -450,7 +462,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                ),
                              ],
                            );
-                         },
+                         }
                        ),
                      ],
                    ),
@@ -458,26 +470,6 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
               ],
             ),
           ),
-          
-          // Glass Blur Layer (Controlled by Scroll)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: MediaQuery.of(context).padding.top + kToolbarHeight,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: _showTitle ? 1.0 : 0.0,
-              child: BlackGlassBlurSurface(
-                 height: MediaQuery.of(context).padding.top + kToolbarHeight,
-                 width: MediaQuery.of(context).size.width,
-                 bottomBorder: true,
-                 child: Container(),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 

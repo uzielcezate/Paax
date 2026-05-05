@@ -5,6 +5,7 @@ import '../../core/image/lh3_url_builder.dart';
 import '../../domain/entities/saved_album.dart';
 import '../widgets/app_image.dart';
 import '../widgets/bottom_content_padding.dart';
+import '../widgets/glass_surface.dart';
 import '../../core/utils/string_utils.dart';
 import 'album_detail_screen.dart';
 
@@ -70,73 +71,68 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.artistName,
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.textSecondary,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-            const Text(
-              'Discography',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-      ),
-      body: Column(
+      body: Stack(
         children: [
-          // ── Filter Chips ───────────────────────────────────────
-          Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: Responsive.spacing(context),
-              vertical: 12,
-            ),
-            child: Row(
-              children: List.generate(_filterLabels.length, (i) {
-                final selected = _selectedFilter == i;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(_filterLabels[i]),
-                    selected: selected,
-                    onSelected: (_) => setState(() => _selectedFilter = i),
-                    selectedColor: Colors.white,
-                    backgroundColor: AppColors.surfaceLight,
-                    labelStyle: TextStyle(
-                      color: selected ? Colors.black : Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      side: BorderSide(
-                        color:
-                            selected ? Colors.white : Colors.white12,
+          Column(
+            children: [
+              SizedBox(height: MediaQuery.of(context).padding.top + 54),
+              // ── Filter Chips ───────────────────────────────────────
+              Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: Responsive.spacing(context),
+                  vertical: 12,
+                ),
+                child: Row(
+                  children: List.generate(_filterLabels.length, (i) {
+                    final selected = _selectedFilter == i;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(_filterLabels[i]),
+                        selected: selected,
+                        onSelected: (_) => setState(() => _selectedFilter = i),
+                        selectedColor: Colors.white,
+                        backgroundColor: AppColors.surfaceLight,
+                        labelStyle: TextStyle(
+                          color: selected ? Colors.black : Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          side: BorderSide(
+                            color:
+                                selected ? Colors.white : Colors.white12,
+                          ),
+                        ),
+                        showCheckmark: false,
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                       ),
-                    ),
-                    showCheckmark: false,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  ),
-                );
-              }),
-            ),
+                    );
+                  }),
+                ),
+              ),
+
+              // ── Content ────────────────────────────────────────────
+              Expanded(
+                child: _buildContent(),
+              ),
+            ],
           ),
 
-          // ── Content ────────────────────────────────────────────
-          Expanded(
-            child: _buildContent(),
+          // Top fade gradient
+          const TopFadeGradient(height: 100),
+
+          // Floating top controls
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 6,
+            left: 12,
+            right: 12,
+            child: ScrolledTopPill(
+              title: 'Discography',
+              onBack: () => Navigator.pop(context),
+            ),
           ),
         ],
       ),

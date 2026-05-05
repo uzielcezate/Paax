@@ -16,7 +16,6 @@ import '../widgets/music_card.dart';
 import '../widgets/thumbnail.dart';
 
 import '../widgets/bottom_content_padding.dart';
-import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/genre_card.dart';
 import 'genre_results_screen.dart';
@@ -74,127 +73,137 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ),
           
+          // Strong top fade gradient — covers status bar down past chips
           Positioned(
-            top: 0, 
-            left: 0, 
+            top: 0,
+            left: 0,
             right: 0,
-            height: headerHeight,
-            child: BlackGlassBlurSurface(
-              blurSigma: 18.0,
-              height: headerHeight,
-              bottomBorder: true,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(height: topPadding),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
-                    child: SizedBox(
-                      height: 48,
-                      child: Row(
-                        children: [
-                           GlassCircleButton(
-                             icon: Icons.arrow_back,
-                             size: 38,
-                             onPressed: () {
-                               final mainWrapper = MainWrapper.shellKey.currentState;
-                               if (mainWrapper != null) {
-                                 mainWrapper.onBackPressed();
-                               } else {
-                                 Navigator.maybePop(context);
-                               }
-                             },
-                             enableBlur: false, // parent surface already blurs
-                           ),
-                           const SizedBox(width: 10),
-                           Expanded(
-                             child: Container(
-                               height: 44,
-                               decoration: BoxDecoration(
-                                 color: Colors.white.withOpacity(0.06),
-                                 borderRadius: BorderRadius.circular(22),
-                                 border: Border.all(
-                                   color: Colors.white.withOpacity(0.10),
-                                   width: 0.5,
+            child: IgnorePointer(
+              child: Container(
+                height: headerHeight + 20,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0xDD0B0B10),
+                      Color(0x990B0B10),
+                      Color(0x440B0B10),
+                      Color(0x000B0B10),
+                    ],
+                    stops: [0.0, 0.45, 0.75, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Floating search controls
+          Positioned(
+            top: topPadding + 8,
+            left: Responsive.spacing(context),
+            right: Responsive.spacing(context),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Back button + Search pill
+                SizedBox(
+                  height: 48,
+                  child: Row(
+                    children: [
+                       GlassCircleButton(
+                         icon: Icons.arrow_back_ios_new,
+                         iconSize: 18,
+                         size: 40,
+                         onPressed: () {
+                           final mainWrapper = MainWrapper.shellKey.currentState;
+                           if (mainWrapper != null) {
+                             mainWrapper.onBackPressed();
+                           } else {
+                             Navigator.maybePop(context);
+                           }
+                         },
+                       ),
+                       const SizedBox(width: 10),
+                       Expanded(
+                         child: GlassSurface(
+                           height: 44,
+                           borderRadius: BorderRadius.circular(22),
+                           showShadow: false,
+                           overrideFill: Colors.white.withOpacity(0.06),
+                           child: TextField(
+                              controller: _textController,
+                              style: const TextStyle(color: Colors.white, fontSize: 15),
+                               decoration: InputDecoration(
+                                 hintText: "What do you want to listen to?",
+                                 hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 14),
+                                 prefixIcon: Icon(Icons.search, color: Colors.white.withOpacity(0.5), size: 20),
+                                 filled: false,
+                                 border: InputBorder.none,
+                                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                 isDense: true,
+                                 suffixIcon: ValueListenableBuilder<bool>(
+                                   valueListenable: _hasText,
+                                   builder: (_, hasText, __) => hasText
+                                       ? IconButton(
+                                           icon: Icon(Icons.clear, color: Colors.white.withOpacity(0.4), size: 18),
+                                           onPressed: () {
+                                             _textController.clear();
+                                             search.onQueryChanged("");
+                                           },
+                                         )
+                                       : const SizedBox.shrink(),
                                  ),
                                ),
-                               child: TextField(
-                                  controller: _textController,
-                                  style: const TextStyle(color: Colors.white, fontSize: 15),
-                                   decoration: InputDecoration(
-                                     hintText: "What do you want to listen to?",
-                                     hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 14),
-                                     prefixIcon: Icon(Icons.search, color: Colors.white.withOpacity(0.5), size: 20),
-                                     filled: false,
-                                     border: InputBorder.none,
-                                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                     isDense: true,
-                                     suffixIcon: ValueListenableBuilder<bool>(
-                                       valueListenable: _hasText,
-                                       builder: (_, hasText, __) => hasText
-                                           ? IconButton(
-                                               icon: Icon(Icons.clear, color: Colors.white.withOpacity(0.4), size: 18),
-                                               onPressed: () {
-                                                 _textController.clear();
-                                                 search.onQueryChanged("");
-                                               },
-                                             )
-                                           : const SizedBox.shrink(),
-                                     ),
-                                   ),
-                                   onChanged: (val) {
-                                     search.onQueryChanged(val);
-                                   },
-                                ),
-                             ),
-                           ),
-                        ],
-                      ),
-                    ),
+                               onChanged: (val) {
+                                 search.onQueryChanged(val);
+                               },
+                            ),
+                         ),
+                       ),
+                    ],
                   ),
-                  
-                  const SizedBox(height: 12),
-                  
-                   SizedBox(
-                     height: 48, 
-                     child: ListView(
-                       scrollDirection: Axis.horizontal,
-                       padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
-                       physics: const ClampingScrollPhysics(),
-                       primary: false,
-                       children: ["All", "Tracks", "Albums", "Artists"].map((filter) {
-                        final isSelected = _selectedFilter == filter;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8, bottom: 8),
-                          child: FilterChip(
-                            label: Text(filter),
-                            selected: isSelected,
-                            onSelected: (_) => setState(() => _selectedFilter = filter),
-                            backgroundColor: Colors.white.withOpacity(0.04),
-                            selectedColor: AppColors.primaryStart.withOpacity(0.75),
-                            checkmarkColor: Colors.white,
-                            labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : Colors.grey[400],
-                              fontSize: 13,
-                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                              side: BorderSide(
-                                color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.08), 
-                                width: 0.5
-                              )
-                            ),
-                            visualDensity: VisualDensity.compact,
+                ),
+                
+                const SizedBox(height: 12),
+                
+                // Filter chips — floating pills
+                SizedBox(
+                  height: 48,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    primary: false,
+                    children: ["All", "Tracks", "Albums", "Artists"].map((filter) {
+                      final isSelected = _selectedFilter == filter;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8, bottom: 8),
+                        child: FilterChip(
+                          label: Text(filter),
+                          selected: isSelected,
+                          onSelected: (_) => setState(() => _selectedFilter = filter),
+                          backgroundColor: Colors.white.withOpacity(0.04),
+                          selectedColor: AppColors.primaryStart.withOpacity(0.75),
+                          checkmarkColor: Colors.white,
+                          labelStyle: TextStyle(
+                            color: isSelected ? Colors.white : Colors.grey[400],
+                            fontSize: 13,
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal
                           ),
-                        );
-                      }).toList(),
-                    ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: BorderSide(
+                              color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.08), 
+                              width: 0.5
+                            )
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      );
+                    }).toList(),
                   ),
-                  const SizedBox(height: 4), 
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],

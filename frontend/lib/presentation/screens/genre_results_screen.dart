@@ -17,7 +17,6 @@ import '../widgets/network_image_with_fallback.dart';
 import '../../core/utils/string_utils.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
-import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/glass_surface.dart';
 import '../../core/utils/responsive.dart';
 import '../../core/utils/thumbnail_prefetcher.dart';
@@ -126,7 +125,9 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: CustomScrollView(
+      body: Stack(
+        children: [
+          CustomScrollView(
         controller: _scrollController,
         slivers: [
           _buildSliverAppBar(),
@@ -237,6 +238,31 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
           ],
         ],
       ),
+
+          // Top fade gradient
+          const TopFadeGradient(height: 110),
+
+          // Floating controls
+          FloatingTopControls(
+            showScrolledPill: _showTitle,
+            topPadding: MediaQuery.of(context).padding.top,
+            defaultControls: Row(
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                GlassCircleButton(
+                  icon: Icons.arrow_back_ios_new,
+                  iconSize: 18,
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            scrolledPill: ScrolledTopPill(
+              title: widget.genreSlug,
+              onBack: () => Navigator.pop(context),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -250,108 +276,70 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       backgroundColor: Colors.transparent,
       forceMaterialTransparency: true,
       elevation: 0,
-      iconTheme: const IconThemeData(color: Colors.white),
-      leading: Padding(
-        padding: const EdgeInsets.only(left: 4),
-        child: GlassCircleButton(
-          icon: Icons.arrow_back,
-          onPressed: () => Navigator.pop(context),
-          enableBlur: !_showTitle,
-        ),
-      ),
-      title: AnimatedOpacity(
-        duration: const Duration(milliseconds: 200),
-        opacity: _showTitle ? 1.0 : 0.0,
-        child: Text(
-          widget.genreSlug,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
-        ),
-      ),
-      flexibleSpace: Stack(
-        fit: StackFit.expand,
-        children: [
-          FlexibleSpaceBar(
-            collapseMode: CollapseMode.pin,
-            background: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: widget.gradientColors.length > 1
-                      ? widget.gradientColors
-                      : [widget.gradientColors.first, Colors.black],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+      automaticallyImplyLeading: false,
+      leadingWidth: 0,
+      leading: const SizedBox.shrink(),
+      titleSpacing: 0,
+      title: null,
+      flexibleSpace: FlexibleSpaceBar(
+        collapseMode: CollapseMode.pin,
+        background: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: widget.gradientColors.length > 1
+                  ? widget.gradientColors
+                  : [widget.gradientColors.first, Colors.black],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withOpacity(0.1),
+                      Colors.black.withOpacity(0.4),
+                      Colors.black.withOpacity(0.8),
+                      AppColors.background,
+                    ],
+                    stops: const [0.0, 0.5, 0.85, 1.0],
+                  ),
                 ),
               ),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                   // Gradient Scrim (Darkens bottom for text legibility)
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withOpacity(0.1),
-                          Colors.black.withOpacity(0.4),
-                          Colors.black.withOpacity(0.8),
-                          AppColors.background,
-                        ],
-                        stops: const [0.0, 0.5, 0.85, 1.0],
+              Positioned(
+                bottom: 24,
+                left: Responsive.spacing(context),
+                right: Responsive.spacing(context),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.music_note_rounded, size: 80, color: Colors.white.withOpacity(0.9)),
+                    const SizedBox(height: 8),
+                    Text(
+                      widget.genreSlug,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'Roboto',
+                        fontSize: Responsive.fontSize(context, 48, min: 36, max: 64),
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                        height: 1.1,
+                        shadows: [Shadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4))]
                       ),
                     ),
-                  ),
-                  
-                  // Genre Title Positioned at Bottom-Left (Like Artist Detail)
-                  Positioned(
-                    bottom: 24,
-                    left: Responsive.spacing(context),
-                    right: Responsive.spacing(context),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.music_note_rounded, size: 80, color: Colors.white.withOpacity(0.9)),
-                        const SizedBox(height: 8),
-                        Text(
-                          widget.genreSlug,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontFamily: 'Roboto',
-                            fontSize: Responsive.fontSize(context, 48, min: 36, max: 64),
-                            fontWeight: FontWeight.w900,
-                            color: Colors.white,
-                            height: 1.1,
-                            shadows: [Shadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4))]
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
-
-          // Sticky Glass Header
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: MediaQuery.of(context).padding.top + kToolbarHeight,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: _showTitle ? 1.0 : 0.0,
-              child: BlackGlassBlurSurface(
-                 height: MediaQuery.of(context).padding.top + kToolbarHeight,
-                 width: MediaQuery.of(context).size.width,
-                 bottomBorder: true,
-                 child: const SizedBox(),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

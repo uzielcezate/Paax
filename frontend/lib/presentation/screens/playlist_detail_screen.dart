@@ -9,7 +9,6 @@ import '../../core/theme/app_colors.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
 import '../widgets/track_list_tile.dart';
-import '../widgets/black_glass_blur_surface.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/bottom_content_padding.dart';
 import 'package:share_plus/share_plus.dart';
@@ -159,72 +158,28 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: CustomScrollView(
-        controller: _scrollController,
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 320,
-            pinned: true,
-            backgroundColor: Colors.transparent, // Transparent for glass effect
-            forceMaterialTransparency: true,
-            elevation: 0,
-            // Fade-in title on scroll
-            title: AnimatedOpacity(
-               duration: const Duration(milliseconds: 200),
-               opacity: _showTitle ? 1.0 : 0.0,
-               child: Text(
-                 _isEditMode ? 'Edit Order' : currentPlaylist.name,
-                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-               ),
-            ),
-            leading: _isEditMode
-                ? const SizedBox.shrink()
-                : Padding(
-                    padding: const EdgeInsets.only(left: 4),
-                    child: GlassCircleButton(
-                      icon: Icons.arrow_back,
-                      onPressed: () => Navigator.pop(context),
-                      enableBlur: !_showTitle,
-                    ),
-                  ),
-            actions: [
-              if (_isEditMode)
-                TextButton(
-                  onPressed: _exitEditMode,
-                  child: const Text(
-                    'Done',
-                    style: TextStyle(
-                      color: AppColors.primaryStart,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                )
-              else
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: GlassMenuButton(
-                    enableBlur: !_showTitle,
-                    child: OverflowMenu(
-                      type: MenuType.playlist, 
-                      playlist: currentPlaylist,
-                      onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
-                      onDelete: () => _confirmDelete(context, library, currentPlaylist!),
-                      onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
-                    ),
-                  ),
-                ),
-            ],
-            flexibleSpace: Stack(
-              fit: StackFit.expand,
-              children: [
-                FlexibleSpaceBar(
+      body: Stack(
+        children: [
+          CustomScrollView(
+            controller: _scrollController,
+            slivers: [
+              SliverAppBar(
+                expandedHeight: 320,
+                pinned: true,
+                backgroundColor: Colors.transparent,
+                forceMaterialTransparency: true,
+                elevation: 0,
+                automaticallyImplyLeading: false,
+                leadingWidth: 0,
+                leading: const SizedBox.shrink(),
+                titleSpacing: 0,
+                title: null,
+                flexibleSpace: FlexibleSpaceBar(
                   collapseMode: CollapseMode.pin,
                   background: ClipRect(
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        // Full width cover
                         FittedBox(
                           fit: BoxFit.cover,
                           child: SizedBox(
@@ -240,8 +195,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                             ),
                           ),
                         ),
-                        
-                        // Gradient Overlay
                         Container(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
@@ -255,29 +208,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                       ],
                     ),
                   ),
-                  centerTitle: true,
                 ),
-                
-                // Glass Blur Layer (Controlled by Scroll)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: MediaQuery.of(context).padding.top + kToolbarHeight,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 200),
-                    opacity: _showTitle ? 1.0 : 0.0,
-                    child: BlackGlassBlurSurface(
-                       height: MediaQuery.of(context).padding.top + kToolbarHeight,
-                       width: MediaQuery.of(context).size.width,
-                       bottomBorder: true,
-                       child: Container(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+              ),
           
           // Header Info & Actions
           SliverToBoxAdapter(
@@ -498,6 +430,75 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             ),
             
           const SliverToBoxAdapter(child: BottomContentPadding()),
+        ],
+      ),
+
+      // Top fade gradient
+      const TopFadeGradient(height: 110),
+
+      // Floating controls
+      FloatingTopControls(
+        showScrolledPill: _showTitle,
+        topPadding: MediaQuery.of(context).padding.top,
+        defaultControls: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            if (!_isEditMode)
+              GlassCircleButton(
+                icon: Icons.arrow_back_ios_new,
+                iconSize: 18,
+                onPressed: () => Navigator.pop(context),
+              )
+            else
+              const SizedBox(width: 38),
+            if (_isEditMode)
+              GestureDetector(
+                onTap: _exitEditMode,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withOpacity(0.14), width: 0.5),
+                  ),
+                  child: const Text('Done', style: TextStyle(color: AppColors.primaryStart, fontWeight: FontWeight.bold, fontSize: 15)),
+                ),
+              )
+            else
+              GlassMenuButton(
+                child: OverflowMenu(
+                  type: MenuType.playlist,
+                  playlist: currentPlaylist,
+                  onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
+                  onDelete: () => _confirmDelete(context, library, currentPlaylist!),
+                  onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                ),
+              ),
+          ],
+        ),
+        scrolledPill: ScrolledTopPill(
+          title: _isEditMode ? 'Edit Order' : currentPlaylist.name,
+          onBack: () {
+            if (_isEditMode) {
+              _exitEditMode();
+            } else {
+              Navigator.pop(context);
+            }
+          },
+          trailing: _isEditMode
+              ? GestureDetector(
+                  onTap: _exitEditMode,
+                  child: const Text('Done', style: TextStyle(color: AppColors.primaryStart, fontWeight: FontWeight.bold, fontSize: 14)),
+                )
+              : OverflowMenu(
+                  type: MenuType.playlist,
+                  playlist: currentPlaylist,
+                  onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
+                  onDelete: () => _confirmDelete(context, library, currentPlaylist!),
+                  onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                ),
+        ),
+      ),
         ],
       ),
     );

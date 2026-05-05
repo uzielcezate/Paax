@@ -2,19 +2,16 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 /// ─── Glass Design Tokens ────────────────────────────────────────────────────
-/// Shared constants for the iOS-style white frosted glass system.
 class GlassTokens {
   GlassTokens._();
 
-  // Blur
   static const double blurSigma = 14.0;
 
-  // Colors — slightly more transparent than Phase 4 v1
+  // Slightly transparent white — subtle, not too white
   static Color fill = Colors.white.withOpacity(0.07);
   static Color border = Colors.white.withOpacity(0.14);
   static Color fillLight = Colors.white.withOpacity(0.04);
 
-  // Shadows
   static List<BoxShadow> softShadow = [
     BoxShadow(
       color: Colors.black.withOpacity(0.22),
@@ -25,8 +22,6 @@ class GlassTokens {
 }
 
 /// ─── GlassSurface ───────────────────────────────────────────────────────────
-/// Base frosted glass container — clips content and applies backdrop blur
-/// with a translucent white tint. Used as building block for pills/circles.
 class GlassSurface extends StatelessWidget {
   final Widget child;
   final double? width;
@@ -89,7 +84,6 @@ class GlassSurface extends StatelessWidget {
 }
 
 /// ─── GlassPill ──────────────────────────────────────────────────────────────
-/// A capsule-shaped frosted glass surface (fully rounded ends).
 class GlassPill extends StatelessWidget {
   final Widget child;
   final double? width;
@@ -123,10 +117,6 @@ class GlassPill extends StatelessWidget {
 }
 
 /// ─── GlassCircleButton ──────────────────────────────────────────────────────
-/// A circular frosted glass button — used for back/menu icons in top bars.
-///
-/// Set [enableBlur] to false when this button is already inside a parent glass
-/// surface (e.g. scrolled pill top bar) to avoid double-blur stacking.
 class GlassCircleButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onPressed;
@@ -164,7 +154,6 @@ class GlassCircleButton extends StatelessWidget {
 }
 
 /// ─── GlassMenuButton ────────────────────────────────────────────────────────
-/// Wraps a child widget (like OverflowMenu) inside a circular glass surface.
 class GlassMenuButton extends StatelessWidget {
   final Widget child;
   final double size;
@@ -190,8 +179,147 @@ class GlassMenuButton extends StatelessWidget {
   }
 }
 
+/// ─── ScrolledTopPill ────────────────────────────────────────────────────────
+/// Floating pill for the scrolled state: [back | title | trailing].
+/// Single BackdropFilter — no double blur.
+class ScrolledTopPill extends StatelessWidget {
+  final String title;
+  final VoidCallback onBack;
+  final Widget? trailing;
+
+  const ScrolledTopPill({
+    super.key,
+    required this.title,
+    required this.onBack,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPill(
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: onBack,
+            behavior: HitTestBehavior.opaque,
+            child: const SizedBox(
+              width: 38,
+              height: 46,
+              child: Center(
+                child: Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+          ),
+          if (trailing != null)
+            SizedBox(width: 38, height: 46, child: Center(child: trailing!))
+          else
+            const SizedBox(width: 38),
+        ],
+      ),
+    );
+  }
+}
+
+/// ─── FloatingTopControls ────────────────────────────────────────────────────
+/// Overlay widget that crossfades between separate circles (default)
+/// and a single scrolled pill. Prevents double-blur by only rendering
+/// one set of controls at a time.
+class FloatingTopControls extends StatelessWidget {
+  final bool showScrolledPill;
+  final Widget defaultControls;
+  final Widget scrolledPill;
+  final double topPadding;
+
+  const FloatingTopControls({
+    super.key,
+    required this.showScrolledPill,
+    required this.defaultControls,
+    required this.scrolledPill,
+    required this.topPadding,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: topPadding + 6,
+      left: 12,
+      right: 12,
+      child: Stack(
+        children: [
+          // Default circles (fade out on scroll)
+          AnimatedOpacity(
+            opacity: showScrolledPill ? 0.0 : 1.0,
+            duration: const Duration(milliseconds: 200),
+            child: IgnorePointer(
+              ignoring: showScrolledPill,
+              child: defaultControls,
+            ),
+          ),
+          // Scrolled pill (fade in on scroll)
+          AnimatedOpacity(
+            opacity: showScrolledPill ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            child: IgnorePointer(
+              ignoring: !showScrolledPill,
+              child: scrolledPill,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// ─── TopFadeGradient ────────────────────────────────────────────────────────
+/// Strong dark fade from top edge — content disappears under top controls.
+class TopFadeGradient extends StatelessWidget {
+  final double height;
+
+  const TopFadeGradient({super.key, this.height = 120});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Container(
+          height: height,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Color(0xCC0B0B10),
+                Color(0x660B0B10),
+                Color(0x000B0B10),
+              ],
+              stops: [0.0, 0.5, 1.0],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// ─── EdgeGradient ───────────────────────────────────────────────────────────
-/// Fade gradient for top/bottom edges so content dissolves behind chrome.
 class EdgeGradient extends StatelessWidget {
   final bool fromTop;
   final double height;
@@ -212,8 +340,8 @@ class EdgeGradient extends StatelessWidget {
             begin: fromTop ? Alignment.topCenter : Alignment.bottomCenter,
             end: fromTop ? Alignment.bottomCenter : Alignment.topCenter,
             colors: const [
-              Color(0xFF0B0B10), // AppColors.background — full opacity
-              Color(0x000B0B10), // fully transparent
+              Color(0xFF0B0B10),
+              Color(0x000B0B10),
             ],
           ),
         ),

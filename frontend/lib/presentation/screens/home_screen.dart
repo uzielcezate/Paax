@@ -124,38 +124,36 @@ class _HomeScreenState extends State<HomeScreen> {
     
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: CustomScrollView(
-          controller: _scrollController,
-          slivers: [
-             SliverToBoxAdapter(child: _buildHeader(context, greeting, userName)),
-             
-             if (_personalizationLoaded && _forYouTracks.isNotEmpty)
-                SliverToBoxAdapter(child: _buildTrackRow(context, _forYouTitle, _forYouTracks)),
-             
-             // Lazy build the rest of the sections
-             SliverList(
-               delegate: SliverChildBuilderDelegate(
-                 (context, index) {
-                    switch (index) {
-                      case 0: return _buildCategorySection("Global Top Charts", _globalCharts);
-                      case 1: return _buildCategorySection("US Top Charts", _usCharts);
-                      case 2: return _buildCategorySection("Mexico Top Charts", _mxCharts);
-                      case 3: return _buildCategorySection("Pop Essentials", _popContent);
-                      case 4: return _buildCategorySection("Rock Classics & New", _rockContent);
-                      case 5: return _buildCategorySection("Latin & Reggaeton", _latinContent);
-                      case 6: return _buildCategorySection("Hip-Hop & Rap", _hipHopContent);
-                      case 7: return _buildCategorySection("Indie & Alternative", _indieContent);
-                      case 8: return const BottomContentPadding();
-                      default: return null;
-                    }
-                 },
-                 childCount: 9,
-               ),
+      body: CustomScrollView(
+        controller: _scrollController,
+        slivers: [
+           SliverToBoxAdapter(child: SizedBox(height: MediaQuery.of(context).padding.top)),
+           SliverToBoxAdapter(child: _buildHeader(context, greeting, userName)),
+           
+           if (_personalizationLoaded && _forYouTracks.isNotEmpty)
+              SliverToBoxAdapter(child: _buildTrackRow(context, _forYouTitle, _forYouTracks)),
+           
+           // Lazy build the rest of the sections
+           SliverList(
+             delegate: SliverChildBuilderDelegate(
+               (context, index) {
+                  switch (index) {
+                    case 0: return _buildCategorySection("Global Top Charts", _globalCharts);
+                    case 1: return _buildCategorySection("US Top Charts", _usCharts);
+                    case 2: return _buildCategorySection("Mexico Top Charts", _mxCharts);
+                    case 3: return _buildCategorySection("Pop Essentials", _popContent);
+                    case 4: return _buildCategorySection("Rock Classics & New", _rockContent);
+                    case 5: return _buildCategorySection("Latin & Reggaeton", _latinContent);
+                    case 6: return _buildCategorySection("Hip-Hop & Rap", _hipHopContent);
+                    case 7: return _buildCategorySection("Indie & Alternative", _indieContent);
+                    case 8: return const BottomContentPadding();
+                    default: return null;
+                  }
+               },
+               childCount: 9,
              ),
-          ],
-        ),
+           ),
+        ],
       ),
     );
   }
