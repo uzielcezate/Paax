@@ -5,7 +5,7 @@ import '../../core/theme/app_colors.dart';
 import '../state/playback_controller.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/hidden_video_player.dart';
-import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import 'home_screen.dart';
 import 'search_screen.dart';
 import 'library_screen.dart';
@@ -129,6 +129,7 @@ class MainWrapperState extends State<MainWrapper> {
     // Listen to playback state to adjust padding
     final currentTrack = context.select<PlaybackController, dynamic>((c) => c.currentTrack);
     final bool hasTrack = currentTrack != null;
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
     
     return WillPopScope(
       onWillPop: _onWillPop,
@@ -168,7 +169,30 @@ class MainWrapperState extends State<MainWrapper> {
                  );
               }).toList(),
             ),
+
+            // ── Bottom edge gradient ──
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: Container(
+                  height: hasTrack ? 180 : 120,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        Color(0xE00B0B10),
+                        Color(0x000B0B10),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
             
+            // ── Mini Player + Nav Bar ──
             Positioned(
               left: 0, 
               right: 0,
@@ -181,41 +205,42 @@ class MainWrapperState extends State<MainWrapper> {
                      curve: Curves.easeInOut,
                      child: hasTrack ? const MiniPlayer() : const SizedBox.shrink(),
                    ),
-                   _buildBottomNav(),
+                   _buildFloatingNavBar(bottomPadding),
                 ],
               ),
-            )
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildBottomNav() {
-    // GestureDetector ensures touches don't pass through the nav bar to content behind
-    return GestureDetector(
-      onTap: () {},
-      behavior: HitTestBehavior.opaque,
-      child: BlackGlassBlurSurface(
-        height: 80,
-        topBorder: true,
+  Widget _buildFloatingNavBar(double bottomSafePadding) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        bottom: bottomSafePadding + 8,
+        top: 4,
+      ),
+      child: GlassPill(
+        height: 60,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             _navItem(0, Icons.home_rounded, "Home"),
             _navItem(1, Icons.search_rounded, "Search"),
             _navItem(2, Icons.library_music_rounded, "Library"),
             _navItem(3, Icons.person_rounded, "Profile"),
           ],
-        )
+        ),
       ),
     );
   }
   
   Widget _navItem(int index, IconData icon, String label) {
     bool isSelected = _currentIndex == index;
-    // Expanded increases the hit target to fill the row
     return Expanded(
       child: GestureDetector(
         onTap: () => _onTabTapped(index),
@@ -226,11 +251,11 @@ class MainWrapperState extends State<MainWrapper> {
           children: [
             Icon(
               icon,
-              color: isSelected ? Colors.white : Colors.white24,
-              size: 28,
+              color: isSelected ? Colors.white : Colors.white38,
+              size: 24,
             ),
             if (isSelected) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 3),
               Container(
                 width: 4, height: 4,
                 decoration: const BoxDecoration(

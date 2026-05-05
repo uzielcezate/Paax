@@ -9,6 +9,7 @@ import '../state/library_controller.dart';
 import '../../data/repositories/music_repository_impl.dart';
 import '../../domain/repositories/music_repository.dart';
 import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/music_card.dart';
 import '../widgets/add_to_playlist_sheet.dart';
 
@@ -76,9 +77,12 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                opacity: _showTitle ? 1.0 : 0.0,
                child: Text(widget.track.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
              ),
-             leading: IconButton(
-               icon: const Icon(Icons.arrow_back, color: Colors.white),
-               onPressed: () => Navigator.pop(context),
+             leading: Padding(
+               padding: const EdgeInsets.only(left: 4),
+               child: GlassCircleButton(
+                 icon: Icons.arrow_back,
+                 onPressed: () => Navigator.pop(context),
+               ),
              ),
              flexibleSpace: Stack(
                fit: StackFit.expand,

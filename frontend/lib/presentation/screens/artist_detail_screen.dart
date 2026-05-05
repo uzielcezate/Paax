@@ -14,7 +14,8 @@ import '../state/playback_controller.dart';
 import '../widgets/music_card.dart';
 import 'album_detail_screen.dart';
 import '../widgets/black_glass_blur_surface.dart';
-import '../widgets/mini_player.dart'; 
+import '../widgets/glass_surface.dart';
+import '../widgets/mini_player.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/network_image_with_fallback.dart';
@@ -305,9 +306,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         ),
         const SizedBox(width: 8),
       ],
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
-        onPressed: () => Navigator.pop(context),
+      leading: Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: GlassCircleButton(
+          icon: Icons.arrow_back,
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       flexibleSpace: Stack(
         fit: StackFit.expand,

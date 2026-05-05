@@ -10,6 +10,7 @@ import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/bottom_content_padding.dart';
 import 'package:share_plus/share_plus.dart';
 import '../widgets/playlist_cover.dart';
@@ -178,9 +179,12 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             ),
             leading: _isEditMode
                 ? const SizedBox.shrink()
-                : IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+                : Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: GlassCircleButton(
+                      icon: Icons.arrow_back,
+                      onPressed: () => Navigator.pop(context),
+                    ),
                   ),
             actions: [
               if (_isEditMode)

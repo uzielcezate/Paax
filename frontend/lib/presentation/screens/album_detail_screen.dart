@@ -13,6 +13,7 @@ import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/track_list_tile.dart'; 
 import '../widgets/overflow_menu.dart';
 import '../widgets/bottom_content_padding.dart';
@@ -283,9 +284,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     opacity: _showTitle ? 1.0 : 0.0,
                     child: Text(_title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                   ),
-                  leading: IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+                  leading: Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: GlassCircleButton(
+                      icon: Icons.arrow_back,
+                      onPressed: () => Navigator.pop(context),
+                    ),
                   ),
                   flexibleSpace: Stack(
                     fit: StackFit.expand,
@@ -340,11 +344,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     ],
                   ),
                   actions: [
-                     if (_isSingleMode) 
-                        OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track)
-                     else
-                        OverflowMenu(type: MenuType.album, album: widget.album!),
-                     const SizedBox(width: 8),
+                     Padding(
+                       padding: const EdgeInsets.only(right: 4),
+                       child: _isSingleMode 
+                         ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track)
+                         : OverflowMenu(type: MenuType.album, album: widget.album!),
+                     ),
                   ],
                 ),
                 
