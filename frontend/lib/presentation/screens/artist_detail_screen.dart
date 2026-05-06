@@ -24,6 +24,7 @@ import '../widgets/app_image.dart';
 import '../../core/image/lh3_url_builder.dart';
 import '../../core/image/image_pipeline.dart';
 import 'artist_discography_screen.dart';
+import '../widgets/dynamic_background.dart';
 
 import '../../core/utils/responsive.dart';
 import '../../core/utils/string_utils.dart';
@@ -215,6 +216,9 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
+          // Dynamic ambient background from artist image
+          DynamicBackground(imageUrl: widget.pictureUrl),
+
           CustomScrollView(
             controller: _scrollController,
             slivers: [
@@ -366,17 +370,17 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                  // Gradient Scrim
                  Container(
                    decoration: BoxDecoration(
-                     gradient: LinearGradient(
-                       begin: Alignment.topCenter,
-                       end: Alignment.bottomCenter,
-                       colors: [
-                         Colors.transparent,
-                         Colors.black.withOpacity(0.2),
-                         Colors.black.withOpacity(0.8),
-                         AppColors.background,
-                       ],
-                       stops: const [0.4, 0.6, 0.9, 1.0],
-                     ),
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withOpacity(0.15),
+                          Colors.black.withOpacity(0.6),
+                          Colors.black.withOpacity(0.85),
+                        ],
+                        stops: const [0.3, 0.55, 0.85, 1.0],
+                      ),
                    ),
                  ),
 

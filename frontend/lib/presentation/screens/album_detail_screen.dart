@@ -21,6 +21,7 @@ import '../widgets/app_image.dart';
 import '../../core/image/lh3_url_builder.dart';
 import '../../core/utils/string_utils.dart';
 import 'artist_detail_screen.dart';
+import '../widgets/dynamic_background.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
   final SavedAlbum? album;
@@ -269,6 +270,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
+            // Dynamic ambient background from album artwork
+            DynamicBackground(imageUrl: effectiveArtworkUrl),
+
             CustomScrollView(
               controller: _scrollController,
               slivers: [
@@ -301,8 +305,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, AppColors.background.withOpacity(0.1), AppColors.background],
-                              stops: const [0.0, 0.7, 1.0]
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withOpacity(0.1),
+                                Colors.black.withOpacity(0.6),
+                                Colors.black.withOpacity(0.85),
+                              ],
+                              stops: const [0.0, 0.5, 0.85, 1.0]
                             ),
                           ),
                         ),

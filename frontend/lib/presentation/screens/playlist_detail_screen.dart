@@ -17,6 +17,7 @@ import '../widgets/add_to_playlist_sheet.dart';
 import '../widgets/library_headers.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/sort_bottom_sheet.dart';
+import '../widgets/dynamic_background.dart';
 
 class PlaylistDetailScreen extends StatefulWidget {
   final Playlist playlist;
@@ -160,6 +161,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
+          // Dynamic ambient background from playlist first track artwork
+          DynamicBackground(
+            imageUrl: tracks.isNotEmpty ? tracks.first.artworkUrl : null,
+          ),
+
           CustomScrollView(
             controller: _scrollController,
             slivers: [
@@ -200,8 +206,13 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, AppColors.background.withOpacity(0.1), AppColors.background],
-                              stops: const [0.0, 0.7, 1.0]
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withOpacity(0.1),
+                                Colors.black.withOpacity(0.6),
+                                Colors.black.withOpacity(0.85),
+                              ],
+                              stops: const [0.0, 0.5, 0.85, 1.0]
                             ),
                           ),
                         ),
