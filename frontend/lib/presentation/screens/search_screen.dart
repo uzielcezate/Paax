@@ -86,9 +86,9 @@ class _SearchScreenState extends State<SearchScreen> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0xF0000000),
-                      Color(0xBB000000),
-                      Color(0x66000000),
+                      Color(0xFF000000),
+                      Color(0xDD000000),
+                      Color(0x80000000),
                       Color(0x00000000),
                     ],
                     stops: [0.0, 0.35, 0.65, 1.0],

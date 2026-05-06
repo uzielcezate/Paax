@@ -209,7 +209,7 @@ class GlassCircleButton extends StatelessWidget {
     super.key,
     required this.icon,
     required this.onPressed,
-    this.size = 38,
+    this.size = 46,
     this.iconSize = 18,
     this.iconColor = Colors.white,
     this.enableBlur = true,
@@ -244,7 +244,7 @@ class GlassMenuButton extends StatelessWidget {
   const GlassMenuButton({
     super.key,
     required this.child,
-    this.size = 38,
+    this.size = 46,
     this.enableBlur = true,
   });
 
@@ -377,13 +377,9 @@ class FloatingTopControls extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             child: IgnorePointer(
               ignoring: showScrolledPill,
-              child: Padding(
-                // Match ScrolledTopPill's internal horizontal: 4 padding
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: SizedBox(
-                  height: 46,
-                  child: defaultControls,
-                ),
+              child: SizedBox(
+                height: 46,
+                child: defaultControls,
               ),
             ),
           ),

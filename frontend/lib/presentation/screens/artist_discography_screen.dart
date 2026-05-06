@@ -88,8 +88,30 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
             ],
           ),
 
-          // ── Top fade gradient — covers past chips ──────────────
-          const TopFadeGradient(height: 140),
+          // ── Top fade gradient — stronger for chip visibility ──
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: 150,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0xFF000000),
+                      Color(0xDD000000),
+                      Color(0x80000000),
+                      Color(0x00000000),
+                    ],
+                    stops: [0.0, 0.3, 0.6, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
 
           // ── Pinned floating controls ──────────────────────────
           Positioned(
