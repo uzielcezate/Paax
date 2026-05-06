@@ -343,10 +343,10 @@ class ScrolledTopPill extends StatelessWidget {
 /// and a single scrolled pill. Prevents double-blur by only rendering
 /// one set of controls at a time.
 ///
-/// Both states render inside a fixed 46px height container so there is
-/// zero vertical jump when switching between circles and pill.
-/// The Positioned container uses the same left: 12, right: 12 as the
-/// pill's internal padding, so circle buttons align with pill buttons.
+/// Both states render inside a fixed 46px height container.
+/// The defaultControls are padded with 4px horizontal to match the
+/// ScrolledTopPill's internal padding — so circle icons sit at exactly
+/// the same x-position as the pill's back/trailing buttons.
 class FloatingTopControls extends StatelessWidget {
   final bool showScrolledPill;
   final Widget defaultControls;
@@ -377,9 +377,13 @@ class FloatingTopControls extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             child: IgnorePointer(
               ignoring: showScrolledPill,
-              child: SizedBox(
-                height: 46,
-                child: defaultControls,
+              child: Padding(
+                // Match ScrolledTopPill's internal horizontal: 4 padding
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: SizedBox(
+                  height: 46,
+                  child: defaultControls,
+                ),
               ),
             ),
           ),
