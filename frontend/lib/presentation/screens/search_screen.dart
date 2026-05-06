@@ -73,25 +73,25 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ),
           
-          // Strong top fade gradient — covers status bar down past chips
+          // Deep top fade gradient — pure black
           Positioned(
             top: 0,
             left: 0,
             right: 0,
             child: IgnorePointer(
               child: Container(
-                height: headerHeight + 20,
+                height: headerHeight + 24,
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0xDD0B0B10),
-                      Color(0x990B0B10),
-                      Color(0x440B0B10),
-                      Color(0x000B0B10),
+                      Color(0xE6000000),
+                      Color(0xAA000000),
+                      Color(0x55000000),
+                      Color(0x00000000),
                     ],
-                    stops: [0.0, 0.45, 0.75, 1.0],
+                    stops: [0.0, 0.4, 0.7, 1.0],
                   ),
                 ),
               ),
@@ -108,13 +108,14 @@ class _SearchScreenState extends State<SearchScreen> {
               children: [
                 // Back button + Search pill
                 SizedBox(
-                  height: 48,
+                  height: 46,
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                        GlassCircleButton(
                          icon: Icons.arrow_back_ios_new,
                          iconSize: 18,
-                         size: 40,
+                         size: 38,
                          onPressed: () {
                            final mainWrapper = MainWrapper.shellKey.currentState;
                            if (mainWrapper != null) {
@@ -127,10 +128,8 @@ class _SearchScreenState extends State<SearchScreen> {
                        const SizedBox(width: 10),
                        Expanded(
                          child: GlassSurface(
-                           height: 44,
-                           borderRadius: BorderRadius.circular(22),
-                           showShadow: false,
-                           overrideFill: Colors.white.withOpacity(0.06),
+                           height: 42,
+                           borderRadius: BorderRadius.circular(21),
                            child: TextField(
                               controller: _textController,
                               style: const TextStyle(color: Colors.white, fontSize: 15),
@@ -140,7 +139,7 @@ class _SearchScreenState extends State<SearchScreen> {
                                  prefixIcon: Icon(Icons.search, color: Colors.white.withOpacity(0.5), size: 20),
                                  filled: false,
                                  border: InputBorder.none,
-                                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                                  isDense: true,
                                  suffixIcon: ValueListenableBuilder<bool>(
                                    valueListenable: _hasText,
@@ -167,9 +166,9 @@ class _SearchScreenState extends State<SearchScreen> {
                 
                 const SizedBox(height: 12),
                 
-                // Filter chips — floating pills
+                // Filter chips — glass style
                 SizedBox(
-                  height: 48,
+                  height: 40,
                   child: ListView(
                     scrollDirection: Axis.horizontal,
                     physics: const ClampingScrollPhysics(),
@@ -177,27 +176,32 @@ class _SearchScreenState extends State<SearchScreen> {
                     children: ["All", "Tracks", "Albums", "Artists"].map((filter) {
                       final isSelected = _selectedFilter == filter;
                       return Padding(
-                        padding: const EdgeInsets.only(right: 8, bottom: 8),
-                        child: FilterChip(
-                          label: Text(filter),
-                          selected: isSelected,
-                          onSelected: (_) => setState(() => _selectedFilter = filter),
-                          backgroundColor: Colors.white.withOpacity(0.04),
-                          selectedColor: AppColors.primaryStart.withOpacity(0.75),
-                          checkmarkColor: Colors.white,
-                          labelStyle: TextStyle(
-                            color: isSelected ? Colors.white : Colors.grey[400],
-                            fontSize: 13,
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal
+                        padding: const EdgeInsets.only(right: 8),
+                        child: GestureDetector(
+                          onTap: () => setState(() => _selectedFilter = filter),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? Colors.white
+                                  : Colors.white.withOpacity(0.045),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: isSelected
+                                    ? Colors.white
+                                    : Colors.white.withOpacity(0.12),
+                                width: 0.5,
+                              ),
+                            ),
+                            child: Text(
+                              filter,
+                              style: TextStyle(
+                                color: isSelected ? Colors.black : Colors.white.withOpacity(0.75),
+                                fontSize: 13,
+                                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                              ),
+                            ),
                           ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            side: BorderSide(
-                              color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.08), 
-                              width: 0.5
-                            )
-                          ),
-                          visualDensity: VisualDensity.compact,
                         ),
                       );
                     }).toList(),

@@ -241,6 +241,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             topPadding: MediaQuery.of(context).padding.top,
             defaultControls: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 GlassCircleButton(
                   icon: Icons.arrow_back_ios_new,

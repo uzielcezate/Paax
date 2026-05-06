@@ -248,6 +248,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
             topPadding: MediaQuery.of(context).padding.top,
             defaultControls: Row(
               mainAxisAlignment: MainAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 GlassCircleButton(
                   icon: Icons.arrow_back_ios_new,

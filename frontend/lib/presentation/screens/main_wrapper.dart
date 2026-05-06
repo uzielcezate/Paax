@@ -184,17 +184,18 @@ class MainWrapperState extends State<MainWrapper> {
               right: 0,
               child: IgnorePointer(
                 child: Container(
-                  height: 100,
+                  height: 110,
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
-                        Color(0xBB0B0B10),
-                        Color(0x550B0B10),
-                        Color(0x000B0B10),
+                        Color(0xE6000000),
+                        Color(0x88000000),
+                        Color(0x33000000),
+                        Color(0x00000000),
                       ],
-                      stops: [0.0, 0.45, 1.0],
+                      stops: [0.0, 0.35, 0.65, 1.0],
                     ),
                   ),
                 ),
@@ -208,17 +209,18 @@ class MainWrapperState extends State<MainWrapper> {
               bottom: 0,
               child: IgnorePointer(
                 child: Container(
-                  height: hasTrack ? 220 : 140,
+                  height: hasTrack ? 240 : 160,
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
                       colors: [
-                        Color(0xF50B0B10),
-                        Color(0x880B0B10),
-                        Color(0x000B0B10),
+                        Color(0xF5000000),
+                        Color(0xAA000000),
+                        Color(0x44000000),
+                        Color(0x00000000),
                       ],
-                      stops: [0.0, 0.45, 1.0],
+                      stops: [0.0, 0.35, 0.65, 1.0],
                     ),
                   ),
                 ),

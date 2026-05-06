@@ -69,69 +69,82 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final topPadding = MediaQuery.of(context).padding.top;
+    // Pill height (46) + spacing (6+12) + chips height (40) + spacing (12)
+    final fixedHeaderHeight = topPadding + 6 + 46 + 12 + 40 + 12;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
-          Column(
-            children: [
-              SizedBox(height: MediaQuery.of(context).padding.top + 54),
-              // ── Filter Chips ───────────────────────────────────────
-              Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: Responsive.spacing(context),
-                  vertical: 12,
-                ),
-                child: Row(
-                  children: List.generate(_filterLabels.length, (i) {
-                    final selected = _selectedFilter == i;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(_filterLabels[i]),
-                        selected: selected,
-                        onSelected: (_) => setState(() => _selectedFilter = i),
-                        selectedColor: Colors.white,
-                        backgroundColor: AppColors.surfaceLight,
-                        labelStyle: TextStyle(
-                          color: selected ? Colors.black : Colors.white,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          side: BorderSide(
-                            color:
-                                selected ? Colors.white : Colors.white12,
-                          ),
-                        ),
-                        showCheckmark: false,
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      ),
-                    );
-                  }),
-                ),
-              ),
-
-              // ── Content ────────────────────────────────────────────
-              Expanded(
-                child: _buildContent(),
-              ),
+          // ── Scrollable content ──────────────────────────────────
+          CustomScrollView(
+            slivers: [
+              // Spacer for fixed header
+              SliverToBoxAdapter(child: SizedBox(height: fixedHeaderHeight)),
+              // Content
+              SliverToBoxAdapter(child: _buildContent()),
+              const SliverToBoxAdapter(child: BottomContentPadding()),
             ],
           ),
 
-          // Top fade gradient
-          const TopFadeGradient(height: 100),
+          // ── Top fade gradient ──────────────────────────────────
+          const TopFadeGradient(height: 120),
 
-          // Floating top controls
+          // ── Pinned floating controls ──────────────────────────
           Positioned(
-            top: MediaQuery.of(context).padding.top + 6,
+            top: topPadding + 6,
             left: 12,
             right: 12,
-            child: ScrolledTopPill(
-              title: 'Discography',
-              onBack: () => Navigator.pop(context),
+            child: Column(
+              children: [
+                // Pill
+                ScrolledTopPill(
+                  title: 'Discography',
+                  onBack: () => Navigator.pop(context),
+                ),
+                const SizedBox(height: 12),
+                // Glass-style filter chips
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    children: List.generate(_filterLabels.length, (i) {
+                      final selected = _selectedFilter == i;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: GestureDetector(
+                          onTap: () => setState(() => _selectedFilter = i),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? Colors.white
+                                  : Colors.white.withOpacity(0.045),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: selected
+                                    ? Colors.white
+                                    : Colors.white.withOpacity(0.12),
+                                width: 0.5,
+                              ),
+                            ),
+                            child: Text(
+                              _filterLabels[i],
+                              style: TextStyle(
+                                color: selected ? Colors.black : Colors.white.withOpacity(0.75),
+                                fontSize: 13,
+                                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -156,10 +169,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
     }
 
     return ListView.builder(
-      padding: EdgeInsets.only(
-        left: Responsive.spacing(context),
-        right: Responsive.spacing(context),
-        bottom: BottomContentPadding.bottomHeight(context),
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.symmetric(
+        horizontal: Responsive.spacing(context),
       ),
       itemCount: releases.length,
       itemBuilder: (context, index) {
@@ -172,10 +185,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
   /// Builds the "All" tab with section headers.
   Widget _buildAllContent() {
     return ListView(
-      padding: EdgeInsets.only(
-        left: Responsive.spacing(context),
-        right: Responsive.spacing(context),
-        bottom: BottomContentPadding.bottomHeight(context),
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.symmetric(
+        horizontal: Responsive.spacing(context),
       ),
       children: [
         // Latest Release hero

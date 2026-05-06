@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  static const Color background = Color(0xFF0B0B10);
-  static const Color surface = Color(0xFF12121A);
-  static const Color surfaceLight = Color(0xFF1E1E28); // Slightly lighter for cards
+  static const Color background = Color(0xFF000000);
+  static const Color surface = Color(0xFF0A0A0F);
+  static const Color surfaceLight = Color(0xFF161620); // Slightly lighter for cards
   
   static const Color primaryStart = Color(0xFFFF9A00); // Amber/Orange
   static const Color primaryEnd = Color(0xFFFF0055); // Warm Pink/Magenta

@@ -5,18 +5,26 @@ import 'package:flutter/material.dart';
 class GlassTokens {
   GlassTokens._();
 
-  static const double blurSigma = 14.0;
+  // Stronger blur for true frosted-glass look
+  static const double blurSigma = 22.0;
 
-  // Slightly transparent white — subtle, not too white
-  static Color fill = Colors.white.withOpacity(0.07);
-  static Color border = Colors.white.withOpacity(0.14);
-  static Color fillLight = Colors.white.withOpacity(0.04);
+  // Very subtle white tint — clear frosted glass over pure black
+  static Color fill = Colors.white.withOpacity(0.045);
+  static Color border = Colors.white.withOpacity(0.12);
+  static Color fillLight = Colors.white.withOpacity(0.025);
 
+  // Subtle floating shadow — creates iOS-style depth
   static List<BoxShadow> softShadow = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.22),
-      blurRadius: 14,
-      offset: const Offset(0, 3),
+      color: Colors.black.withOpacity(0.35),
+      blurRadius: 20,
+      spreadRadius: -2,
+      offset: const Offset(0, 4),
+    ),
+    BoxShadow(
+      color: Colors.black.withOpacity(0.15),
+      blurRadius: 8,
+      offset: const Offset(0, 2),
     ),
   ];
 }
@@ -143,7 +151,7 @@ class GlassCircleButton extends StatelessWidget {
         width: size,
         height: size,
         borderRadius: BorderRadius.circular(size / 2),
-        showShadow: false,
+        showShadow: true, // Floating shadow for depth
         enableBlur: enableBlur,
         child: Center(
           child: Icon(icon, size: iconSize, color: iconColor),
@@ -172,7 +180,7 @@ class GlassMenuButton extends StatelessWidget {
       width: size,
       height: size,
       borderRadius: BorderRadius.circular(size / 2),
-      showShadow: false,
+      showShadow: true, // Floating shadow for depth
       enableBlur: enableBlur,
       child: Center(child: child),
     );
@@ -182,6 +190,8 @@ class GlassMenuButton extends StatelessWidget {
 /// ─── ScrolledTopPill ────────────────────────────────────────────────────────
 /// Floating pill for the scrolled state: [back | title | trailing].
 /// Single BackdropFilter — no double blur.
+/// Height = 46px to match circle button vertical center (38px circle sits
+/// centered within the same 46px row).
 class ScrolledTopPill extends StatelessWidget {
   final String title;
   final VoidCallback onBack;
@@ -239,6 +249,9 @@ class ScrolledTopPill extends StatelessWidget {
 /// Overlay widget that crossfades between separate circles (default)
 /// and a single scrolled pill. Prevents double-blur by only rendering
 /// one set of controls at a time.
+///
+/// Both states render inside a fixed 46px height container so there is
+/// zero vertical jump when switching between circles and pill.
 class FloatingTopControls extends StatelessWidget {
   final bool showScrolledPill;
   final Widget defaultControls;
@@ -259,7 +272,9 @@ class FloatingTopControls extends StatelessWidget {
       top: topPadding + 6,
       left: 12,
       right: 12,
+      height: 46, // Fixed height — matches ScrolledTopPill height
       child: Stack(
+        alignment: Alignment.center,
         children: [
           // Default circles (fade out on scroll)
           AnimatedOpacity(
@@ -267,7 +282,10 @@ class FloatingTopControls extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             child: IgnorePointer(
               ignoring: showScrolledPill,
-              child: defaultControls,
+              child: SizedBox(
+                height: 46, // Same height as pill
+                child: defaultControls,
+              ),
             ),
           ),
           // Scrolled pill (fade in on scroll)
@@ -286,7 +304,8 @@ class FloatingTopControls extends StatelessWidget {
 }
 
 /// ─── TopFadeGradient ────────────────────────────────────────────────────────
-/// Strong dark fade from top edge — content disappears under top controls.
+/// Deep dark fade from top edge — content disappears under top controls.
+/// Uses pure black base to match #000000 background.
 class TopFadeGradient extends StatelessWidget {
   final double height;
 
@@ -306,11 +325,12 @@ class TopFadeGradient extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Color(0xCC0B0B10),
-                Color(0x660B0B10),
-                Color(0x000B0B10),
+                Color(0xE6000000), // Very dark at top
+                Color(0x99000000),
+                Color(0x33000000),
+                Color(0x00000000),
               ],
-              stops: [0.0, 0.5, 1.0],
+              stops: [0.0, 0.35, 0.65, 1.0],
             ),
           ),
         ),
@@ -340,8 +360,8 @@ class EdgeGradient extends StatelessWidget {
             begin: fromTop ? Alignment.topCenter : Alignment.bottomCenter,
             end: fromTop ? Alignment.bottomCenter : Alignment.topCenter,
             colors: const [
-              Color(0xFF0B0B10),
-              Color(0x000B0B10),
+              Color(0xFF000000),
+              Color(0x00000000),
             ],
           ),
         ),

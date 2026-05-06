@@ -480,6 +480,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               topPadding: MediaQuery.of(context).padding.top,
               defaultControls: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   GlassCircleButton(
                     icon: Icons.arrow_back_ios_new,

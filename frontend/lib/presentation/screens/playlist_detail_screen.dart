@@ -442,6 +442,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         topPadding: MediaQuery.of(context).padding.top,
         defaultControls: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             if (!_isEditMode)
               GlassCircleButton(
