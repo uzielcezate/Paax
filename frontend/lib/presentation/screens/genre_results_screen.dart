@@ -240,7 +240,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       ),
 
           // Top fade gradient
-          const TopFadeGradient(height: 110),
+          const TopFadeGradient(),
 
           // Floating controls
           FloatingTopControls(

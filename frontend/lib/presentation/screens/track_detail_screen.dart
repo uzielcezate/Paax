@@ -201,7 +201,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
 
 
             // Top fade gradient
-            const TopFadeGradient(height: 110),
+            const TopFadeGradient(),
 
             // Floating controls
             FloatingTopControls(

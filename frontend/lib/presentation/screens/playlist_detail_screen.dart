@@ -434,7 +434,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       ),
 
       // Top fade gradient
-      const TopFadeGradient(height: 110),
+      const TopFadeGradient(),
 
       // Floating controls
       FloatingTopControls(

@@ -88,8 +88,8 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
             ],
           ),
 
-          // ── Top fade gradient ──────────────────────────────────
-          const TopFadeGradient(height: 120),
+          // ── Top fade gradient — covers past chips ──────────────
+          const TopFadeGradient(height: 140),
 
           // ── Pinned floating controls ──────────────────────────
           Positioned(
@@ -104,7 +104,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                   onBack: () => Navigator.pop(context),
                 ),
                 const SizedBox(height: 12),
-                // Glass-style filter chips
+                // Glass-style filter chips with real blur
                 SizedBox(
                   height: 40,
                   child: ListView(
@@ -114,31 +114,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                       final selected = _selectedFilter == i;
                       return Padding(
                         padding: const EdgeInsets.only(right: 8),
-                        child: GestureDetector(
+                        child: GlassChip(
+                          label: _filterLabels[i],
+                          selected: selected,
                           onTap: () => setState(() => _selectedFilter = i),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: selected
-                                  ? Colors.white
-                                  : Colors.white.withOpacity(0.045),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: selected
-                                    ? Colors.white
-                                    : Colors.white.withOpacity(0.12),
-                                width: 0.5,
-                              ),
-                            ),
-                            child: Text(
-                              _filterLabels[i],
-                              style: TextStyle(
-                                color: selected ? Colors.black : Colors.white.withOpacity(0.75),
-                                fontSize: 13,
-                                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                              ),
-                            ),
-                          ),
                         ),
                       );
                     }),

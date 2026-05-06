@@ -73,25 +73,25 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ),
           
-          // Deep top fade gradient — pure black
+          // Deep top fade gradient — covers past chips
           Positioned(
             top: 0,
             left: 0,
             right: 0,
             child: IgnorePointer(
               child: Container(
-                height: headerHeight + 24,
+                height: headerHeight + 36,
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0xE6000000),
-                      Color(0xAA000000),
-                      Color(0x55000000),
+                      Color(0xF0000000),
+                      Color(0xBB000000),
+                      Color(0x66000000),
                       Color(0x00000000),
                     ],
-                    stops: [0.0, 0.4, 0.7, 1.0],
+                    stops: [0.0, 0.35, 0.65, 1.0],
                   ),
                 ),
               ),
@@ -166,7 +166,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 
                 const SizedBox(height: 12),
                 
-                // Filter chips — glass style
+                // Filter chips — real glass blur
                 SizedBox(
                   height: 40,
                   child: ListView(
@@ -177,31 +177,10 @@ class _SearchScreenState extends State<SearchScreen> {
                       final isSelected = _selectedFilter == filter;
                       return Padding(
                         padding: const EdgeInsets.only(right: 8),
-                        child: GestureDetector(
+                        child: GlassChip(
+                          label: filter,
+                          selected: isSelected,
                           onTap: () => setState(() => _selectedFilter = filter),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? Colors.white
-                                  : Colors.white.withOpacity(0.045),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: isSelected
-                                    ? Colors.white
-                                    : Colors.white.withOpacity(0.12),
-                                width: 0.5,
-                              ),
-                            ),
-                            child: Text(
-                              filter,
-                              style: TextStyle(
-                                color: isSelected ? Colors.black : Colors.white.withOpacity(0.75),
-                                fontSize: 13,
-                                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                              ),
-                            ),
-                          ),
                         ),
                       );
                     }).toList(),

@@ -5,12 +5,14 @@ import 'package:flutter/material.dart';
 class GlassTokens {
   GlassTokens._();
 
-  // Stronger blur for true frosted-glass look
+  // Strong blur for true frosted-glass look
   static const double blurSigma = 22.0;
 
   // Very subtle white tint — clear frosted glass over pure black
   static Color fill = Colors.white.withOpacity(0.045);
-  static Color border = Colors.white.withOpacity(0.12);
+  // Thinner, more subtle bubble border
+  static Color border = Colors.white.withOpacity(0.08);
+  static const double borderWidth = 0.4;
   static Color fillLight = Colors.white.withOpacity(0.025);
 
   // Subtle floating shadow — creates iOS-style depth
@@ -62,7 +64,7 @@ class GlassSurface extends StatelessWidget {
         color: overrideFill ?? GlassTokens.fill,
         borderRadius: borderRadius,
         border: showBorder
-            ? Border.all(color: GlassTokens.border, width: 0.5)
+            ? Border.all(color: GlassTokens.border, width: GlassTokens.borderWidth)
             : null,
       ),
       child: child,
@@ -124,6 +126,76 @@ class GlassPill extends StatelessWidget {
   }
 }
 
+/// ─── GlassChip ──────────────────────────────────────────────────────────────
+/// A filter chip with real BackdropFilter blur when unselected, and solid
+/// white fill when selected. Used by Search and Discography screens.
+class GlassChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const GlassChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (selected) {
+      return GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.black,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Unselected — real frosted glass with blur
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.045),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.08),
+                width: GlassTokens.borderWidth,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.8),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// ─── GlassCircleButton ──────────────────────────────────────────────────────
 class GlassCircleButton extends StatelessWidget {
   final IconData icon;
@@ -138,7 +210,7 @@ class GlassCircleButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.size = 38,
-    this.iconSize = 20,
+    this.iconSize = 18,
     this.iconColor = Colors.white,
     this.enableBlur = true,
   });
@@ -151,7 +223,7 @@ class GlassCircleButton extends StatelessWidget {
         width: size,
         height: size,
         borderRadius: BorderRadius.circular(size / 2),
-        showShadow: true, // Floating shadow for depth
+        showShadow: true,
         enableBlur: enableBlur,
         child: Center(
           child: Icon(icon, size: iconSize, color: iconColor),
@@ -162,6 +234,8 @@ class GlassCircleButton extends StatelessWidget {
 }
 
 /// ─── GlassMenuButton ────────────────────────────────────────────────────────
+/// The child widget (typically an OverflowMenu) is constrained and centered
+/// with padding so the icon never touches the circle edge.
 class GlassMenuButton extends StatelessWidget {
   final Widget child;
   final double size;
@@ -180,9 +254,16 @@ class GlassMenuButton extends StatelessWidget {
       width: size,
       height: size,
       borderRadius: BorderRadius.circular(size / 2),
-      showShadow: true, // Floating shadow for depth
+      showShadow: true,
       enableBlur: enableBlur,
-      child: Center(child: child),
+      padding: const EdgeInsets.all(1),
+      child: Center(
+        child: SizedBox(
+          width: size - 2,
+          height: size - 2,
+          child: Center(child: child),
+        ),
+      ),
     );
   }
 }
@@ -190,8 +271,10 @@ class GlassMenuButton extends StatelessWidget {
 /// ─── ScrolledTopPill ────────────────────────────────────────────────────────
 /// Floating pill for the scrolled state: [back | title | trailing].
 /// Single BackdropFilter — no double blur.
-/// Height = 46px to match circle button vertical center (38px circle sits
-/// centered within the same 46px row).
+/// Height = 46px. Internal back button occupies left 42px (4px pill padding
+/// + 38px hit area) matching the exact left position of the default
+/// GlassCircleButton (which is also 38px wide, left-aligned in the same
+/// 46px-high Positioned container).
 class ScrolledTopPill extends StatelessWidget {
   final String title;
   final VoidCallback onBack;
@@ -236,7 +319,17 @@ class ScrolledTopPill extends StatelessWidget {
             ),
           ),
           if (trailing != null)
-            SizedBox(width: 38, height: 46, child: Center(child: trailing!))
+            SizedBox(
+              width: 38,
+              height: 46,
+              child: Center(
+                child: SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: Center(child: trailing!),
+                ),
+              ),
+            )
           else
             const SizedBox(width: 38),
         ],
@@ -252,6 +345,8 @@ class ScrolledTopPill extends StatelessWidget {
 ///
 /// Both states render inside a fixed 46px height container so there is
 /// zero vertical jump when switching between circles and pill.
+/// The Positioned container uses the same left: 12, right: 12 as the
+/// pill's internal padding, so circle buttons align with pill buttons.
 class FloatingTopControls extends StatelessWidget {
   final bool showScrolledPill;
   final Widget defaultControls;
@@ -272,7 +367,7 @@ class FloatingTopControls extends StatelessWidget {
       top: topPadding + 6,
       left: 12,
       right: 12,
-      height: 46, // Fixed height — matches ScrolledTopPill height
+      height: 46,
       child: Stack(
         alignment: Alignment.center,
         children: [
@@ -283,7 +378,7 @@ class FloatingTopControls extends StatelessWidget {
             child: IgnorePointer(
               ignoring: showScrolledPill,
               child: SizedBox(
-                height: 46, // Same height as pill
+                height: 46,
                 child: defaultControls,
               ),
             ),
@@ -309,7 +404,7 @@ class FloatingTopControls extends StatelessWidget {
 class TopFadeGradient extends StatelessWidget {
   final double height;
 
-  const TopFadeGradient({super.key, this.height = 120});
+  const TopFadeGradient({super.key, this.height = 130});
 
   @override
   Widget build(BuildContext context) {
@@ -325,12 +420,12 @@ class TopFadeGradient extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Color(0xE6000000), // Very dark at top
-                Color(0x99000000),
-                Color(0x33000000),
+                Color(0xF0000000), // Very dark at top
+                Color(0xAA000000),
+                Color(0x44000000),
                 Color(0x00000000),
               ],
-              stops: [0.0, 0.35, 0.65, 1.0],
+              stops: [0.0, 0.3, 0.6, 1.0],
             ),
           ),
         ),

@@ -233,7 +233,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           ),
           
           // Top fade gradient
-          const TopFadeGradient(height: 110),
+          const TopFadeGradient(),
           
           // Floating controls
           FloatingTopControls(
