@@ -350,11 +350,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                            Text(
                              _title,
                              textAlign: TextAlign.center,
-                             style: const TextStyle(
+                             style: TextStyle(
                                fontSize: 28, 
                                fontWeight: FontWeight.w800, 
                                height: 1.2,
-                               color: Colors.white
+                               color: _foregroundColor
                              ),
                              maxLines: 2,
                              overflow: TextOverflow.ellipsis,
@@ -376,7 +376,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                              children: [
                                Text(
                                  "${releaseDate.split('-').first} • $nbTracks ${_isSingleMode ? 'song' : 'songs'} • ${_formatTotalDuration(duration)}",
-                                 style: const TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w500),
+                                 style: TextStyle(color: _foregroundColor.withOpacity(0.5), fontSize: 13, fontWeight: FontWeight.w500),
                                ),
                              ],
                            ),
@@ -465,6 +465,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         return TrackListTile(
                           track: track,
                           index: index,
+                          foregroundColor: _foregroundColor,
                           onTap: () {
                              context.read<PlaybackController>().playQueue(tracks, index: index);
                           },

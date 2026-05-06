@@ -243,11 +243,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                    Text(
                      currentPlaylist.name,
                      textAlign: TextAlign.center,
-                     style: const TextStyle(
+                     style: TextStyle(
                        fontSize: 28, 
                        fontWeight: FontWeight.w800, 
                        height: 1.2,
-                       color: Colors.white
+                       color: _foregroundColor
                      ),
                      maxLines: 2,
                      overflow: TextOverflow.ellipsis,
@@ -258,7 +258,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                      children: [
                        Text(
                          "${tracks.length} tracks • ${_formatTotalDuration(totalDuration)}",
-                         style: const TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w500),
+                         style: TextStyle(color: _foregroundColor.withOpacity(0.5), fontSize: 13, fontWeight: FontWeight.w500),
                        ),
                      ],
                    ),
@@ -396,7 +396,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                             index: index + 1,
                             showArtwork: true,
                             hideActions: true,
-                            onTap: () {}, // No playback in edit mode
+                            foregroundColor: _foregroundColor,
+                            onTap: () {},
                           ),
                         ),
                         // Drag handle
@@ -442,6 +443,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                       track: track,
                       index: index + 1,
                       showArtwork: true,
+                      foregroundColor: _foregroundColor,
                       onTap: () {
                          context.read<PlaybackController>().playQueue(displayTracks, index: index);
                       },

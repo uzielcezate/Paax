@@ -17,6 +17,8 @@ class TrackListTile extends StatelessWidget {
   final bool showArtwork;
   /// When true, hides the like button and overflow menu (used in edit mode).
   final bool hideActions;
+  /// Foreground color for text/icons — adapts to dynamic backgrounds.
+  final Color foregroundColor;
 
   const TrackListTile({
     super.key,
@@ -26,6 +28,7 @@ class TrackListTile extends StatelessWidget {
     this.onCoverTap,
     this.showArtwork = false,
     this.hideActions = false,
+    this.foregroundColor = Colors.white,
   });
 
   @override
@@ -58,7 +61,7 @@ class TrackListTile extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          color: isCurrentTrack ? AppColors.primaryStart : Colors.white,
+          color: isCurrentTrack ? AppColors.primaryStart : foregroundColor,
           fontWeight: isCurrentTrack ? FontWeight.bold : FontWeight.normal,
           fontSize: fontSizeTitle,
         ),
@@ -67,7 +70,7 @@ class TrackListTile extends StatelessWidget {
         track.displayArtist,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: Colors.grey, fontSize: fontSizeSubtitle),
+        style: TextStyle(color: foregroundColor.withOpacity(0.6), fontSize: fontSizeSubtitle),
       ),
       trailing: hideActions
           ? null
@@ -81,7 +84,7 @@ class TrackListTile extends StatelessWidget {
                       icon: Icon(
                         lib.isLiked(track) ? Icons.favorite : Icons.favorite_border,
                         size: iconSize,
-                        color: lib.isLiked(track) ? AppColors.primaryEnd : Colors.white60,
+                        color: lib.isLiked(track) ? AppColors.primaryEnd : foregroundColor.withOpacity(0.5),
                       ),
                       onPressed: () => lib.toggleLike(track),
                     ),
@@ -135,7 +138,7 @@ class TrackListTile extends StatelessWidget {
         return Text(
           "${index + 1}",
           style: TextStyle(
-              color: AppColors.textSecondary, 
+              color: foregroundColor.withOpacity(0.5), 
               fontSize: Responsive.fontSize(context, 14, min: 12, max: 16)
           ),
         );

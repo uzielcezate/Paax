@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import '../../core/utils/dominant_color_service.dart';
 
 /// Full-screen animated gradient that adapts to artwork's dominant color.
-/// Provides [onColorExtracted] callback so parent screens can adapt
-/// text/icon contrast.
+/// Apple Music-style: the ENTIRE screen stays within the artwork's color
+/// family — no black fades anywhere.
 class DynamicBackground extends StatefulWidget {
   final String? imageUrl;
   final ValueChanged<Color>? onColorExtracted;
@@ -53,14 +53,20 @@ class _DynamicBackgroundState extends State<DynamicBackground> {
   Widget build(BuildContext context) {
     final hsl = HSLColor.fromColor(_dominantColor);
 
-    // Gradient stays in the same hue family — Apple Music style
+    // Apple Music-style: entire gradient stays in the same hue family.
+    // No black at all — just progressively darker/desaturated tints.
     final top = _dominantColor;
+
+    // Mid: darker version, slightly desaturated — readable over
     final mid = hsl
-        .withLightness((hsl.lightness * 0.4).clamp(0.03, 0.15))
+        .withLightness((hsl.lightness * 0.55).clamp(0.06, 0.22))
+        .withSaturation((hsl.saturation * 0.8).clamp(0.0, 0.55))
         .toColor();
+
+    // Bottom: very dark tinted version — still colored, never pure black
     final bottom = hsl
-        .withLightness(0.03)
-        .withSaturation((hsl.saturation * 0.4).clamp(0.0, 0.25))
+        .withLightness((hsl.lightness * 0.25).clamp(0.03, 0.10))
+        .withSaturation((hsl.saturation * 0.6).clamp(0.0, 0.40))
         .toColor();
 
     return Positioned.fill(
@@ -71,8 +77,8 @@ class _DynamicBackgroundState extends State<DynamicBackground> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [top, mid, bottom],
-            stops: const [0.0, 0.45, 0.85],
+            colors: [top, top, mid, bottom],
+            stops: const [0.0, 0.25, 0.55, 1.0],
           ),
         ),
       ),

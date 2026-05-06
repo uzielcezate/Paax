@@ -18,6 +18,7 @@ import '../../core/utils/string_utils.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import '../widgets/glass_surface.dart';
+import '../../core/utils/dominant_color_service.dart';
 import '../../core/utils/responsive.dart';
 import '../../core/utils/thumbnail_prefetcher.dart';
 
@@ -48,6 +49,10 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
   late ScrollController _scrollController;
   bool _showTitle = false;
   ThumbnailPrefetcher? _prefetcher;
+
+  // Dynamic color from genre gradient
+  Color get _dominantColor => widget.gradientColors.first;
+  Color get _foregroundColor => DominantColorService.foregroundOn(widget.gradientColors.first);
 
   @override
   void initState() {
@@ -127,6 +132,29 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
+          // Full-screen genre-colored background
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    _dominantColor,
+                    HSLColor.fromColor(_dominantColor)
+                        .withLightness((HSLColor.fromColor(_dominantColor).lightness * 0.4).clamp(0.03, 0.15))
+                        .withSaturation((HSLColor.fromColor(_dominantColor).saturation * 0.7).clamp(0.0, 0.5))
+                        .toColor(),
+                    HSLColor.fromColor(_dominantColor)
+                        .withLightness(0.05)
+                        .withSaturation((HSLColor.fromColor(_dominantColor).saturation * 0.4).clamp(0.0, 0.3))
+                        .toColor(),
+                  ],
+                  stops: const [0.0, 0.5, 1.0],
+                ),
+              ),
+            ),
+          ),
           CustomScrollView(
         controller: _scrollController,
         slivers: [
@@ -151,7 +179,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text("Top Songs", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                      Text("Top Songs", style: TextStyle(color: _foregroundColor, fontSize: 20, fontWeight: FontWeight.bold)),
                       TextButton.icon(
                         onPressed: _showAddToPlaylistSheet,
                         icon: const Icon(Icons.playlist_add, color: AppColors.primaryStart, size: 20),
@@ -177,6 +205,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                           track: track,
                           index: index + 1,
                           showArtwork: true,
+                          foregroundColor: _foregroundColor,
                           onTap: () => context.read<PlaybackController>().playQueue(_tracks, index: index),
                         ),
                       );
@@ -239,8 +268,8 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
         ],
       ),
 
-          // Top fade gradient
-          const TopFadeGradient(),
+          // Top fade gradient — matches genre color
+          TopFadeGradient(color: _dominantColor),
 
           // Floating controls
           FloatingTopControls(
@@ -253,12 +282,14 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                 GlassCircleButton(
                   icon: Icons.arrow_back_ios_new,
                   iconSize: 18,
+                  iconColor: _foregroundColor,
                   onPressed: () => Navigator.pop(context),
                 ),
               ],
             ),
             scrolledPill: ScrolledTopPill(
               title: widget.genreSlug,
+              foregroundColor: _foregroundColor,
               onBack: () => Navigator.pop(context),
             ),
           ),
@@ -303,10 +334,10 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.black.withOpacity(0.1),
-                      Colors.black.withOpacity(0.4),
-                      Colors.black.withOpacity(0.8),
-                      AppColors.background,
+                      _dominantColor.withOpacity(0.05),
+                      _dominantColor.withOpacity(0.4),
+                      _dominantColor.withOpacity(0.85),
+                      _dominantColor,
                     ],
                     stops: const [0.0, 0.5, 0.85, 1.0],
                   ),
@@ -348,7 +379,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+      child: Text(title, style: TextStyle(color: _foregroundColor, fontSize: 20, fontWeight: FontWeight.bold)),
     );
   }
 

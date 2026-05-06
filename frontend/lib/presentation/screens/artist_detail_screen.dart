@@ -418,7 +418,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                            fontFamily: 'Roboto', 
                            fontSize: Responsive.fontSize(context, 42, min: 32, max: 56), 
                            fontWeight: FontWeight.w900, 
-                           color: Colors.white,
+                           color: _foregroundColor,
                            height: 1.1,
                            shadows: [Shadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 2))]
                          )
@@ -474,7 +474,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                          ),
                                          child: Icon(
                                            isFollowed ? Icons.check : Icons.person_add_rounded,
-                                           color: Colors.white, 
+                                           color: _foregroundColor, 
                                            size: 20
                                          ),
                                       ),
@@ -580,12 +580,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         return SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
-              if (index == 0) return const Padding(padding: EdgeInsets.fromLTRB(20, 24, 20, 12), child: Text("Popular", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)));
+              if (index == 0) return Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 12), child: Text("Popular", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _foregroundColor)));
               final track = displayTracks[index - 1];
               return TrackListTile(
                  track: track, 
                  index: index - 1,
-                 showArtwork: true, // Show artwork
+                 showArtwork: true,
+                 foregroundColor: _foregroundColor,
                  onTap: () => context.read<PlaybackController>().playQueue(tracks, index: index - 1)
               );
             },
@@ -623,10 +624,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(top: 24, bottom: 12),
                   child: Text('Latest Release',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _foregroundColor)),
                 ),
                 GestureDetector(
                   onTap: () => Navigator.push(context,
@@ -661,7 +662,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                 Text(latest.title,
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: _foregroundColor)),
                                 const SizedBox(height: 6),
                                 Text(() {
                                   final type = displayReleaseType(latest.releaseType);
@@ -704,10 +705,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-               const Padding(
-                padding: EdgeInsets.fromLTRB(20, 24, 20, 12),
+               Padding(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
                 child: Text('Albums',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _foregroundColor)),
               ),
               SizedBox(
                 height: cardHeight,
@@ -750,8 +751,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
                 child: Row(
                   children: [
-                    const Text('Singles & EPs',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    Text('Singles & EPs',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _foregroundColor)),
                     if (_isEnriching) ...[
                       const SizedBox(width: 8),
                       const SizedBox(
@@ -883,7 +884,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-               Padding(padding: EdgeInsets.all(Responsive.spacing(context)), child: const Text("Fans Also Like", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+               Padding(padding: EdgeInsets.all(Responsive.spacing(context)), child: Text("Fans Also Like", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _foregroundColor))),
                SizedBox(
                  height: height,
                  child: ListView.builder(
