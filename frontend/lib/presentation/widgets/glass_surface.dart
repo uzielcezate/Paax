@@ -320,18 +320,12 @@ class ScrolledTopPill extends StatelessWidget {
           ),
           if (trailing != null)
             SizedBox(
-              width: 38,
+              width: 42,
               height: 46,
-              child: Center(
-                child: SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: Center(child: trailing!),
-                ),
-              ),
+              child: Center(child: trailing!),
             )
           else
-            const SizedBox(width: 38),
+            const SizedBox(width: 42),
         ],
       ),
     );
