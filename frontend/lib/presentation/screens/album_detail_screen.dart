@@ -22,6 +22,7 @@ import '../../core/image/lh3_url_builder.dart';
 import '../../core/utils/string_utils.dart';
 import 'artist_detail_screen.dart';
 import '../widgets/dynamic_background.dart';
+import '../../core/utils/dominant_color_service.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
   final SavedAlbum? album;
@@ -44,6 +45,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Future<SavedAlbum>? _detailsFuture; // Now returns updated SavedAlbum
   bool _showTitle = false;
   bool _isNavigatingToArtist = false;
+
+  // Dynamic background state
+  Color _dominantColor = DominantColorService.fallback;
+  Color _foregroundColor = Colors.white;
 
   // Resolved from the API — takes priority over widget.album fields
   // to fix the context inheritance bug where track.artistName overwrites album artist.
@@ -271,7 +276,16 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       body: Stack(
         children: [
             // Dynamic ambient background from album artwork
-            DynamicBackground(imageUrl: effectiveArtworkUrl),
+            DynamicBackground(
+              imageUrl: effectiveArtworkUrl,
+              onColorExtracted: (color) {
+                if (!mounted) return;
+                setState(() {
+                  _dominantColor = color;
+                  _foregroundColor = DominantColorService.foregroundOn(color);
+                });
+              },
+            ),
 
             CustomScrollView(
               controller: _scrollController,
@@ -307,9 +321,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                               end: Alignment.bottomCenter,
                               colors: [
                                 Colors.transparent,
-                                Colors.black.withOpacity(0.1),
-                                Colors.black.withOpacity(0.6),
-                                Colors.black.withOpacity(0.85),
+                                _dominantColor.withOpacity(0.1),
+                                _dominantColor.withOpacity(0.7),
+                                _dominantColor,
                               ],
                               stops: const [0.0, 0.5, 0.85, 1.0]
                             ),
@@ -480,8 +494,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               ],
             ),
 
-            // Top fade gradient
-            const TopFadeGradient(),
+            // Top fade gradient — matches dominant background color
+            TopFadeGradient(color: _dominantColor),
 
             // Floating controls
             FloatingTopControls(
@@ -494,6 +508,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   GlassCircleButton(
                     icon: Icons.arrow_back_ios_new,
                     iconSize: 18,
+                    iconColor: _foregroundColor,
                     onPressed: () => Navigator.pop(context),
                   ),
                   GlassMenuButton(
@@ -506,6 +521,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               scrolledPill: ScrolledTopPill(
                 title: _title,
                 onBack: () => Navigator.pop(context),
+                foregroundColor: _foregroundColor,
                 trailing: _isSingleMode
                     ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track)
                     : OverflowMenu(type: MenuType.album, album: widget.album!),

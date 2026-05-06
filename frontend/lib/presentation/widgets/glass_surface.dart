@@ -279,12 +279,14 @@ class ScrolledTopPill extends StatelessWidget {
   final String title;
   final VoidCallback onBack;
   final Widget? trailing;
+  final Color foregroundColor;
 
   const ScrolledTopPill({
     super.key,
     required this.title,
     required this.onBack,
     this.trailing,
+    this.foregroundColor = Colors.white,
   });
 
   @override
@@ -297,11 +299,11 @@ class ScrolledTopPill extends StatelessWidget {
           GestureDetector(
             onTap: onBack,
             behavior: HitTestBehavior.opaque,
-            child: const SizedBox(
+            child: SizedBox(
               width: 38,
               height: 46,
               child: Center(
-                child: Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
+                child: Icon(Icons.arrow_back_ios_new, size: 18, color: foregroundColor),
               ),
             ),
           ),
@@ -311,8 +313,8 @@ class ScrolledTopPill extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: foregroundColor,
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
               ),
@@ -322,7 +324,10 @@ class ScrolledTopPill extends StatelessWidget {
             SizedBox(
               width: 42,
               height: 46,
-              child: Center(child: trailing!),
+              child: Center(child: IconTheme.merge(
+                data: IconThemeData(color: foregroundColor),
+                child: trailing!,
+              )),
             )
           else
             const SizedBox(width: 42),
@@ -393,12 +398,13 @@ class FloatingTopControls extends StatelessWidget {
 }
 
 /// ─── TopFadeGradient ────────────────────────────────────────────────────────
-/// Deep dark fade from top edge — content disappears under top controls.
-/// Uses pure black base to match #000000 background.
+/// Deep fade from top edge — uses dominant color when provided,
+/// otherwise falls back to black.
 class TopFadeGradient extends StatelessWidget {
   final double height;
+  final Color color;
 
-  const TopFadeGradient({super.key, this.height = 130});
+  const TopFadeGradient({super.key, this.height = 130, this.color = const Color(0xFF000000)});
 
   @override
   Widget build(BuildContext context) {
@@ -409,17 +415,17 @@ class TopFadeGradient extends StatelessWidget {
       child: IgnorePointer(
         child: Container(
           height: height,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Color(0xF0000000), // Very dark at top
-                Color(0xAA000000),
-                Color(0x44000000),
-                Color(0x00000000),
+                color.withOpacity(0.95),
+                color.withOpacity(0.55),
+                color.withOpacity(0.2),
+                Colors.transparent,
               ],
-              stops: [0.0, 0.3, 0.6, 1.0],
+              stops: const [0.0, 0.3, 0.6, 1.0],
             ),
           ),
         ),

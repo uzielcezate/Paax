@@ -25,6 +25,7 @@ import '../../core/image/lh3_url_builder.dart';
 import '../../core/image/image_pipeline.dart';
 import 'artist_discography_screen.dart';
 import '../widgets/dynamic_background.dart';
+import '../../core/utils/dominant_color_service.dart';
 
 import '../../core/utils/responsive.dart';
 import '../../core/utils/string_utils.dart';
@@ -66,6 +67,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   Artist? _cachedArtist;
   // Stash raw songs for background enrichment
   final List<dynamic> _rawSongs = [];
+
+  // Dynamic background state
+  Color _dominantColor = DominantColorService.fallback;
+  Color _foregroundColor = Colors.white;
 
   @override
   void initState() {
@@ -217,7 +222,16 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       body: Stack(
         children: [
           // Dynamic ambient background from artist image
-          DynamicBackground(imageUrl: widget.pictureUrl),
+          DynamicBackground(
+            imageUrl: widget.pictureUrl,
+            onColorExtracted: (color) {
+              if (!mounted) return;
+              setState(() {
+                _dominantColor = color;
+                _foregroundColor = DominantColorService.foregroundOn(color);
+              });
+            },
+          ),
 
           CustomScrollView(
             controller: _scrollController,
@@ -236,8 +250,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             ],
           ),
           
-          // Top fade gradient
-          const TopFadeGradient(),
+          // Top fade gradient — matches dominant background color
+          TopFadeGradient(color: _dominantColor),
           
           // Floating controls
           FloatingTopControls(
@@ -250,6 +264,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                 GlassCircleButton(
                   icon: Icons.arrow_back_ios_new,
                   iconSize: 18,
+                  iconColor: _foregroundColor,
                   onPressed: () => Navigator.pop(context),
                 ),
                 GlassMenuButton(
@@ -267,6 +282,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
             scrolledPill: ScrolledTopPill(
               title: widget.artistName,
               onBack: () => Navigator.pop(context),
+              foregroundColor: _foregroundColor,
               trailing: OverflowMenu(
                 type: MenuType.artist,
                 artist: Artist(
@@ -375,9 +391,9 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                         end: Alignment.bottomCenter,
                         colors: [
                           Colors.transparent,
-                          Colors.black.withOpacity(0.15),
-                          Colors.black.withOpacity(0.6),
-                          Colors.black.withOpacity(0.85),
+                          _dominantColor.withOpacity(0.15),
+                          _dominantColor.withOpacity(0.7),
+                          _dominantColor,
                         ],
                         stops: const [0.3, 0.55, 0.85, 1.0],
                       ),

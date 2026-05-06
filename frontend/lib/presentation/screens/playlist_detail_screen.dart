@@ -18,6 +18,7 @@ import '../widgets/library_headers.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/sort_bottom_sheet.dart';
 import '../widgets/dynamic_background.dart';
+import '../../core/utils/dominant_color_service.dart';
 
 class PlaylistDetailScreen extends StatefulWidget {
   final Playlist playlist;
@@ -38,6 +39,10 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   /// Edit Order mode — shows drag handles and remove icons.
   bool _isEditMode = false;
+
+  // Dynamic background state
+  Color _dominantColor = DominantColorService.fallback;
+  Color _foregroundColor = Colors.white;
 
   @override
   void initState() {
@@ -164,6 +169,13 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           // Dynamic ambient background from playlist first track artwork
           DynamicBackground(
             imageUrl: tracks.isNotEmpty ? tracks.first.artworkUrl : null,
+            onColorExtracted: (color) {
+              if (!mounted) return;
+              setState(() {
+                _dominantColor = color;
+                _foregroundColor = DominantColorService.foregroundOn(color);
+              });
+            },
           ),
 
           CustomScrollView(
@@ -208,9 +220,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                               end: Alignment.bottomCenter,
                               colors: [
                                 Colors.transparent,
-                                Colors.black.withOpacity(0.1),
-                                Colors.black.withOpacity(0.6),
-                                Colors.black.withOpacity(0.85),
+                                _dominantColor.withOpacity(0.1),
+                                _dominantColor.withOpacity(0.7),
+                                _dominantColor,
                               ],
                               stops: const [0.0, 0.5, 0.85, 1.0]
                             ),
@@ -444,8 +456,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         ],
       ),
 
-      // Top fade gradient
-      const TopFadeGradient(),
+      // Top fade gradient — matches dominant background color
+      TopFadeGradient(color: _dominantColor),
 
       // Floating controls
       FloatingTopControls(
@@ -459,6 +471,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
               GlassCircleButton(
                 icon: Icons.arrow_back_ios_new,
                 iconSize: 18,
+                iconColor: _foregroundColor,
                 onPressed: () => Navigator.pop(context),
               )
             else
@@ -490,6 +503,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         ),
         scrolledPill: ScrolledTopPill(
           title: _isEditMode ? 'Edit Order' : currentPlaylist.name,
+          foregroundColor: _foregroundColor,
           onBack: () {
             if (_isEditMode) {
               _exitEditMode();
