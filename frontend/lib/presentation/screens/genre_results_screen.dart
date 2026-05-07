@@ -132,28 +132,9 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
-          // Full-screen genre-colored background
+          // Full-screen genre-colored background — one flat solid color
           Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    _dominantColor,
-                    HSLColor.fromColor(_dominantColor)
-                        .withLightness((HSLColor.fromColor(_dominantColor).lightness * 0.4).clamp(0.03, 0.15))
-                        .withSaturation((HSLColor.fromColor(_dominantColor).saturation * 0.7).clamp(0.0, 0.5))
-                        .toColor(),
-                    HSLColor.fromColor(_dominantColor)
-                        .withLightness(0.05)
-                        .withSaturation((HSLColor.fromColor(_dominantColor).saturation * 0.4).clamp(0.0, 0.3))
-                        .toColor(),
-                  ],
-                  stops: const [0.0, 0.5, 1.0],
-                ),
-              ),
-            ),
+            child: Container(color: _dominantColor),
           ),
           CustomScrollView(
         controller: _scrollController,
@@ -320,7 +301,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
             gradient: LinearGradient(
               colors: widget.gradientColors.length > 1
                   ? widget.gradientColors
-                  : [widget.gradientColors.first, Colors.black],
+                  : [widget.gradientColors.first, _dominantColor],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
