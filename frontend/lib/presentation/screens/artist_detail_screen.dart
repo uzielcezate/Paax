@@ -641,8 +641,9 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                     MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: latest))),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: AppColors.surfaceLight,
+                      color: _foregroundColor.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _foregroundColor.withOpacity(0.12), width: 0.5),
                     ),
                     child: Row(
                       children: [
@@ -677,7 +678,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                   if (year != null) return '$type \u00B7 $year';
                                   return type;
                                 }(),
-                                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                                  style: TextStyle(fontSize: 13, color: _foregroundColor.withOpacity(0.7))),
                               ],
                             ),
                           ),
@@ -874,6 +875,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         title: album.title,
         subtitle: subtitle, 
         imageUrl: album.artworkUrl,
+        foregroundColor: _foregroundColor,
         onTap: () {
            Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
         },
@@ -932,7 +934,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                maxLines: 1,
                                overflow: TextOverflow.ellipsis,
                                textAlign: TextAlign.center,
-                               style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                               style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13, color: _foregroundColor),
                              )
                            ],
                          ),

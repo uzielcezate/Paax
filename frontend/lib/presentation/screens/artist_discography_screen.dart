@@ -8,6 +8,7 @@ import '../widgets/bottom_content_padding.dart';
 import '../widgets/glass_surface.dart';
 import '../../core/utils/string_utils.dart';
 import 'album_detail_screen.dart';
+import '../../core/utils/dominant_color_service.dart';
 
 /// Full artist discography screen with filter chips.
 class ArtistDiscographyScreen extends StatefulWidget {
@@ -132,7 +133,11 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                 ),
                 const SizedBox(height: 12),
                 // Glass-style filter chips with real blur
-                SizedBox(
+                Builder(builder: (context) {
+                  final isLightBg = DominantColorService.isLight(widget.dominantColor);
+                  final chipSelectedColor = isLightBg ? Colors.black : Colors.white;
+                  final chipSelectedTextColor = isLightBg ? Colors.white : Colors.black;
+                  return SizedBox(
                   height: 40,
                   child: ListView(
                     scrollDirection: Axis.horizontal,
@@ -144,12 +149,15 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                         child: GlassChip(
                           label: _filterLabels[i],
                           selected: selected,
+                          selectedColor: chipSelectedColor,
+                          textColor: selected ? chipSelectedTextColor : widget.foregroundColor.withOpacity(0.8),
                           onTap: () => setState(() => _selectedFilter = i),
                         ),
                       );
                     }),
                   ),
-                ),
+                  );
+                }),
               ],
             ),
           ),

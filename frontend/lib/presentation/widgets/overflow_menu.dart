@@ -162,7 +162,6 @@ class _MenuContent extends StatelessWidget {
       imageUrl = effectiveTrack.artworkUrl;
     // ... rest matches original, just use effectiveTrack instead of track
     } else if (type == MenuType.album) {
-    } else if (type == MenuType.album) {
       // Handle unified single mode as album
       if (singleDetail != null) {
          title = singleDetail!.title;

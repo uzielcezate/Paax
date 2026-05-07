@@ -141,8 +141,8 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
         slivers: [
           _buildSliverAppBar(),
           if (_isLoading)
-            const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator(color: Colors.white)),
+            SliverFillRemaining(
+              child: Center(child: CircularProgressIndicator(color: _foregroundColor)),
             )
           else if (_error != null)
             SliverFillRemaining(
@@ -340,7 +340,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.music_note_rounded, size: 80, color: Colors.white.withOpacity(0.9)),
+                    Icon(Icons.music_note_rounded, size: 80, color: _foregroundColor.withOpacity(0.9)),
                     const SizedBox(height: 8),
                     Text(
                       widget.genreSlug,
@@ -350,7 +350,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                         fontFamily: 'Roboto',
                         fontSize: Responsive.fontSize(context, 48, min: 36, max: 64),
                         fontWeight: FontWeight.w900,
-                        color: Colors.white,
+                        color: _foregroundColor,
                         height: 1.1,
                         shadows: [Shadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4))]
                       ),
@@ -467,6 +467,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
             title: album.title,
             subtitle: album.artistName,
             imageUrl: album.artworkUrl,
+            foregroundColor: _foregroundColor,
             onTap: () {
               Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
             },
@@ -524,7 +525,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500, fontSize: 13),
+                      style: TextStyle(color: _foregroundColor, fontWeight: FontWeight.w500, fontSize: 13),
                     ),
                   )
                 ],
