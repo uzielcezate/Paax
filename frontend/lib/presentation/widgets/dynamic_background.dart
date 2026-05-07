@@ -8,11 +8,15 @@ import '../state/theme_state.dart';
 class DynamicBackground extends StatefulWidget {
   final String? imageUrl;
   final ValueChanged<Color>? onColorExtracted;
+  /// When true, prefers colorful alternatives over pure black for dark artwork.
+  /// Used by album and playlist screens.
+  final bool excludeBlack;
 
   const DynamicBackground({
     super.key,
     required this.imageUrl,
     this.onColorExtracted,
+    this.excludeBlack = false,
   });
 
   @override
@@ -35,12 +39,15 @@ class _DynamicBackgroundState extends State<DynamicBackground> {
   }
 
   Future<void> _extractColor() async {
-    final cached = DominantColorService.instance.getCachedColor(widget.imageUrl);
+    final service = DominantColorService.instance;
+    final cached = service.getCachedColor(widget.imageUrl);
     if (cached != DominantColorService.fallback) {
       _apply(cached);
       return;
     }
-    final color = await DominantColorService.instance.extractColor(widget.imageUrl);
+    final color = widget.excludeBlack
+        ? await service.extractColorExcludeBlack(widget.imageUrl)
+        : await service.extractColor(widget.imageUrl);
     _apply(color);
   }
 
@@ -65,3 +72,4 @@ class _DynamicBackgroundState extends State<DynamicBackground> {
     );
   }
 }
+

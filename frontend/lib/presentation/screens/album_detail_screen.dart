@@ -70,6 +70,16 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   }
   String get _artworkUrl => _isSingleMode ? widget.singleDetail!.artworkUrl : widget.album!.artworkUrl;
 
+  /// Build an album with resolved artist data for menus.
+  SavedAlbum get _resolvedAlbum => SavedAlbum(
+    albumId: widget.album!.albumId,
+    title: widget.album!.title,
+    artistName: _artistName,
+    artworkUrl: widget.album!.artworkUrl,
+    artistId: _resolvedArtistId ?? widget.album!.artistId,
+    artists: _resolvedArtists ?? widget.album!.artists,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -278,6 +288,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             // Dynamic ambient background from album artwork
             DynamicBackground(
               imageUrl: effectiveArtworkUrl,
+              excludeBlack: true,
               onColorExtracted: (color) {
                 if (!mounted) return;
                 setState(() {
@@ -515,7 +526,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   GlassMenuButton(
                     child: _isSingleMode
                         ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track, iconColor: _foregroundColor)
-                        : OverflowMenu(type: MenuType.album, album: widget.album!, iconColor: _foregroundColor),
+                        : OverflowMenu(type: MenuType.album, album: _resolvedAlbum, iconColor: _foregroundColor),
                   ),
                 ],
               ),
@@ -525,7 +536,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 foregroundColor: _foregroundColor,
                 trailing: _isSingleMode
                     ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track, iconColor: _foregroundColor)
-                    : OverflowMenu(type: MenuType.album, album: widget.album!, iconColor: _foregroundColor),
+                    : OverflowMenu(type: MenuType.album, album: _resolvedAlbum, iconColor: _foregroundColor),
               ),
             ),
         ],

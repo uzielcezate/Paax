@@ -44,20 +44,23 @@ class DominantColorService {
   }
 
   /// Solid sheet/menu background derived from the current dominant color.
-  /// Light BG → light sheet; Dark BG → dark sheet.
+  /// Returns the actual dominant color so menus match the screen's dynamic theme.
+  /// For very dark colors, slightly lighten to ensure visibility.
+  /// For very light colors, slightly darken for depth.
   static Color adaptiveSheetColor(Color bg) {
-    if (isLight(bg)) {
-      // Lighten the dominant color for a soft warm sheet
-      final hsl = HSLColor.fromColor(bg);
-      return hsl.withLightness((hsl.lightness + 0.85).clamp(0.0, 0.95))
-                .withSaturation(hsl.saturation * 0.3)
-                .toColor();
-    }
-    // Dark BG → very dark variant
+    final lum = bg.computeLuminance();
     final hsl = HSLColor.fromColor(bg);
-    return hsl.withLightness((hsl.lightness * 0.25).clamp(0.03, 0.12))
-              .withSaturation(hsl.saturation * 0.3)
-              .toColor();
+    
+    if (lum < 0.03) {
+      // Near-black — lift slightly so sheet is distinguishable from pure black
+      return hsl.withLightness(0.08).toColor();
+    }
+    if (lum > 0.85) {
+      // Near-white — darken slightly for depth
+      return hsl.withLightness(0.88).toColor();
+    }
+    // Return the color as-is — preserves saturation and hue
+    return bg;
   }
 
   // ── Cache Access ──────────────────────────────────────────────────────
@@ -90,7 +93,7 @@ class DominantColorService {
 
   // ── Core Extraction ───────────────────────────────────────────────────
 
-  Future<Color> _extract(String imageUrl) async {
+  Future<Color> _extract(String imageUrl, {bool excludeBlack = false}) async {
     final imageProvider = ResizeImage(NetworkImage(imageUrl), width: 80, height: 80);
     final palette = await PaletteGenerator.fromImageProvider(
       imageProvider,
@@ -115,18 +118,36 @@ class DominantColorService {
     final darkRatio = totalPop > 0 ? darkPop / totalPop : 0.0;
 
     // ── Dark image detection ──
-    // If >50% of pixel population is dark, OR average luminance is very low,
-    // treat as a dark/black cover. This fixes Black Panther, 111XPANTIA, etc.
     if (avgLuminance < 0.15 || darkRatio > 0.50) {
-      // Among the dark colors, prefer one with some saturation (e.g. dark red)
-      // over pure black, but still allow pure black.
+      if (excludeBlack) {
+        // For album/playlist: prefer a colorful dark alternative over pure black
+        // Try dark vibrant first (e.g. dark red from 111XPANTIA), then dark muted,
+        // then any color with some saturation, then vibrant/muted
+        final colorful = palette.darkVibrantColor?.color
+            ?? palette.darkMutedColor?.color
+            ?? palette.vibrantColor?.color
+            ?? palette.mutedColor?.color;
+        if (colorful != null && colorful.computeLuminance() > 0.02) {
+          return colorful;
+        }
+        // All colors are near-black — try to find anything with saturation
+        for (var pc in palette.paletteColors) {
+          final hsl = HSLColor.fromColor(pc.color);
+          if (hsl.saturation > 0.15 && pc.color.computeLuminance() > 0.03) {
+            return pc.color;
+          }
+        }
+        // Truly monochrome black image — use a dark gray so it's not pure black
+        return const Color(0xFF1A1A2E);
+      }
+
+      // Default: pick most populous dark color (allows pure black)
       final darkColors = palette.paletteColors
           .where((pc) => pc.color.computeLuminance() < 0.20)
           .toList()
         ..sort((a, b) => b.population.compareTo(a.population));
 
       if (darkColors.isNotEmpty) {
-        // Pick the most populous dark color — could be pure black or dark-red
         return darkColors.first.color;
       }
       return palette.darkMutedColor?.color
@@ -158,6 +179,31 @@ class DominantColorService {
         ?? fallback;
 
     return raw;
+  }
+
+  /// Extract color but exclude pure black — for album and playlist screens.
+  /// Prefers colorful alternatives (dark-vibrant, dark-muted) over pure black.
+  Future<Color> extractColorExcludeBlack(String? imageUrl) async {
+    if (imageUrl == null || imageUrl.isEmpty) return const Color(0xFF1A1A2E);
+    // Check cache first
+    final cacheKey = '${imageUrl}_noBlack';
+    if (_cache.containsKey(cacheKey)) return _cache[cacheKey]!;
+    if (_pending.containsKey(cacheKey)) return _pending[cacheKey]!.future;
+
+    final completer = Completer<Color>();
+    _pending[cacheKey] = completer;
+    try {
+      final color = await _extract(imageUrl, excludeBlack: true);
+      _cache[cacheKey] = color;
+      completer.complete(color);
+    } catch (e) {
+      debugPrint('[DominantColor] Extraction (noBlack) failed: $e');
+      _cache[cacheKey] = const Color(0xFF1A1A2E);
+      completer.complete(const Color(0xFF1A1A2E));
+    } finally {
+      _pending.remove(cacheKey);
+    }
+    return completer.future;
   }
 }
 

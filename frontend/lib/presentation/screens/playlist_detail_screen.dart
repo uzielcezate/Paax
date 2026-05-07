@@ -169,6 +169,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           // Dynamic ambient background from playlist first track artwork
           DynamicBackground(
             imageUrl: tracks.isNotEmpty ? tracks.first.artworkUrl : null,
+            excludeBlack: true,
             onColorExtracted: (color) {
               if (!mounted) return;
               setState(() {

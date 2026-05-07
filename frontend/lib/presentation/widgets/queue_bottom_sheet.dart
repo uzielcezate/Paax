@@ -26,9 +26,9 @@ class _QueueSheetContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height * 0.85;
-    final themeState = context.watch<ThemeState>();
-    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
-    final sheetFg = DominantColorService.foregroundOn(sheetBg);
+    // Queue sheet is only opened from the full player — always dark with white text
+    const sheetBg = AppColors.surface;
+    const sheetFg = Colors.white;
 
     return Container(
       height: height,
