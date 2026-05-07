@@ -560,10 +560,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                 width: 56, height: 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: primary ? Colors.white : Colors.white.withOpacity(0.12),
+                  color: primary ? _foregroundColor : Colors.white.withOpacity(0.12),
                   border: primary ? null : Border.all(color: Colors.white.withOpacity(0.15), width: 0.5),
                 ),
-                child: Icon(icon, color: primary ? Colors.black : _foregroundColor, size: 26),
+                child: Icon(icon, color: primary ? (_foregroundColor == Colors.black ? Colors.white : Colors.black) : _foregroundColor, size: 26),
               ),
             ),
           ),

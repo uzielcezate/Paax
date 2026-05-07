@@ -100,7 +100,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
             child: IgnorePointer(
               child: Container(
                 height: 150,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
@@ -169,7 +169,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
       return const Center(
         child: Text(
           'No releases',
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 15),
+          style: TextStyle(color: widget.foregroundColor.withOpacity(0.7), fontSize: 15),
         ),
       );
     }
@@ -223,10 +223,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
       padding: const EdgeInsets.only(top: 20, bottom: 8),
       child: Text(
         title,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.bold,
-          color: Colors.white,
+          color: widget.foregroundColor,
         ),
       ),
     );
@@ -245,7 +245,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: widget.foregroundColor,
               ),
             ),
           ),
@@ -253,7 +253,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
             onTap: () => _openAlbum(release),
             child: Container(
               decoration: BoxDecoration(
-                color: AppColors.surfaceLight,
+                color: widget.foregroundColor.withOpacity(0.08),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
@@ -282,10 +282,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                             release.title,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
-                              color: Colors.white,
+                              color: widget.foregroundColor,
                             ),
                           ),
                           const SizedBox(height: 6),
@@ -295,9 +295,9 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                             if (year != null) return '$type \u00B7 $year';
                             return type;
                           }(),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
-                              color: AppColors.textSecondary,
+                              color: widget.foregroundColor.withOpacity(0.7),
                             ),
                           ),
                         ],
@@ -341,10 +341,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                     release.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
-                      color: Colors.white,
+                      color: widget.foregroundColor,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -358,9 +358,9 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                       }
                       return year ?? '';
                     }(),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: AppColors.textSecondary,
+                      color: widget.foregroundColor.withOpacity(0.7),
                     ),
                   ),
                 ],

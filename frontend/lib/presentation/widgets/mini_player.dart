@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../domain/entities/track.dart';
 import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
+import '../state/theme_state.dart';
 import '../screens/player_screen.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/image/lh3_url_builder.dart';
@@ -16,6 +17,7 @@ class MiniPlayer extends StatelessWidget {
   Widget build(BuildContext context) {
     // Select only the current track to avoid rebuilding on position change
     final track = context.select<PlaybackController, Track?>((controller) => controller.currentTrack);
+    final fgColor = context.watch<ThemeState>().foregroundColor;
 
     if (track == null) return const SizedBox.shrink();
 
@@ -107,13 +109,13 @@ class MiniPlayer extends StatelessWidget {
                             track.title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Colors.white),
+                            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: fgColor),
                           ),
                           Text(
                             track.displayArtist,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 12),
+                            style: TextStyle(color: fgColor.withValues(alpha: 0.55), fontSize: 12),
                           ),
                         ],
                       ),
@@ -126,7 +128,7 @@ class MiniPlayer extends StatelessWidget {
                           lib.isLiked(track) ? Icons.favorite : Icons.favorite_border,
                           size: 22,
                         ),
-                        color: lib.isLiked(track) ? AppColors.primaryEnd : Colors.white70,
+                        color: lib.isLiked(track) ? AppColors.primaryEnd : fgColor.withValues(alpha: 0.7),
                         onPressed: () => lib.toggleLike(track),
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
@@ -143,7 +145,7 @@ class MiniPlayer extends StatelessWidget {
                             isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                             size: 30,
                           ),
-                          color: Colors.white,
+                          color: fgColor,
                           onPressed: () {
                             context.read<PlaybackController>().togglePlayPause();
                           },

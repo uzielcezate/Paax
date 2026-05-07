@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'main_wrapper.dart';
 import 'package:provider/provider.dart';
+import '../state/theme_state.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
@@ -53,6 +54,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.read<ThemeState>().reset();
     final search = context.watch<app_search.SearchController>(); 
     final double topPadding = MediaQuery.of(context).padding.top;
     

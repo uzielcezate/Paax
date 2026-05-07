@@ -35,7 +35,7 @@ class _AuthScreenState extends State<AuthScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.music_note_rounded, size: 80, color: AppColors.primaryStart),
+                const Icon(Icons.music_note_rounded, size: 80, color: AppColors.primaryEnd),
                 const SizedBox(height: 32),
                 Text(
                   _isLogin ? "Welcome Back" : "Create Account",

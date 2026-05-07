@@ -25,80 +25,74 @@ class _QueueSheetContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height * 0.85;
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          height: height,
-          decoration: BoxDecoration(
-            color: const Color(0xFF0A0A0A).withValues(alpha: 0.92),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.08), width: 1),
-            ),
-          ),
-          child: Consumer<PlaybackController>(
-            builder: (context, playback, _) {
-              final currentTrack = playback.currentTrack;
-              final upcoming = playback.upcomingQueue;
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.08), width: 1),
+        ),
+      ),
+      child: Consumer<PlaybackController>(
+        builder: (context, playback, _) {
+          final currentTrack = playback.currentTrack;
+          final upcoming = playback.upcomingQueue;
 
-              return Column(
-                children: [
-                  // ── Handle ──
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12, bottom: 4),
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(2),
+          return Column(
+            children: [
+              // ── Handle ──
+              Padding(
+                padding: const EdgeInsets.only(top: 12, bottom: 4),
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+
+              // ── Header ──
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Queue',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
                       ),
                     ),
-                  ),
-
-                  // ── Header ──
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    child: Row(
-                      children: [
-                        const Text(
-                          'Queue',
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
+                    const Spacer(),
+                    if (upcoming.isNotEmpty)
+                      IconButton(
+                        onPressed: () => _confirmClear(context, playback),
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          color: AppColors.primaryEnd,
+                          size: 24,
                         ),
-                        const Spacer(),
-                        if (upcoming.isNotEmpty)
-                          IconButton(
-                            onPressed: () => _confirmClear(context, playback),
-                            icon: const Icon(
-                              Icons.delete_outline_rounded,
-                              color: AppColors.primaryEnd,
-                              size: 24,
-                            ),
-                            tooltip: 'Clear queue',
-                          ),
-                      ],
-                    ),
-                  ),
+                        tooltip: 'Clear queue',
+                      ),
+                  ],
+                ),
+              ),
 
-                  Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
+              Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
 
-                  // ── Content ──
-                  Expanded(
-                    child: currentTrack == null
-                        ? _buildEmptyState()
-                        : _buildQueue(context, playback, currentTrack, upcoming),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
+              // ── Content ──
+              Expanded(
+                child: currentTrack == null
+                    ? _buildEmptyState()
+                    : _buildQueue(context, playback, currentTrack, upcoming),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

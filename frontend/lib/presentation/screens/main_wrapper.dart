@@ -11,6 +11,7 @@ import 'home_screen.dart';
 import 'search_screen.dart';
 import 'library_screen.dart';
 import 'profile_screen.dart';
+import '../state/theme_state.dart';
 
 class MainWrapper extends StatefulWidget {
   const MainWrapper({super.key});
@@ -127,10 +128,11 @@ class MainWrapperState extends State<MainWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    // Listen to playback state to adjust padding
-    final currentTrack = context.select<PlaybackController, dynamic>((c) => c.currentTrack);
-    final bool hasTrack = currentTrack != null;
+    final hasTrack = context.watch<PlaybackController>().currentTrack != null;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
+    final themeState = context.watch<ThemeState>();
+    final bgColor = themeState.backgroundColor;
+    final fgColor = themeState.foregroundColor;
     
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light.copyWith(
@@ -190,12 +192,12 @@ class MainWrapperState extends State<MainWrapper> {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
-                        Color(0xFF000000),
-                        Color(0xA5000000),
-                        Color(0x44000000),
-                        Color(0x00000000),
+                        bgColor,
+                        bgColor.withValues(alpha: 0.65),
+                        bgColor.withValues(alpha: 0.25),
+                        bgColor.withValues(alpha: 0.0),
                       ],
-                      stops: [0.0, 0.35, 0.65, 1.0],
+                      stops: const [0.0, 0.35, 0.65, 1.0],
                     ),
                   ),
                 ),
@@ -215,12 +217,12 @@ class MainWrapperState extends State<MainWrapper> {
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
                       colors: [
-                        Color(0xF5000000),
-                        Color(0xAA000000),
-                        Color(0x44000000),
-                        Color(0x00000000),
+                        bgColor.withValues(alpha: 0.96),
+                        bgColor.withValues(alpha: 0.65),
+                        bgColor.withValues(alpha: 0.25),
+                        bgColor.withValues(alpha: 0.0),
                       ],
-                      stops: [0.0, 0.35, 0.65, 1.0],
+                      stops: const [0.0, 0.35, 0.65, 1.0],
                     ),
                   ),
                 ),
@@ -236,11 +238,11 @@ class MainWrapperState extends State<MainWrapper> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                    AnimatedSize(
-                     duration: const Duration(milliseconds: 300),
+                     duration: const Duration(milliseconds: 150),
                      curve: Curves.easeInOut,
                      child: hasTrack ? const MiniPlayer() : const SizedBox.shrink(),
                    ),
-                   _buildFloatingNavBar(bottomPadding),
+                   _buildFloatingNavBar(bottomPadding, fgColor),
                 ],
               ),
             ),
@@ -251,7 +253,7 @@ class MainWrapperState extends State<MainWrapper> {
     );
   }
 
-  Widget _buildFloatingNavBar(double bottomSafePadding) {
+  Widget _buildFloatingNavBar(double bottomSafePadding, Color fgColor) {
     return Padding(
       padding: EdgeInsets.only(
         left: 12,
@@ -265,17 +267,17 @@ class MainWrapperState extends State<MainWrapper> {
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            _navItem(0, Icons.home_rounded, "Home"),
-            _navItem(1, Icons.search_rounded, "Search"),
-            _navItem(2, Icons.library_music_rounded, "Library"),
-            _navItem(3, Icons.person_rounded, "Profile"),
+            _navItem(0, Icons.home_rounded, "Home", fgColor),
+            _navItem(1, Icons.search_rounded, "Search", fgColor),
+            _navItem(2, Icons.library_music_rounded, "Library", fgColor),
+            _navItem(3, Icons.person_rounded, "Profile", fgColor),
           ],
         ),
       ),
     );
   }
   
-  Widget _navItem(int index, IconData icon, String label) {
+  Widget _navItem(int index, IconData icon, String label, Color fgColor) {
     bool isSelected = _currentIndex == index;
     return Expanded(
       child: GestureDetector(
@@ -287,16 +289,16 @@ class MainWrapperState extends State<MainWrapper> {
           children: [
             Icon(
               icon,
-              color: isSelected ? Colors.white : Colors.white38,
+              color: isSelected ? fgColor : fgColor.withValues(alpha: 0.38),
               size: 24,
             ),
             if (isSelected) ...[
               const SizedBox(height: 3),
               Container(
                 width: 4, height: 4,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: AppColors.primaryGradient,
+                  color: fgColor,
                 ),
               )
             ]

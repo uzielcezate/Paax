@@ -162,7 +162,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
             FutureBuilder<List<Track>>(
               future: _artistTracksFuture,
               builder: (context, snapshot) {
-                if (!snapshot.hasData) return Center(child: CircularProgressIndicator(color: _foregroundColor));
+                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.white));
                 if (snapshot.hasError) return const Text("Could not load recommendations", style: TextStyle(color: Colors.white54));
                 
                 // Filter out current track

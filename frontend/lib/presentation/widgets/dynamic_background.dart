@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/utils/dominant_color_service.dart';
+import '../state/theme_state.dart';
 
 /// Full-screen SOLID COLOR background that matches artwork's dominant color.
 /// No gradients, no darkening — one flat color that the hero image fades into.
@@ -46,13 +48,17 @@ class _DynamicBackgroundState extends State<DynamicBackground> {
     if (!mounted) return;
     setState(() => _dominantColor = color);
     widget.onColorExtracted?.call(color);
+    
+    // Globally update the theme state for mini player and bottom nav
+    final fgColor = DominantColorService.foregroundOn(color);
+    context.read<ThemeState>().updateColors(color, fgColor);
   }
 
   @override
   Widget build(BuildContext context) {
     return Positioned.fill(
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 350),
+        duration: const Duration(milliseconds: 150),
         curve: Curves.easeOut,
         color: _dominantColor,  // ONE solid color. No gradient.
       ),

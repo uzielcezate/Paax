@@ -57,16 +57,39 @@ class DominantColorService {
       maximumColorCount: 16,
     ).timeout(const Duration(seconds: 5));
 
+    if (palette.colors.isEmpty) return fallback;
+
+    // Calculate population-weighted average luminance
+    int totalPop = 0;
+    double weightedLuminance = 0;
+    for (var pc in palette.paletteColors) {
+      totalPop += pc.population;
+      weightedLuminance += pc.color.computeLuminance() * pc.population;
+    }
+    final avgLuminance = totalPop > 0 ? weightedLuminance / totalPop : 1.0;
+
+    // If the image is overwhelmingly dark, force the background to be dark
+    // This fixes the "Black Panther" / "111XPANTIA" parental advisory label bug
+    if (avgLuminance < 0.15) {
+      return palette.darkMutedColor?.color ?? palette.darkVibrantColor?.color ?? fallback;
+    }
+
+    final dominant = palette.dominantColor;
+    
+    // If the dominant color is very bright but the overall image is not that bright,
+    // or if the dominant color is just a tiny high-contrast cluster, prefer something more muted.
+    if (dominant != null && dominant.color.computeLuminance() > 0.6 && dominant.population < totalPop * 0.2 && avgLuminance < 0.4) {
+       return palette.darkMutedColor?.color ?? palette.darkVibrantColor?.color ?? palette.mutedColor?.color ?? dominant.color;
+    }
+
     // Prefer dominant, then try lighter/pastel-friendly fallbacks
-    final raw = palette.dominantColor?.color
+    final raw = dominant?.color
         ?? palette.lightMutedColor?.color
         ?? palette.vibrantColor?.color
         ?? palette.mutedColor?.color
         ?? palette.darkVibrantColor?.color
         ?? fallback;
 
-    // NO aggressive processing — return the color as-is.
-    // This preserves pastels like #e8acb8 faithfully.
     return raw;
   }
 }

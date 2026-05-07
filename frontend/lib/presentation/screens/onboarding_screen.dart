@@ -67,7 +67,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       height: 8,
                       decoration: BoxDecoration(
                         color: _currentPage == index
-                            ? AppColors.primaryStart
+                            ? AppColors.primaryEnd
                             : Colors.grey.withOpacity(0.3),
                         borderRadius: BorderRadius.circular(4),
                       ),
@@ -126,7 +126,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               shape: BoxShape.circle,
               color: AppColors.surfaceLight.withOpacity(0.5),
             ),
-            child: Icon(icon, size: 80, color: AppColors.primaryStart),
+            child: Icon(icon, size: 80, color: AppColors.primaryEnd),
           ),
           const SizedBox(height: 48),
           Text(

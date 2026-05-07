@@ -130,28 +130,22 @@ class _MenuContent extends StatelessWidget {
     }
     // ... rest of build logic using effectiveTrack instead of track
     
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF0A0A0A).withOpacity(0.85), 
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 24),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildHeader(context, effectiveTrack),
-                Divider(color: Colors.white.withOpacity(0.1), height: 32),
-                ..._buildActions(context, effectiveTrack),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface, 
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildHeader(context, effectiveTrack),
+            Divider(color: Colors.white.withOpacity(0.1), height: 32),
+            ..._buildActions(context, effectiveTrack),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -490,48 +484,42 @@ class _MenuContent extends StatelessWidget {
       context: ctx,
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetCtx) => ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF0A0A0A).withOpacity(0.9),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-              border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                    child: Text(
-                      "Choose Artist",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+      builder: (sheetCtx) => Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                child: Text(
+                  "Choose Artist",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
                   ),
-                  Divider(color: Colors.white.withOpacity(0.1)),
-                  ...artists.map((a) => ListTile(
-                    leading: const Icon(Icons.person_outline, color: Colors.white70),
-                    title: Text(
-                      a['name'] ?? '',
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                    ),
-                    onTap: () {
-                      Navigator.pop(sheetCtx); // Close picker
-                      _navigateToArtist(a['id']!, a['name']!, sourceTrack);
-                    },
-                  )),
-                  const SizedBox(height: 8),
-                ],
+                ),
               ),
-            ),
+              Divider(color: Colors.white.withOpacity(0.1)),
+              ...artists.map((a) => ListTile(
+                leading: const Icon(Icons.person_outline, color: Colors.white70),
+                title: Text(
+                  a['name'] ?? '',
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetCtx); // Close picker
+                  _navigateToArtist(a['id']!, a['name']!, sourceTrack);
+                },
+              )),
+              const SizedBox(height: 8),
+            ],
           ),
         ),
       ),

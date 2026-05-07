@@ -8,6 +8,7 @@ import 'presentation/state/auth_controller.dart';
 import 'presentation/state/library_controller.dart';
 import 'presentation/state/playback_controller.dart';
 import 'presentation/state/search_controller.dart' as app_search;
+import 'presentation/state/theme_state.dart';
 import 'presentation/screens/onboarding_screen.dart';
 import 'presentation/screens/auth_screen.dart';
 import 'presentation/screens/main_wrapper.dart';
@@ -74,6 +75,7 @@ class BeatyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => LibraryController()),
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),
         ChangeNotifierProvider(create: (_) => PlaybackController()),
+        ChangeNotifierProvider(create: (_) => ThemeState()),
       ],
       child: MaterialApp(
         title: 'Paax',

@@ -12,6 +12,8 @@ import '../../domain/entities/artist.dart';
 import '../../domain/entities/single_track_album_detail.dart';
 import '../widgets/section_header.dart';
 import '../widgets/music_card.dart';
+import '../widgets/thumbnail.dart';
+import '../state/theme_state.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import 'profile_screen.dart';
@@ -114,6 +116,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.read<ThemeState>().reset();
     final user = context.watch<AuthController>().currentUser;
     final userName = user?.name.split(' ').first ?? 'Guest';
     

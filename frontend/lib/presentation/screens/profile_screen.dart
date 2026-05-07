@@ -5,6 +5,7 @@ import '../../core/theme/app_colors.dart';
 import '../../data/local/hive_storage.dart';
 import '../state/auth_controller.dart';
 import '../state/library_controller.dart';
+import '../state/theme_state.dart';
 import '../state/playback_controller.dart'; // Added
 import '../../domain/entities/track.dart'; // Added
 import 'auth_screen.dart';
@@ -27,6 +28,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   
   @override
   Widget build(BuildContext context) {
+    context.read<ThemeState>().reset();
+    
     final user = context.watch<AuthController>().currentUser;
     final library = context.watch<LibraryController>();
     final history = HiveStorage.getRecentlyPlayed();
@@ -137,7 +140,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
            decoration: BoxDecoration(
              shape: BoxShape.circle,
              color: AppColors.surfaceLight,
-             border: Border.all(color: AppColors.primaryStart, width: 2),
+             border: Border.all(color: Colors.white24, width: 2),
            ),
            child: const Icon(Icons.person, size: 45, color: Colors.white),
          ),
@@ -176,7 +179,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [AppColors.primaryStart, AppColors.primaryEnd]),
+                  color: AppColors.primaryEnd,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Text("PRO", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),

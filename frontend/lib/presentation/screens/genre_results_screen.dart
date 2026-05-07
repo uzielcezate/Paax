@@ -142,7 +142,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
           _buildSliverAppBar(),
           if (_isLoading)
             const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator(color: AppColors.primaryStart)),
+              child: Center(child: CircularProgressIndicator(color: Colors.white)),
             )
           else if (_error != null)
             SliverFillRemaining(
@@ -163,8 +163,8 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                       Text("Top Songs", style: TextStyle(color: _foregroundColor, fontSize: 20, fontWeight: FontWeight.bold)),
                       TextButton.icon(
                         onPressed: _showAddToPlaylistSheet,
-                        icon: const Icon(Icons.playlist_add, color: AppColors.primaryStart, size: 20),
-                        label: const Text("Add all", style: TextStyle(color: AppColors.primaryStart, fontSize: 14)),
+                        icon: Icon(Icons.playlist_add, color: _foregroundColor, size: 20),
+                        label: Text("Add all", style: TextStyle(color: _foregroundColor, fontSize: 14)),
                       ),
                     ],
                   ),
@@ -201,14 +201,22 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Center(
-                    child: TextButton(
-                      onPressed: () => setState(() => _songsExpanded = !_songsExpanded),
-                      child: Text(
-                        _songsExpanded ? "Show less" : "See all ${_tracks.length} songs",
-                        style: const TextStyle(
-                          color: AppColors.primaryEnd, // Magenta
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _songsExpanded = !_songsExpanded),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _foregroundColor.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: _foregroundColor.withOpacity(0.2), width: 0.5),
+                        ),
+                        child: Text(
+                          _songsExpanded ? "Show less" : "See all ${_tracks.length} songs",
+                          style: TextStyle(
+                            color: _foregroundColor,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                       ),
                     ),
@@ -380,8 +388,8 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
               const Text("Top Songs", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
               TextButton.icon(
                 onPressed: _showAddToPlaylistSheet,
-                icon: const Icon(Icons.playlist_add, color: AppColors.primaryStart, size: 20),
-                label: const Text("Add all", style: TextStyle(color: AppColors.primaryStart, fontSize: 14)),
+                icon: Icon(Icons.playlist_add, color: _foregroundColor, size: 20),
+                label: Text("Add all", style: TextStyle(color: _foregroundColor, fontSize: 14)),
               ),
             ],
           ),
@@ -407,14 +415,22 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Center(
-              child: TextButton(
-                onPressed: () => setState(() => _songsExpanded = !_songsExpanded),
-                child: Text(
-                  _songsExpanded ? "Show less" : "See all ${_tracks.length} songs",
-                  style: const TextStyle(
-                    color: AppColors.primaryEnd, // Magenta
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
+              child: GestureDetector(
+                onTap: () => setState(() => _songsExpanded = !_songsExpanded),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _foregroundColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: _foregroundColor.withOpacity(0.2), width: 0.5),
+                  ),
+                  child: Text(
+                    _songsExpanded ? "Show less" : "See all ${_tracks.length} songs",
+                    style: TextStyle(
+                      color: _foregroundColor,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
                   ),
                 ),
               ),
