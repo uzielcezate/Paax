@@ -14,12 +14,16 @@ class ArtistDiscographyScreen extends StatefulWidget {
   final String artistName;
   final List<SavedAlbum> albums;
   final List<SavedAlbum> singles;
+  final Color dominantColor;
+  final Color foregroundColor;
 
   const ArtistDiscographyScreen({
     super.key,
     required this.artistName,
     required this.albums,
     required this.singles,
+    required this.dominantColor,
+    required this.foregroundColor,
   });
 
   @override
@@ -74,7 +78,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
     final fixedHeaderHeight = topPadding + 6 + 46 + 12 + 40 + 12;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: widget.dominantColor,
       body: Stack(
         children: [
           // ── Scrollable content ──────────────────────────────────
@@ -101,12 +105,12 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0xFF000000),
-                      Color(0xDD000000),
-                      Color(0x80000000),
-                      Color(0x00000000),
+                      widget.dominantColor,
+                      widget.dominantColor.withValues(alpha: 0.9),
+                      widget.dominantColor.withValues(alpha: 0.5),
+                      widget.dominantColor.withValues(alpha: 0.0),
                     ],
-                    stops: [0.0, 0.3, 0.6, 1.0],
+                    stops: const [0.0, 0.4, 0.7, 1.0],
                   ),
                 ),
               ),
@@ -123,6 +127,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
                 // Pill
                 ScrolledTopPill(
                   title: 'Discography',
+                  foregroundColor: widget.foregroundColor,
                   onBack: () => Navigator.pop(context),
                 ),
                 const SizedBox(height: 12),

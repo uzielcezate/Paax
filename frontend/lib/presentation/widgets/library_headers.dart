@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 
@@ -63,11 +64,13 @@ class SearchSortHeaderDelegate extends SliverPersistentHeaderDelegate {
   final ValueChanged<String> onSearchChanged;
   final VoidCallback onSortPressed;
   final String currentSort;
+  final Color? foregroundColor;
 
   SearchSortHeaderDelegate({
     required this.onSearchChanged,
     required this.onSortPressed,
     required this.currentSort,
+    this.foregroundColor,
   });
 
   @override
@@ -83,11 +86,14 @@ class SearchSortHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return Container(
-      color: AppColors.background,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center, // Ensure vertical centering
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: Container(
+          color: Colors.white.withValues(alpha: 0.05),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center, // Ensure vertical centering
         children: [
           // Sort Button
           GestureDetector(
@@ -103,7 +109,7 @@ class SearchSortHeaderDelegate extends SliverPersistentHeaderDelegate {
               child: Row(
                 mainAxisSize: MainAxisSize.min, // Hug content
                 children: [
-                   const Icon(Icons.sort_rounded, color: Colors.white70, size: 20),
+                   Icon(Icons.sort_rounded, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.7), size: 20),
                 ],
               ),
             ),
@@ -120,11 +126,11 @@ class SearchSortHeaderDelegate extends SliverPersistentHeaderDelegate {
               alignment: Alignment.centerLeft, // Align text field
               child: TextField(
                 onChanged: onSearchChanged,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
+                style: TextStyle(color: foregroundColor ?? Colors.white),
+                decoration: InputDecoration(
                   hintText: "Search...",
-                  hintStyle: TextStyle(color: Colors.white38),
-                  prefixIcon: Icon(Icons.search, color: Colors.white38),
+                  hintStyle: TextStyle(color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
+                  prefixIcon: Icon(Icons.search, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
                   border: InputBorder.none,
                   contentPadding: EdgeInsets.symmetric(vertical: 12), // Keep vertical padding
                   isDense: true, // Reduce internal height requirement
@@ -133,6 +139,8 @@ class SearchSortHeaderDelegate extends SliverPersistentHeaderDelegate {
             ),
           ),
         ],
+      ),
+        ),
       ),
     );
   }
@@ -147,22 +155,27 @@ class SearchSortHeader extends StatelessWidget {
   final ValueChanged<String> onSearchChanged;
   final VoidCallback onSortPressed;
   final String currentSort;
+  final Color? foregroundColor;
 
   const SearchSortHeader({
     super.key,
     required this.onSearchChanged,
     required this.onSortPressed,
     required this.currentSort,
+    this.foregroundColor,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: AppColors.background,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: Container(
+          color: Colors.white.withValues(alpha: 0.05),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
           // Sort Button
           GestureDetector(
             onTap: onSortPressed,
@@ -177,7 +190,7 @@ class SearchSortHeader extends StatelessWidget {
               child: Row(
                  mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.sort_rounded, color: Colors.white70, size: 20),
+                  Icon(Icons.sort_rounded, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.7), size: 20),
                 ],
               ),
             ),
@@ -194,11 +207,11 @@ class SearchSortHeader extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: TextField(
                 onChanged: onSearchChanged,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
+                style: TextStyle(color: foregroundColor ?? Colors.white),
+                decoration: InputDecoration(
                   hintText: "Search...",
-                  hintStyle: TextStyle(color: Colors.white38),
-                  prefixIcon: Icon(Icons.search, color: Colors.white38),
+                  hintStyle: TextStyle(color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
+                  prefixIcon: Icon(Icons.search, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
                   border: InputBorder.none,
                   contentPadding: EdgeInsets.symmetric(vertical: 12),
                   isDense: true,
@@ -207,6 +220,8 @@ class SearchSortHeader extends StatelessWidget {
             ),
           ),
         ],
+      ),
+        ),
       ),
     );
   }

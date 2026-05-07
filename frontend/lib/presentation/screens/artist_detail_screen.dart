@@ -839,6 +839,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                     artistName: widget.artistName,
                     albums: albums,
                     singles: singles,
+                    dominantColor: _dominantColor,
+                    foregroundColor: _foregroundColor,
                   ),
                 ));
               },

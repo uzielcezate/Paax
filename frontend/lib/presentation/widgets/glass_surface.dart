@@ -134,11 +134,18 @@ class GlassChip extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  final Color? selectedColor;
+  final Color? unselectedColor;
+  final Color? textColor;
+
   const GlassChip({
     super.key,
     required this.label,
     required this.selected,
     required this.onTap,
+    this.selectedColor,
+    this.unselectedColor,
+    this.textColor,
   });
 
   @override
@@ -149,13 +156,13 @@ class GlassChip extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: selectedColor ?? Colors.white,
             borderRadius: BorderRadius.circular(20),
           ),
           child: Text(
             label,
-            style: const TextStyle(
-              color: Colors.black,
+            style: TextStyle(
+              color: textColor ?? Colors.black,
               fontSize: 13,
               fontWeight: FontWeight.w700,
             ),
@@ -174,17 +181,17 @@ class GlassChip extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.045),
+              color: unselectedColor ?? Colors.white.withValues(alpha: 0.045),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: Colors.white.withOpacity(0.08),
+                color: (unselectedColor ?? Colors.white).withValues(alpha: 0.08),
                 width: GlassTokens.borderWidth,
               ),
             ),
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.white.withOpacity(0.8),
+                color: textColor ?? Colors.white.withValues(alpha: 0.8),
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
               ),

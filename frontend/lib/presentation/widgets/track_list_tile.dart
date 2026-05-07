@@ -47,7 +47,16 @@ class TrackListTile extends StatelessWidget {
     final fontSizeSubtitle = Responsive.fontSize(context, 12, min: 11, max: 14);
     final iconSize = Responsive.iconSize(context, base: 20, min: 18, max: 24);
 
-    return ListTile(
+    return Container(
+      decoration: BoxDecoration(
+        border: isCurrentTrack
+            ? Border(
+                top: BorderSide(color: foregroundColor.withValues(alpha: 0.1), width: 0.5),
+                bottom: BorderSide(color: foregroundColor.withValues(alpha: 0.1), width: 0.5),
+              )
+            : null,
+      ),
+      child: ListTile(
       contentPadding: EdgeInsets.symmetric(horizontal: Responsive.horizontalPadding(context), vertical: 4),
       leading: SizedBox(
         width: 48,
@@ -94,6 +103,7 @@ class TrackListTile extends StatelessWidget {
               ),
             ),
       onTap: onTap,
+    ),
     );
   }
 

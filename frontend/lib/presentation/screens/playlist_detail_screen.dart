@@ -324,6 +324,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                 padding: const EdgeInsets.only(bottom: 8.0),
                 child: SearchSortHeader(
                   currentSort: _currentSort,
+                  foregroundColor: _foregroundColor,
                   onSearchChanged: (val) {
                     setState(() => _searchQuery = val);
                   },
