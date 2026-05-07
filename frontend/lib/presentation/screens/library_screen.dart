@@ -419,6 +419,61 @@ class _SavedAlbumsTabState extends State<_SavedAlbumsTab> with AutomaticKeepAliv
       a.title.toLowerCase().contains(_searchQuery.toLowerCase()) || 
       a.artistName.toLowerCase().contains(_searchQuery.toLowerCase())
     ).toList();
+
+    if (_sortOption == 1) {
+      displayed.sort((a,b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+    } else if (_sortOption == 2) {
+      displayed.sort((a,b) => a.artistName.toLowerCase().compareTo(b.artistName.toLowerCase()));
+    }
+
+    return Stack(
+      children: [
+        displayed.isEmpty
+          ? (albums.isEmpty
+               ? const Center(child: Text("No saved albums.", style: TextStyle(color: AppColors.textSecondary)))
+               : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
+          : GridView.builder(
+              key: const PageStorageKey("AlbumsGrid"),
+              padding: EdgeInsets.fromLTRB(
+                16, 80, 16, BottomContentPadding.bottomHeight(context), // 80px top padding for floating header
+              ),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                 crossAxisCount: 2,
+                 childAspectRatio: 0.75,
+                 crossAxisSpacing: 16,
+                 mainAxisSpacing: 16
+              ),
+              itemCount: displayed.length,
+              itemBuilder: (context, index) {
+                final album = displayed[index];
+                return GestureDetector(
+                  onTap: () {
+                     Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
+                  },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: AppImage(
+                          url: album.artworkUrl,
+                          sizePx: Lh3UrlBuilder.listSize,
+                          borderRadius: 16,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(album.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      const SizedBox(height: 2),
+                      Text(album.artistName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                    ],
+                  ),
+                );
+              },
+            ),
+
+        Positioned(
+          top: 0, left: 0, right: 0,
+          child: SearchSortHeader(
             currentSort: _getSortLabel(_sortOption),
             onSearchChanged: (val) => setState(() => _searchQuery = val),
             onSortPressed: () {

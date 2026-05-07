@@ -187,7 +187,7 @@ class MainWrapperState extends State<MainWrapper> {
               child: IgnorePointer(
                 child: Container(
                   height: 120,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
@@ -212,7 +212,7 @@ class MainWrapperState extends State<MainWrapper> {
               child: IgnorePointer(
                 child: Container(
                   height: hasTrack ? 240 : 160,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,

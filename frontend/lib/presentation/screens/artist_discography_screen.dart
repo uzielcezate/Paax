@@ -166,7 +166,7 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
     final releases = _filteredReleases;
 
     if (releases.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           'No releases',
           style: TextStyle(color: widget.foregroundColor.withOpacity(0.7), fontSize: 15),
@@ -238,8 +238,8 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(bottom: 12),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
             child: Text(
               'Latest Release',
               style: TextStyle(
