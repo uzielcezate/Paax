@@ -556,14 +556,14 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           child: ClipOval(
             child: BackdropFilter(
               filter: primary ? ImageFilter.blur() : ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: Container(
+               child: Container(
                 width: 56, height: 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: primary ? _foregroundColor : Colors.white.withOpacity(0.12),
-                  border: primary ? null : Border.all(color: Colors.white.withOpacity(0.15), width: 0.5),
+                  color: primary ? _foregroundColor : _foregroundColor.withOpacity(0.12),
+                  border: primary ? null : Border.all(color: _foregroundColor.withOpacity(0.15), width: 0.5),
                 ),
-                child: Icon(icon, color: primary ? (_foregroundColor == Colors.black ? Colors.white : Colors.black) : _foregroundColor, size: 26),
+                child: Icon(icon, color: primary ? _dominantColor : _foregroundColor, size: 26),
               ),
             ),
           ),

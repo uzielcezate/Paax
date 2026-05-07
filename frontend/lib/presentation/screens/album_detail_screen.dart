@@ -545,10 +545,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 width: 56, height: 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: primary ? _foregroundColor : Colors.white.withOpacity(0.12),
-                  border: primary ? null : Border.all(color: Colors.white.withOpacity(0.15), width: 0.5),
+                  color: primary ? _foregroundColor : _foregroundColor.withOpacity(0.12),
+                  border: primary ? null : Border.all(color: _foregroundColor.withOpacity(0.15), width: 0.5),
                 ),
-                child: Icon(icon, color: primary ? (_foregroundColor == Colors.black ? Colors.white : Colors.black) : _foregroundColor, size: 26),
+                child: Icon(icon, color: primary ? _dominantColor : _foregroundColor, size: 26),
               ),
             ),
           ),

@@ -2,9 +2,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/dominant_color_service.dart';
 import '../../core/image/lh3_url_builder.dart';
 import '../../domain/entities/track.dart';
 import '../state/playback_controller.dart';
+import '../state/theme_state.dart';
 import 'app_image.dart';
 
 /// Shows the playback queue as a modal bottom sheet.
@@ -24,14 +26,17 @@ class _QueueSheetContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height * 0.85;
+    final themeState = context.watch<ThemeState>();
+    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
+    final sheetFg = DominantColorService.foregroundOn(sheetBg);
 
     return Container(
       height: height,
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: sheetBg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.08), width: 1),
+          top: BorderSide(color: sheetFg.withValues(alpha: 0.08), width: 1),
         ),
       ),
       child: Consumer<PlaybackController>(
@@ -48,7 +53,7 @@ class _QueueSheetContent extends StatelessWidget {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.white24,
+                    color: sheetFg.withOpacity(0.24),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -59,21 +64,21 @@ class _QueueSheetContent extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                 child: Row(
                   children: [
-                    const Text(
+                    Text(
                       'Queue',
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
-                        color: Colors.white,
+                        color: sheetFg,
                       ),
                     ),
                     const Spacer(),
                     if (upcoming.isNotEmpty)
                       IconButton(
                         onPressed: () => _confirmClear(context, playback),
-                        icon: const Icon(
+                        icon: Icon(
                           Icons.delete_outline_rounded,
-                          color: AppColors.primaryEnd,
+                          color: sheetFg.withOpacity(0.7),
                           size: 24,
                         ),
                         tooltip: 'Clear queue',
@@ -82,7 +87,7 @@ class _QueueSheetContent extends StatelessWidget {
                 ),
               ),
 
-              Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
+              Divider(color: sheetFg.withValues(alpha: 0.08), height: 1),
 
               // ── Content ──
               Expanded(

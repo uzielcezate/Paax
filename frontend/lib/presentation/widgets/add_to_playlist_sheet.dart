@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/playlist.dart';
 import '../state/library_controller.dart';
+import '../state/theme_state.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/dominant_color_service.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'playlist_cover.dart';
 
@@ -17,14 +19,17 @@ class AddToPlaylistSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final library = context.watch<LibraryController>();
     final playlists = library.playlists;
+    final themeState = context.watch<ThemeState>();
+    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
+    final sheetFg = DominantColorService.foregroundOn(sheetBg);
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.6,
       padding: const EdgeInsets.symmetric(vertical: 24),
       decoration: BoxDecoration(
-        color: AppColors.surface, 
+        color: sheetBg, 
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.1), width: 1)),
+        border: Border(top: BorderSide(color: sheetFg.withOpacity(0.1), width: 1)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -32,23 +37,23 @@ class AddToPlaylistSheet extends StatelessWidget {
           Container(
             width: 40, height: 4,
             margin: const EdgeInsets.only(bottom: 20),
-            decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+            decoration: BoxDecoration(color: sheetFg.withOpacity(0.24), borderRadius: BorderRadius.circular(2)),
           ),
-          const Text(
+          Text(
             "Add to Playlist",
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            style: TextStyle(color: sheetFg, fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 16),
           ListTile(
-            leading: const ContainerBox(icon: Icons.add, color: Colors.white),
-            title: const Text("New Playlist", style: TextStyle(color: Colors.white)),
+            leading: ContainerBox(icon: Icons.add, color: sheetFg),
+            title: Text("New Playlist", style: TextStyle(color: sheetFg)),
             onTap: () => _showCreateDialog(context, library),
           ),
-          Divider(color: Colors.white.withOpacity(0.1)),
+          Divider(color: sheetFg.withOpacity(0.1)),
           if (playlists.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Text("No playlists yet", style: TextStyle(color: Colors.grey)),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text("No playlists yet", style: TextStyle(color: sheetFg.withOpacity(0.5))),
             ),
           
           Expanded(
@@ -63,10 +68,10 @@ class AddToPlaylistSheet extends StatelessWidget {
                 final alreadyAdded = isSingle && pl.tracks.any((t) => t.id == tracks.first.id);
                 return ListTile(
                   leading: PlaylistCover(playlist: pl, size: 48),
-                  title: Text(pl.name, style: const TextStyle(color: Colors.white)),
-                  subtitle: Text("${pl.tracks.length} tracks", style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                  title: Text(pl.name, style: TextStyle(color: sheetFg)),
+                  subtitle: Text("${pl.tracks.length} tracks", style: TextStyle(color: sheetFg.withOpacity(0.54), fontSize: 12)),
                   trailing: alreadyAdded 
-                      ? const Icon(Icons.check, color: Colors.white)
+                      ? Icon(Icons.check, color: sheetFg)
                       : null,
                   onTap: () {
                     if (!alreadyAdded) {
@@ -74,8 +79,8 @@ class AddToPlaylistSheet extends StatelessWidget {
                       Navigator.pop(context); 
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text("Added to ${pl.name}", style: const TextStyle(color: Colors.white54)),
-                          backgroundColor: AppColors.surface,
+                          content: Text("Added to ${pl.name}", style: TextStyle(color: sheetFg.withOpacity(0.54))),
+                          backgroundColor: sheetBg,
                           behavior: SnackBarBehavior.floating,
                         )
                       );

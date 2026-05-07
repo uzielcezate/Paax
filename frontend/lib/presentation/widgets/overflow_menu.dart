@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/dominant_color_service.dart';
 import '../../domain/entities/track.dart';
 import 'add_to_playlist_sheet.dart';
 import '../../domain/entities/saved_album.dart';
@@ -12,6 +13,7 @@ import '../../domain/entities/single_track_album_detail.dart';
 import '../../core/utils/string_utils.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
+import '../state/theme_state.dart';
 import '../screens/artist_detail_screen.dart';
 import '../screens/album_detail_screen.dart';
 import '../screens/home_screen.dart'; // Import MainWrapper if needed, but it's a circular dep maybe.
@@ -130,20 +132,24 @@ class _MenuContent extends StatelessWidget {
     }
     // ... rest of build logic using effectiveTrack instead of track
     
+    final themeState = context.watch<ThemeState>();
+    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
+    final sheetFg = DominantColorService.foregroundOn(sheetBg);
+
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surface, 
+        color: sheetBg, 
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
+        border: Border(top: BorderSide(color: sheetFg.withOpacity(0.05), width: 1)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 24),
       child: SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildHeader(context, effectiveTrack),
-            Divider(color: Colors.white.withOpacity(0.1), height: 32),
-            ..._buildActions(context, effectiveTrack),
+            _buildHeader(context, effectiveTrack, sheetFg),
+            Divider(color: sheetFg.withOpacity(0.1), height: 32),
+            ..._buildActions(context, effectiveTrack, sheetFg),
             const SizedBox(height: 8),
           ],
         ),
@@ -151,7 +157,7 @@ class _MenuContent extends StatelessWidget {
     );
   }
 
-  Widget _buildHeader(BuildContext context, Track? effectiveTrack) {
+  Widget _buildHeader(BuildContext context, Track? effectiveTrack, Color sheetFg) {
     String title = "";
     String subtitle = "";
     String? imageUrl;
@@ -169,7 +175,13 @@ class _MenuContent extends StatelessWidget {
          imageUrl = singleDetail!.artworkUrl;
       } else if (album != null) {
          title = album!.title;
-         subtitle = album!.artistName;
+         // Prefer structured artist list over flat artistName to avoid "Various Artists"
+         final primaryArtist = (album!.artists != null && album!.artists!.isNotEmpty)
+             ? album!.artists!.first['name'] ?? album!.artistName
+             : album!.artistName;
+         subtitle = (primaryArtist.isEmpty || isPlaceholderArtist(primaryArtist))
+             ? album!.artistName
+             : primaryArtist;
          imageUrl = album!.artworkUrl;
       }
     } else if (type == MenuType.artist && artist != null) {
@@ -194,21 +206,21 @@ class _MenuContent extends StatelessWidget {
               decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(4)),
               child: const Icon(Icons.music_note, color: Colors.white54),
             ),
-      title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(title, style: TextStyle(color: sheetFg, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(subtitle, style: TextStyle(color: sheetFg.withOpacity(0.54), fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
     );
   }
 
-  List<Widget> _buildActions(BuildContext context, Track? effectiveTrack) {
+  List<Widget> _buildActions(BuildContext context, Track? effectiveTrack, Color sheetFg) {
     switch (type) {
-      case MenuType.track: return _buildTrackActions(context, effectiveTrack);
-      case MenuType.album: return _buildAlbumActions(context);
-      case MenuType.artist: return _buildArtistActions(context);
-      case MenuType.playlist: return _buildPlaylistActions(context);
+      case MenuType.track: return _buildTrackActions(context, effectiveTrack, sheetFg);
+      case MenuType.album: return _buildAlbumActions(context, sheetFg);
+      case MenuType.artist: return _buildArtistActions(context, sheetFg);
+      case MenuType.playlist: return _buildPlaylistActions(context, sheetFg);
     }
   }
 
-  List<Widget> _buildTrackActions(BuildContext context, Track? effectiveTrack) {
+  List<Widget> _buildTrackActions(BuildContext context, Track? effectiveTrack, Color sheetFg) {
     if (effectiveTrack == null) return [];
     final lib = context.read<LibraryController>();
     final isLiked = lib.isLiked(effectiveTrack); // Use updated API
@@ -217,13 +229,13 @@ class _MenuContent extends StatelessWidget {
       _actionItem(context, 
         icon: isLiked ? Icons.favorite : Icons.favorite_border,
         label: isLiked ? "Unlike" : "Like",
-        color: isLiked ? AppColors.primaryEnd : Colors.white,
+        color: isLiked ? AppColors.primaryEnd : sheetFg,
         onTap: () {
           lib.toggleLike(effectiveTrack);
           Navigator.pop(context); 
         }
       ),
-      _actionItem(context, icon: Icons.playlist_add, label: "Add to Playlist", onTap: () {
+      _actionItem(context, icon: Icons.playlist_add, label: "Add to Playlist", color: sheetFg, onTap: () {
         Navigator.pop(context); // Close overflow menu
         showModalBottomSheet(
           context: context,
@@ -233,7 +245,7 @@ class _MenuContent extends StatelessWidget {
           builder: (context) => AddToPlaylistSheet(tracks: [effectiveTrack]),
         );
       }),
-      _actionItem(context, icon: Icons.queue_music, label: "Add to Queue", onTap: () {
+      _actionItem(context, icon: Icons.queue_music, label: "Add to Queue", color: sheetFg, onTap: () {
         final playback = context.read<PlaybackController>();
         if (playback.currentTrack == null) {
            playback.playTrack(effectiveTrack);
@@ -243,7 +255,7 @@ class _MenuContent extends StatelessWidget {
         }
         Navigator.pop(context);
       }),
-      _actionItem(context, icon: Icons.album, label: "Go to Album", onTap: () {
+      _actionItem(context, icon: Icons.album, label: "Go to Album", color: sheetFg, onTap: () {
         Navigator.pop(context); 
         
         if (effectiveTrack.albumId.isEmpty || effectiveTrack.albumId == '0') {
@@ -275,7 +287,7 @@ class _MenuContent extends StatelessWidget {
       }),
 
       if (!isPlaceholderArtist(effectiveTrack.artistName))
-      _actionItem(context, icon: Icons.person, label: "Go to Artist", onTap: () {
+      _actionItem(context, icon: Icons.person, label: "Go to Artist", color: sheetFg, onTap: () {
          // Build valid artist list from track metadata
          final validArtists = (effectiveTrack.artists ?? [])
              .where((a) => (a['id'] ?? '').isNotEmpty && (a['name'] ?? '').isNotEmpty)
@@ -312,7 +324,7 @@ class _MenuContent extends StatelessWidget {
            _showArtistPicker(parentContext, validArtists, effectiveTrack);
          }
       }),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
          Share.share('Check out "${effectiveTrack.title}" by ${effectiveTrack.artistName} on Beaty! https://music.youtube.com/watch?v=${effectiveTrack.id}');
       }),
@@ -335,7 +347,7 @@ class _MenuContent extends StatelessWidget {
     ];
   }
 
-  List<Widget> _buildAlbumActions(BuildContext context) {
+  List<Widget> _buildAlbumActions(BuildContext context, Color sheetFg) {
     final effectiveAlbumId = album?.albumId ?? singleDetail?.track.albumId ?? '';
     if ((effectiveAlbumId.isEmpty || effectiveAlbumId == '0') && singleDetail == null) return [];
     
@@ -350,7 +362,7 @@ class _MenuContent extends StatelessWidget {
 
     return [
       if (!isSingle) ...[
-         _actionItem(context, icon: Icons.play_arrow, label: "Play Album", onTap: () {
+         _actionItem(context, icon: Icons.play_arrow, label: "Play Album", color: sheetFg, onTap: () {
             Navigator.pop(context); 
             if (album != null) {
                final route = MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album!));
@@ -364,7 +376,7 @@ class _MenuContent extends StatelessWidget {
          _actionItem(context, 
            icon: isSaved ? Icons.bookmark : Icons.bookmark_border,
            label: isSaved ? "Remove from Library" : "Save to Library",
-           color: isSaved ? Colors.white : Colors.white,
+           color: sheetFg,
            onTap: () {
              if (album != null) lib.toggleSaveAlbum(album!);
              Navigator.pop(context);
@@ -372,7 +384,7 @@ class _MenuContent extends StatelessWidget {
          ),
       ],
       if (artistId != null && artistId.isNotEmpty && artistId != '0' && !isPlaceholderArtist(artistName))
-      _actionItem(context, icon: Icons.person, label: "Go to Artist", onTap: () {
+      _actionItem(context, icon: Icons.person, label: "Go to Artist", color: sheetFg, onTap: () {
         Navigator.pop(context);
         if (onNavigation != null) onNavigation!();
 
@@ -387,7 +399,7 @@ class _MenuContent extends StatelessWidget {
             Navigator.push(parentContext, route);
          }
       }),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
         Navigator.pop(context);
         if (effectiveAlbumId.isNotEmpty && effectiveAlbumId != '0') {
             Share.share('Check out "${album?.title ?? singleDetail?.title}" by $artistName on Beaty! https://music.youtube.com/browse/$effectiveAlbumId');
@@ -398,7 +410,7 @@ class _MenuContent extends StatelessWidget {
     ];
   }
 
-  List<Widget> _buildArtistActions(BuildContext context) {
+  List<Widget> _buildArtistActions(BuildContext context, Color sheetFg) {
     if (artist == null) return [];
     final lib = context.read<LibraryController>();
     final isFollowed = lib.isArtistFollowed(artist!.id);
@@ -407,33 +419,33 @@ class _MenuContent extends StatelessWidget {
       _actionItem(context, 
         icon: isFollowed ? Icons.check : Icons.person_add_alt,
         label: isFollowed ? "Unfollow" : "Follow",
-        color: isFollowed ? Colors.white : Colors.white,
+        color: sheetFg,
         onTap: () {
            lib.toggleFollowArtist(artist!);
            Navigator.pop(context);
         }
       ),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
          Share.share('Check out ${artist!.name} on Beaty! https://deezer.com/artist/${artist!.id}');
       }),
     ];
   }
 
-  List<Widget> _buildPlaylistActions(BuildContext context) {
+  List<Widget> _buildPlaylistActions(BuildContext context, Color sheetFg) {
     if (playlist == null) return [];
     return [
-      _actionItem(context, icon: Icons.play_arrow, label: "Play Playlist", onTap: () {
+      _actionItem(context, icon: Icons.play_arrow, label: "Play Playlist", color: sheetFg, onTap: () {
          Navigator.pop(context);
          // Play playlist logic
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Play playlist not implemented")));
       }),
       if (onEditOrder != null)
-        _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", onTap: () {
+        _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", color: sheetFg, onTap: () {
            Navigator.pop(context);
            onEditOrder!();
         }),
-      _actionItem(context, icon: Icons.edit, label: "Edit Playlist", onTap: () {
+      _actionItem(context, icon: Icons.edit, label: "Edit Playlist", color: sheetFg, onTap: () {
          Navigator.pop(context);
          if (onEdit != null) onEdit!();
       }),
@@ -441,7 +453,7 @@ class _MenuContent extends StatelessWidget {
          Navigator.pop(context);
          if (onDelete != null) onDelete!();
       }),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
           Share.share('Check out my playlist "${playlist!.name}" on Beaty!');
       }),
@@ -483,45 +495,50 @@ class _MenuContent extends StatelessWidget {
       context: ctx,
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetCtx) => Container(
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                child: Text(
-                  "Choose Artist",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+      builder: (sheetCtx) {
+        final ts = sheetCtx.watch<ThemeState>();
+        final sBg = DominantColorService.adaptiveSheetColor(ts.backgroundColor);
+        final sFg = DominantColorService.foregroundOn(sBg);
+        return Container(
+          decoration: BoxDecoration(
+            color: sBg,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border(top: BorderSide(color: sFg.withOpacity(0.05), width: 1)),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                  child: Text(
+                    "Choose Artist",
+                    style: TextStyle(
+                      color: sFg,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ),
-              Divider(color: Colors.white.withOpacity(0.1)),
-              ...artists.map((a) => ListTile(
-                leading: const Icon(Icons.person_outline, color: Colors.white70),
-                title: Text(
-                  a['name'] ?? '',
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                ),
-                onTap: () {
-                  Navigator.pop(sheetCtx); // Close picker
-                  _navigateToArtist(a['id']!, a['name']!, sourceTrack);
-                },
-              )),
-              const SizedBox(height: 8),
-            ],
+                Divider(color: sFg.withOpacity(0.1)),
+                ...artists.map((a) => ListTile(
+                  leading: Icon(Icons.person_outline, color: sFg.withOpacity(0.7)),
+                  title: Text(
+                    a['name'] ?? '',
+                    style: TextStyle(color: sFg, fontSize: 16),
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetCtx); // Close picker
+                    _navigateToArtist(a['id']!, a['name']!, sourceTrack);
+                  },
+                )),
+                const SizedBox(height: 8),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

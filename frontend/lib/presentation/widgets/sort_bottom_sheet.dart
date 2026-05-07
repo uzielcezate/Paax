@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'dart:ui';
-import '../../core/theme/app_colors.dart';
+import 'package:provider/provider.dart';
+import '../../core/utils/dominant_color_service.dart';
+import '../state/theme_state.dart';
 
 class SortBottomSheet extends StatelessWidget {
   final List<String> options;
@@ -18,10 +19,14 @@ class SortBottomSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeState = context.watch<ThemeState>();
+    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
+    final sheetFg = DominantColorService.foregroundOn(sheetBg);
+
     return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: sheetBg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: SafeArea(
         top: false,
@@ -33,12 +38,12 @@ class SortBottomSheet extends StatelessWidget {
               child: Container(
                 margin: const EdgeInsets.only(top: 12, bottom: 8),
                 width: 40, height: 4,
-                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                decoration: BoxDecoration(color: sheetFg.withOpacity(0.24), borderRadius: BorderRadius.circular(2)),
               ),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              child: Text(title, style: TextStyle(color: sheetFg, fontSize: 18, fontWeight: FontWeight.bold)),
             ),
             Flexible(
               child: ListView.builder(
@@ -49,8 +54,8 @@ class SortBottomSheet extends StatelessWidget {
                 itemBuilder: (context, index) {
                    final label = options[index];
                    return ListTile(
-                     title: Text(label, style: const TextStyle(color: Colors.white)),
-                     trailing: index == selectedIndex ? const Icon(Icons.check, color: Colors.white) : null,
+                     title: Text(label, style: TextStyle(color: sheetFg)),
+                     trailing: index == selectedIndex ? Icon(Icons.check, color: sheetFg) : null,
                      onTap: () => onSelected(index),
                      contentPadding: const EdgeInsets.symmetric(horizontal: 24),
                    );
