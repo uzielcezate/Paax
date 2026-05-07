@@ -136,7 +136,7 @@ class _QueueSheetContent extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: AppColors.primaryStart,
+                color: Colors.white,
                 letterSpacing: 0.5,
               ),
             ),
@@ -230,9 +230,9 @@ class _NowPlayingTile extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.primaryStart.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primaryStart.withValues(alpha: 0.2)),
+        color: Colors.white.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -273,7 +273,7 @@ class _NowPlayingTile extends StatelessWidget {
           ),
           Icon(
             isPlaying ? Icons.graphic_eq_rounded : Icons.pause_rounded,
-            color: AppColors.primaryStart,
+            color: Colors.white,
             size: 24,
           ),
         ],

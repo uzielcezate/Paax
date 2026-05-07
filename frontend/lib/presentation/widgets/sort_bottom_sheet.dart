@@ -54,8 +54,8 @@ class SortBottomSheet extends StatelessWidget {
                     itemBuilder: (context, index) {
                        final label = options[index];
                        return ListTile(
-                         title: Text(label, style: TextStyle(color: index == selectedIndex ? AppColors.primaryStart : Colors.white)),
-                         trailing: index == selectedIndex ? const Icon(Icons.check, color: AppColors.primaryStart) : null,
+                         title: Text(label, style: TextStyle(color: Colors.white)),
+                         trailing: index == selectedIndex ? const Icon(Icons.check, color: Colors.white) : null,
                          onTap: () => onSelected(index),
                          contentPadding: const EdgeInsets.symmetric(horizontal: 24),
                        );

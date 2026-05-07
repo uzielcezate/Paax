@@ -36,6 +36,7 @@ class OverflowMenu extends StatelessWidget {
   final bool isNowPlaying; // Flag to enable dynamic current track resolution
   final VoidCallback? onNavigation;
   final Playlist? playlistContext; // When non-null, adds 'Remove from Playlist'
+  final Color? iconColor;
 
   const OverflowMenu({
     super.key,
@@ -51,6 +52,7 @@ class OverflowMenu extends StatelessWidget {
     this.onNavigation,
     this.isNowPlaying = false, // Default false
     this.playlistContext,
+    this.iconColor,
   });
 
   void _showMenu(BuildContext context) {
@@ -79,7 +81,7 @@ class OverflowMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
+      icon: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white),
       onPressed: () => _showMenu(context),
     );
   }
@@ -369,7 +371,7 @@ class _MenuContent extends StatelessWidget {
          _actionItem(context, 
            icon: isSaved ? Icons.bookmark : Icons.bookmark_border,
            label: isSaved ? "Remove from Library" : "Save to Library",
-           color: isSaved ? AppColors.primaryEnd : Colors.white,
+           color: isSaved ? Colors.white : Colors.white,
            onTap: () {
              if (album != null) lib.toggleSaveAlbum(album!);
              Navigator.pop(context);
@@ -412,7 +414,7 @@ class _MenuContent extends StatelessWidget {
       _actionItem(context, 
         icon: isFollowed ? Icons.check : Icons.person_add_alt,
         label: isFollowed ? "Unfollow" : "Follow",
-        color: isFollowed ? AppColors.primaryEnd : Colors.white,
+        color: isFollowed ? Colors.white : Colors.white,
         onTap: () {
            lib.toggleFollowArtist(artist!);
            Navigator.pop(context);

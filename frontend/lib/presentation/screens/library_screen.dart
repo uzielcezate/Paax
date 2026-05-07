@@ -254,18 +254,15 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
             child: Container(
               height: 56,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [AppColors.primaryStart, AppColors.primaryEnd]),
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(color: AppColors.primaryStart.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))
-                ]
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: const [
-                  Icon(Icons.add_rounded, color: Colors.white, size: 28),
+                  Icon(Icons.add_rounded, color: Colors.black, size: 28),
                   SizedBox(width: 8),
-                  Text("Create Playlist", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text("Create Playlist", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
                 ],
               ),
             ),
@@ -297,6 +294,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
                     trailing: OverflowMenu(
                       type: MenuType.playlist,
                       playlist: pl,
+                      iconColor: Colors.white,
                       onDelete: () => _confirmDeletePlaylist(context, pl.id, pl.name),
                     ),
                     onTap: () {
@@ -329,7 +327,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
                 hintText: "Playlist Name",
                 hintStyle: TextStyle(color: Colors.grey),
                 enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primaryStart)),
+                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white)),
               ),
               autofocus: true,
             ),
@@ -342,7 +340,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
                     Navigator.pop(dialogContext);
                   }
                 }, 
-                child: const Text("Create", style: TextStyle(color: AppColors.primaryStart))
+                child: const Text("Create", style: TextStyle(color: Colors.white))
               ),
             ],
           ),

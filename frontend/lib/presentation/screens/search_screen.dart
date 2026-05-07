@@ -219,7 +219,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   List<Widget> _buildBodySlivers(app_search.SearchController search) {
     if (search.isLoading) {
-      return [const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: AppColors.primaryStart)))];
+      return [const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: Colors.white)))];
     }
     
     // Add top padding to content so it doesn't touch the divider immediately
@@ -314,7 +314,7 @@ class _SearchScreenState extends State<SearchScreen> {
                  Align(
                    alignment: Alignment.centerLeft,
                    child: TextButton(
-                     child: const Text("See all songs", style: TextStyle(color: AppColors.primaryStart)), 
+                     child: const Text("See all songs", style: TextStyle(color: Colors.white)), 
                      onPressed: () => setState(() => _selectedFilter = "Tracks")
                    )
                  ),

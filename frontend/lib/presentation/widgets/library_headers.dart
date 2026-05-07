@@ -39,17 +39,14 @@ class LibraryChipTabs extends StatelessWidget implements PreferredSizeWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(24),
-                gradient: isSelected
-                    ? const LinearGradient(colors: [AppColors.primaryStart, AppColors.primaryEnd])
-                    : null,
-                color: isSelected ? null : Colors.white.withOpacity(0.05),
+                color: isSelected ? Colors.white : Colors.white.withOpacity(0.05),
                 border: isSelected ? null : Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               alignment: Alignment.center,
               child: Text(
                 tabs[index],
                 style: TextStyle(
-                  color: isSelected ? Colors.white : Colors.white70,
+                  color: isSelected ? Colors.black : Colors.white70,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                   fontSize: 14,
                 ),

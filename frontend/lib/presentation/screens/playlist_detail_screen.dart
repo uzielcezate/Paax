@@ -488,7 +488,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: Colors.white.withOpacity(0.14), width: 0.5),
                   ),
-                  child: const Text('Done', style: TextStyle(color: AppColors.primaryStart, fontWeight: FontWeight.bold, fontSize: 15)),
+                  child: Text('Done', style: TextStyle(color: _foregroundColor, fontWeight: FontWeight.bold, fontSize: 15)),
                 ),
               )
             else
@@ -496,6 +496,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                 child: OverflowMenu(
                   type: MenuType.playlist,
                   playlist: currentPlaylist,
+                  iconColor: _foregroundColor,
                   onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
                   onDelete: () => _confirmDelete(context, library, currentPlaylist!),
                   onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
@@ -516,11 +517,12 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           trailing: _isEditMode
               ? GestureDetector(
                   onTap: _exitEditMode,
-                  child: const Text('Done', style: TextStyle(color: AppColors.primaryStart, fontWeight: FontWeight.bold, fontSize: 14)),
+                  child: Text('Done', style: TextStyle(color: _foregroundColor, fontWeight: FontWeight.bold, fontSize: 14)),
                 )
               : OverflowMenu(
                   type: MenuType.playlist,
                   playlist: currentPlaylist,
+                  iconColor: _foregroundColor,
                   onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
                   onDelete: () => _confirmDelete(context, library, currentPlaylist!),
                   onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
@@ -577,7 +579,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
             enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primaryStart)),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white)),
           ),
           autofocus: true,
         ),
@@ -593,7 +595,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                  Navigator.pop(context);
               }
             },
-            child: const Text("Rename", style: TextStyle(color: AppColors.primaryStart)),
+            child: const Text("Rename", style: TextStyle(color: Colors.white)),
           ),
         ],
       ),

@@ -325,7 +325,7 @@ class _PlayerControlsState extends State<_PlayerControls> {
            Selector<PlaybackController, bool>(
              selector: (_, c) => c.isShuffle,
              builder: (_, isShuffle, __) => IconButton(
-               icon: Icon(Icons.shuffle, color: isShuffle ? AppColors.primaryStart : Colors.white54, size: 24),
+               icon: Icon(Icons.shuffle, color: isShuffle ? AppColors.primaryEnd : Colors.white54, size: 24),
                onPressed: controller.toggleShuffle,
              ),
            ),
@@ -370,7 +370,7 @@ class _PlayerControlsState extends State<_PlayerControls> {
              builder: (_, loopMode, __) => IconButton(
                icon: Icon(
                    loopMode == LoopMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded,
-                   color: loopMode != LoopMode.off ? AppColors.primaryStart : Colors.white54,
+                   color: loopMode != LoopMode.off ? AppColors.primaryEnd : Colors.white54,
                    size: 24,
                ),
                onPressed: controller.toggleLoop,

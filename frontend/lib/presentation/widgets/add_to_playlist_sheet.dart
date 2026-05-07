@@ -44,7 +44,7 @@ class AddToPlaylistSheet extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               ListTile(
-                leading: const ContainerBox(icon: Icons.add, color: AppColors.primaryStart),
+                leading: const ContainerBox(icon: Icons.add, color: Colors.white),
                 title: const Text("New Playlist", style: TextStyle(color: Colors.white)),
                 onTap: () => _showCreateDialog(context, library),
               ),
@@ -70,7 +70,7 @@ class AddToPlaylistSheet extends StatelessWidget {
                       title: Text(pl.name, style: const TextStyle(color: Colors.white)),
                       subtitle: Text("${pl.tracks.length} tracks", style: const TextStyle(color: Colors.white54, fontSize: 12)),
                       trailing: alreadyAdded 
-                          ? const Icon(Icons.check, color: AppColors.primaryStart)
+                          ? const Icon(Icons.check, color: Colors.white)
                           : null,
                       onTap: () {
                         if (!alreadyAdded) {
@@ -118,7 +118,7 @@ class AddToPlaylistSheet extends StatelessWidget {
                 hintText: "Playlist name",
                 hintStyle: TextStyle(color: Colors.grey),
                 enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primaryStart)),
+                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white)),
               ),
               autofocus: true,
             ),
@@ -134,7 +134,7 @@ class AddToPlaylistSheet extends StatelessWidget {
                     Navigator.of(dialogContext).pop();
                   }
                 },
-                child: const Text("Create", style: TextStyle(color: AppColors.primaryStart)),
+                child: const Text("Create", style: TextStyle(color: Colors.white)),
               ),
             ],
           ),

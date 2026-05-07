@@ -61,7 +61,7 @@ class TrackListTile extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          color: isCurrentTrack ? AppColors.primaryStart : foregroundColor,
+          color: foregroundColor,
           fontWeight: isCurrentTrack ? FontWeight.bold : FontWeight.w600,
           fontSize: fontSizeTitle,
         ),
@@ -89,7 +89,7 @@ class TrackListTile extends StatelessWidget {
                       onPressed: () => lib.toggleLike(track),
                     ),
                   ),
-                   OverflowMenu(type: MenuType.track, track: track),
+                   OverflowMenu(type: MenuType.track, track: track, iconColor: foregroundColor.withOpacity(0.5)),
                 ],
               ),
             ),
@@ -118,7 +118,7 @@ class TrackListTile extends StatelessWidget {
                   color: Colors.black54,
                   child: Icon(
                     isPlaying ? Icons.graphic_eq : Icons.pause, 
-                    color: AppColors.primaryStart,
+                    color: Colors.white,
                     size: 24,
                   ),
                 ),
@@ -131,7 +131,7 @@ class TrackListTile extends StatelessWidget {
       if (isCurrentTrack) {
         return Icon(
           isPlaying ? Icons.graphic_eq : Icons.pause, 
-          color: AppColors.primaryStart,
+          color: foregroundColor,
           size: 20,
         );
       } else {

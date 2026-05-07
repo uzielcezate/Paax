@@ -363,11 +363,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                        GestureDetector(
                          onTap: _isNavigatingToArtist ? null : _onArtistTap,
                          child: _isNavigatingToArtist 
-                           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryStart))
+                            ? SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: _foregroundColor))
                            : Text(
                                _artistName,
                                textAlign: TextAlign.center,
-                               style: const TextStyle(fontSize: 18, color: AppColors.primaryStart, fontWeight: FontWeight.w500),
+                                style: TextStyle(fontSize: 18, color: _foregroundColor.withOpacity(0.7), fontWeight: FontWeight.w500),
                              ),
                        ),
                            const SizedBox(height: 12),
@@ -418,7 +418,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                         icon: isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                                         label: isLiked ? "Liked" : "Like",
                                         onTap: () => lib.toggleLike(widget.singleDetail!.track),
-                                        color: isLiked ? AppColors.primaryEnd : Colors.white,
+                                         color: isLiked ? AppColors.primaryEnd : _foregroundColor,
                                       );
                                    } else {
                                       final isSaved = lib.isAlbumSaved(widget.album!.albumId);
@@ -426,7 +426,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                         icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
                                         label: isSaved ? "Saved" : "Save",
                                         onTap: () => lib.toggleSaveAlbum(widget.album!),
-                                        color: isSaved ? AppColors.primaryEnd : Colors.white,
+                                         color: isSaved ? AppColors.primaryEnd : _foregroundColor,
                                       );
                                    }
                                  }
@@ -514,8 +514,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   ),
                   GlassMenuButton(
                     child: _isSingleMode
-                        ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track)
-                        : OverflowMenu(type: MenuType.album, album: widget.album!),
+                        ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track, iconColor: _foregroundColor)
+                        : OverflowMenu(type: MenuType.album, album: widget.album!, iconColor: _foregroundColor),
                   ),
                 ],
               ),
@@ -524,8 +524,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 onBack: () => Navigator.pop(context),
                 foregroundColor: _foregroundColor,
                 trailing: _isSingleMode
-                    ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track)
-                    : OverflowMenu(type: MenuType.album, album: widget.album!),
+                    ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track, iconColor: _foregroundColor)
+                    : OverflowMenu(type: MenuType.album, album: widget.album!, iconColor: _foregroundColor),
               ),
             ),
         ],

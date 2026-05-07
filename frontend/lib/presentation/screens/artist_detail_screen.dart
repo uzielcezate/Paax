@@ -276,6 +276,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                       name: widget.artistName,
                       picture: widget.pictureUrl ?? '',
                     ),
+                    iconColor: _foregroundColor,
                   ),
                 ),
               ],
@@ -291,6 +292,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                   name: widget.artistName,
                   picture: widget.pictureUrl ?? '',
                 ),
+                iconColor: _foregroundColor,
               ),
             ),
           ),
@@ -315,7 +317,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
              SizedBox(height: 16),
              TextButton(
                onPressed: _loadData,
-               child: Text("Retry", style: TextStyle(color: AppColors.primaryStart)),
+               child: Text("Retry", style: TextStyle(color: _foregroundColor)),
              )
            ],
          ),
@@ -441,19 +443,18 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                Container(
                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                  decoration: BoxDecoration(
-                                   color: Colors.black.withOpacity(0.6),
-                                   borderRadius: BorderRadius.circular(20),
-                                   border: Border.all(color: Colors.amber.withOpacity(0.6), width: 1),
-                                   boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 4)]
+                                    color: _foregroundColor.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(color: _foregroundColor.withOpacity(0.2), width: 0.5),
                                  ),
                                  child: Row(
                                    mainAxisSize: MainAxisSize.min,
                                    children: [
-                                     const Icon(Icons.people_alt_rounded, color: Colors.amber, size: 14),
+                                      Icon(Icons.people_alt_rounded, color: _foregroundColor.withOpacity(0.7), size: 14),
                                      const SizedBox(width: 6),
                                      Text(
                                        fanStr, 
-                                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)
+                                        style: TextStyle(color: _foregroundColor, fontWeight: FontWeight.bold, fontSize: 13)
                                      ),
                                    ],
                                  ),
@@ -470,8 +471,8 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                          width: 36, height: 36,
                                          decoration: BoxDecoration(
                                             shape: BoxShape.circle,
-                                            color: isFollowed ? AppColors.primaryStart : Colors.white.withOpacity(0.2),
-                                            border: Border.all(color: Colors.white.withOpacity(0.3), width: 1)
+                                             color: isFollowed ? _foregroundColor.withOpacity(0.3) : _foregroundColor.withOpacity(0.1),
+                                             border: Border.all(color: _foregroundColor.withOpacity(0.2), width: 0.5)
                                          ),
                                          child: Icon(
                                            isFollowed ? Icons.check : Icons.person_add_rounded,
@@ -842,12 +843,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                 ));
               },
               style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.white24),
+                backgroundColor: _foregroundColor,
+                side: BorderSide.none,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                foregroundColor: Colors.white,
+                foregroundColor: _foregroundColor == Colors.white ? Colors.black : Colors.white,
               ),
-              child: const Text('See full discography',
+              child: Text('See full discography',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
             ),
           ),
