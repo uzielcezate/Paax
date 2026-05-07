@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:palette_generator/palette_generator.dart';
 
 /// Singleton service that extracts and caches the dominant color from
-/// network artwork images.
+/// network artwork images.  Preserves pastel / light colors faithfully.
 class DominantColorService {
   DominantColorService._();
   static final instance = DominantColorService._();
@@ -12,8 +12,6 @@ class DominantColorService {
   final Map<String, Color> _cache = {};
   final Map<String, Completer<Color>> _pending = {};
   static const Color fallback = Color(0xFF000000);
-  static const double _maxLightness = 0.50;
-  static const double _maxSaturation = 0.75;
 
   /// Returns appropriate foreground color (black or white) for [bg].
   static Color foregroundOn(Color bg) {
@@ -59,19 +57,16 @@ class DominantColorService {
       maximumColorCount: 16,
     ).timeout(const Duration(seconds: 5));
 
+    // Prefer dominant, then try lighter/pastel-friendly fallbacks
     final raw = palette.dominantColor?.color
+        ?? palette.lightMutedColor?.color
         ?? palette.vibrantColor?.color
-        ?? palette.darkVibrantColor?.color
         ?? palette.mutedColor?.color
+        ?? palette.darkVibrantColor?.color
         ?? fallback;
-    return _processForUI(raw);
-  }
 
-  Color _processForUI(Color color) {
-    final hsl = HSLColor.fromColor(color);
-    return hsl
-        .withLightness(hsl.lightness.clamp(0.08, _maxLightness))
-        .withSaturation(hsl.saturation.clamp(0.0, _maxSaturation))
-        .toColor();
+    // NO aggressive processing — return the color as-is.
+    // This preserves pastels like #e8acb8 faithfully.
+    return raw;
   }
 }

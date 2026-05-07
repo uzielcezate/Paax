@@ -62,7 +62,7 @@ class TrackListTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: isCurrentTrack ? AppColors.primaryStart : foregroundColor,
-          fontWeight: isCurrentTrack ? FontWeight.bold : FontWeight.normal,
+          fontWeight: isCurrentTrack ? FontWeight.bold : FontWeight.w600,
           fontSize: fontSizeTitle,
         ),
       ),

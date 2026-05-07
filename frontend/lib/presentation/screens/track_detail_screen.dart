@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
@@ -231,20 +232,25 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
   Widget _buildActionButton({required IconData icon, required String label, required VoidCallback onTap, bool primary = false, Color color = Colors.white}) {
     return Column(
       children: [
-        Container(
-          width: 60, height: 60,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: primary ? AppColors.primaryStart : AppColors.surfaceLight,
-            gradient: primary ? AppColors.primaryGradient : null,
-          ),
-          child: IconButton(
-            icon: Icon(icon, color: primary ? Colors.white : color),
-            onPressed: onTap,
+        GestureDetector(
+          onTap: onTap,
+          child: ClipOval(
+            child: BackdropFilter(
+              filter: primary ? ImageFilter.blur() : ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: Container(
+                width: 60, height: 60,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: primary ? Colors.white : Colors.white.withOpacity(0.12),
+                  border: primary ? null : Border.all(color: Colors.white.withOpacity(0.15), width: 0.5),
+                ),
+                child: Icon(icon, color: primary ? Colors.black : color, size: 26),
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 8),
-        Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+        Text(label, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12)),
       ],
     );
   }
