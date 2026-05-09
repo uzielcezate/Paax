@@ -252,7 +252,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           ),
           
           // Top fade gradient — matches dominant background color
-          TopFadeGradient(color: _dominantColor),
+          DynamicEdgeFade.dynamic(
+            key: ValueKey('fade_artist_${widget.artistId}'),
+            color: _dominantColor,
+          ),
           
           // Floating controls
           FloatingTopControls(
@@ -398,7 +401,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                           _dominantColor.withOpacity(0.7),
                           _dominantColor,
                         ],
-                        stops: const [0.3, 0.55, 0.85, 1.0],
+                         stops: const [0.55, 0.72, 0.92, 1.0],
                       ),
                    ),
                  ),

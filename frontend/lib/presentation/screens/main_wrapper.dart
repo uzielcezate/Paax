@@ -26,6 +26,9 @@ class MainWrapperState extends State<MainWrapper> {
   int _currentIndex = 0;
   final List<int> _history = [];
   PlaybackController? _playbackController;
+  /// True when the current tab is showing its root page (Home/Search/Library/Profile).
+  /// Global black edge fades are ONLY rendered in this state.
+  bool _isOnRootPage = true;
   
   final List<GlobalKey<NavigatorState>> _navigatorKeys = [
     GlobalKey<NavigatorState>(),
@@ -56,6 +59,7 @@ class MainWrapperState extends State<MainWrapper> {
     // 1. Try to pop internal route in current tab
     if (currentNavigator != null && currentNavigator.canPop()) {
       currentNavigator.pop();
+      _refreshRootPageFlag();
       return true;
     }
     
@@ -87,12 +91,28 @@ class MainWrapperState extends State<MainWrapper> {
         _currentIndex = index;
       });
     }
+    _refreshRootPageFlag();
   }
 
   void navigateTo(Route route) {
      if (_navigatorKeys[_currentIndex].currentState != null) {
        _navigatorKeys[_currentIndex].currentState!.push(route);
      }
+     _refreshRootPageFlag();
+  }
+
+  /// Recalculates whether the active tab is at root (no pushed routes).
+  /// Schedules a post-frame check because navigator state isn't available
+  /// until after the current frame finishes building.
+  void _refreshRootPageFlag() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final nav = _navigatorKeys[_currentIndex].currentState;
+      final onRoot = nav == null || !nav.canPop();
+      if (onRoot != _isOnRootPage) {
+        setState(() => _isOnRootPage = onRoot);
+      }
+    });
   }
 
   @override
@@ -156,6 +176,7 @@ class MainWrapperState extends State<MainWrapper> {
                  
                  return Navigator(
                    key: _navigatorKeys[idx],
+                   observers: [_NavRouteObserver(onChanged: _refreshRootPageFlag)],
                    onGenerateRoute: (settings) {
                      WidgetBuilder builder;
                      if (settings.name == '/') {
@@ -180,6 +201,9 @@ class MainWrapperState extends State<MainWrapper> {
             ),
 
             // ── Top edge fade gradient ──
+            // Only shown on root pages (Home/Search/Library/Profile).
+            // Detail screens manage their own dynamic-color fades.
+            if (_isOnRootPage)
             Positioned(
               top: 0,
               left: 0,
@@ -205,6 +229,8 @@ class MainWrapperState extends State<MainWrapper> {
             ),
 
             // ── Bottom edge gradient ──
+            // Only shown on root pages.
+            if (_isOnRootPage)
             Positioned(
               left: 0,
               right: 0,
@@ -307,4 +333,21 @@ class MainWrapperState extends State<MainWrapper> {
       ),
     );
   }
+}
+
+/// Lightweight route observer that calls [onChanged] whenever a route is
+/// pushed or popped inside a tab Navigator — used to recalculate
+/// whether the shell should show global black fades.
+class _NavRouteObserver extends NavigatorObserver {
+  final VoidCallback onChanged;
+  _NavRouteObserver({required this.onChanged});
+
+  @override
+  void didPush(Route route, Route? previousRoute) => onChanged();
+  @override
+  void didPop(Route route, Route? previousRoute) => onChanged();
+  @override
+  void didRemove(Route route, Route? previousRoute) => onChanged();
+  @override
+  void didReplace({Route? newRoute, Route? oldRoute}) => onChanged();
 }

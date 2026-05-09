@@ -258,7 +258,10 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       ),
 
           // Top fade gradient — matches genre color
-          TopFadeGradient(color: _dominantColor),
+          DynamicEdgeFade.dynamic(
+            key: ValueKey('fade_genre_${widget.genreSlug}'),
+            color: _dominantColor,
+          ),
 
           // Floating controls
           FloatingTopControls(
@@ -328,7 +331,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                       _dominantColor.withOpacity(0.85),
                       _dominantColor,
                     ],
-                    stops: const [0.0, 0.5, 0.85, 1.0],
+                    stops: const [0.4, 0.65, 0.92, 1.0],
                   ),
                 ),
               ),

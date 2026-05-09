@@ -225,7 +225,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                 _dominantColor.withOpacity(0.7),
                                 _dominantColor,
                               ],
-                              stops: const [0.0, 0.5, 0.85, 1.0]
+                              stops: const [0.4, 0.65, 0.92, 1.0]
                             ),
                           ),
                         ),
@@ -461,7 +461,10 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       ),
 
       // Top fade gradient — matches dominant background color
-      TopFadeGradient(color: _dominantColor),
+      DynamicEdgeFade.dynamic(
+        key: ValueKey('fade_playlist_${widget.playlist.id}'),
+        color: _dominantColor,
+      ),
 
       // Floating controls
       FloatingTopControls(

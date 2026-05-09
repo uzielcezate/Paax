@@ -404,19 +404,59 @@ class FloatingTopControls extends StatelessWidget {
   }
 }
 
-/// ─── TopFadeGradient ────────────────────────────────────────────────────────
-/// Deep fade from top edge — uses dominant color when provided,
-/// otherwise falls back to black.
-class TopFadeGradient extends StatelessWidget {
-  final double height;
+/// ─── DynamicEdgeFade ────────────────────────────────────────────────────────
+/// Unified edge-fade overlay for ALL screens.
+///
+/// **Static screens** (Home, Search, Profile, Library):
+///   `DynamicEdgeFade.black()`  — classic black fade, full intensity.
+///
+/// **Dynamic detail screens** (Artist, Album, Playlist, Discography, Genre):
+///   `DynamicEdgeFade.dynamic(color: dominantColor, contentId: '...')`
+///   — uses the screen's dominant color at 75 % intensity / 75 % height.
+///
+/// Always wrap with a [ValueKey] based on the content (artistId, albumId, etc.)
+/// so Flutter discards the old widget when navigating between detail pages.
+class DynamicEdgeFade extends StatelessWidget {
   final Color color;
+  final double height;
+  final double maxOpacity;
+  final bool fromTop;
 
-  const TopFadeGradient({super.key, this.height = 130, this.color = const Color(0xFF000000)});
+  // ── Factory: black fade for static screens ──
+  const DynamicEdgeFade.black({
+    super.key,
+    this.height = 130,
+    this.fromTop = true,
+  })  : color = const Color(0xFF000000),
+        maxOpacity = 0.95;
+
+  // ── Factory: dynamic color fade for detail screens ──
+  // 75 % height (130 → 97) and 75 % opacity (0.95 → 0.71)
+  const DynamicEdgeFade.dynamic({
+    super.key,
+    required this.color,
+    this.height = 97,
+    this.maxOpacity = 0.71,
+    this.fromTop = true,
+  });
+
+  // ── Fully custom ──
+  const DynamicEdgeFade({
+    super.key,
+    required this.color,
+    this.height = 130,
+    this.maxOpacity = 0.95,
+    this.fromTop = true,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final begin = fromTop ? Alignment.topCenter : Alignment.bottomCenter;
+    final end   = fromTop ? Alignment.bottomCenter : Alignment.topCenter;
+
     return Positioned(
-      top: 0,
+      top: fromTop ? 0 : null,
+      bottom: fromTop ? null : 0,
       left: 0,
       right: 0,
       child: IgnorePointer(
@@ -424,12 +464,12 @@ class TopFadeGradient extends StatelessWidget {
           height: height,
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
+              begin: begin,
+              end: end,
               colors: [
-                color.withOpacity(0.95),
-                color.withOpacity(0.55),
-                color.withOpacity(0.2),
+                color.withOpacity(maxOpacity),
+                color.withOpacity(maxOpacity * 0.58),
+                color.withOpacity(maxOpacity * 0.21),
                 Colors.transparent,
               ],
               stops: const [0.0, 0.3, 0.6, 1.0],
@@ -441,7 +481,21 @@ class TopFadeGradient extends StatelessWidget {
   }
 }
 
-/// ─── EdgeGradient ───────────────────────────────────────────────────────────
+/// ─── TopFadeGradient (deprecated — prefer DynamicEdgeFade) ──────────────────
+/// Kept for backward compatibility with Search and other inline usages.
+class TopFadeGradient extends StatelessWidget {
+  final double height;
+  final Color color;
+
+  const TopFadeGradient({super.key, this.height = 130, this.color = const Color(0xFF000000)});
+
+  @override
+  Widget build(BuildContext context) {
+    return DynamicEdgeFade(color: color, height: height);
+  }
+}
+
+/// ─── EdgeGradient (deprecated — prefer DynamicEdgeFade) ─────────────────────
 class EdgeGradient extends StatelessWidget {
   final bool fromTop;
   final double height;
@@ -454,20 +508,10 @@ class EdgeGradient extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Container(
-        height: height,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: fromTop ? Alignment.topCenter : Alignment.bottomCenter,
-            end: fromTop ? Alignment.bottomCenter : Alignment.topCenter,
-            colors: const [
-              Color(0xFF000000),
-              Color(0x00000000),
-            ],
-          ),
-        ),
-      ),
+    return DynamicEdgeFade(
+      color: const Color(0xFF000000),
+      height: height,
+      fromTop: fromTop,
     );
   }
 }

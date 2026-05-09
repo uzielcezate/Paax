@@ -202,7 +202,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
 
 
             // Top fade gradient
-            const TopFadeGradient(),
+            const DynamicEdgeFade.black(),
 
             // Floating controls
             FloatingTopControls(

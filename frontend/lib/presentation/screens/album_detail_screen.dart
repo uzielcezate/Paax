@@ -13,7 +13,7 @@ import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/glass_surface.dart';
-import '../widgets/track_list_tile.dart'; 
+import '../widgets/track_list_tile.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/bottom_content_padding.dart';
 import '../widgets/add_to_playlist_sheet.dart';
@@ -27,12 +27,10 @@ import '../../core/utils/dominant_color_service.dart';
 class AlbumDetailScreen extends StatefulWidget {
   final SavedAlbum? album;
   final SingleTrackAlbumDetail? singleDetail;
-  
-  const AlbumDetailScreen({
-    super.key, 
-    this.album, 
-    this.singleDetail
-  }) : assert(album != null || singleDetail != null, 'Either album or singleDetail must be provided');
+
+  const AlbumDetailScreen({super.key, this.album, this.singleDetail})
+      : assert(album != null || singleDetail != null,
+            'Either album or singleDetail must be provided');
 
   @override
   State<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
@@ -41,7 +39,7 @@ class AlbumDetailScreen extends StatefulWidget {
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   final MusicRepository _repository = MusicRepositoryImpl();
   final ScrollController _scrollController = ScrollController();
-  
+
   Future<SavedAlbum>? _detailsFuture; // Now returns updated SavedAlbum
   bool _showTitle = false;
   bool _isNavigatingToArtist = false;
@@ -58,33 +56,40 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   bool get _isSingleMode => widget.singleDetail != null;
 
-  String get _title => _isSingleMode ? widget.singleDetail!.title : widget.album!.title;
+  String get _title =>
+      _isSingleMode ? widget.singleDetail!.title : widget.album!.title;
   // Prefer building display name from the resolved artists list (e.g. "Anuel AA, Ozuna"),
   // then fall back to the resolved single string, then the widget's initial data.
   String get _artistName {
     if (_resolvedArtists != null && _resolvedArtists!.isNotEmpty) {
       return _resolvedArtists!.map((a) => a['name']).join(', ');
     }
-    return _resolvedArtistName
-        ?? (_isSingleMode ? widget.singleDetail!.artistName : widget.album!.artistName);
+    return _resolvedArtistName ??
+        (_isSingleMode
+            ? widget.singleDetail!.artistName
+            : widget.album!.artistName);
   }
-  String get _artworkUrl => _isSingleMode ? widget.singleDetail!.artworkUrl : widget.album!.artworkUrl;
+
+  String get _artworkUrl => _isSingleMode
+      ? widget.singleDetail!.artworkUrl
+      : widget.album!.artworkUrl;
 
   /// Build an album with resolved artist data for menus.
   SavedAlbum get _resolvedAlbum => SavedAlbum(
-    albumId: widget.album!.albumId,
-    title: widget.album!.title,
-    artistName: _artistName,
-    artworkUrl: widget.album!.artworkUrl,
-    artistId: _resolvedArtistId ?? widget.album!.artistId,
-    artists: _resolvedArtists ?? widget.album!.artists,
-  );
+        albumId: widget.album!.albumId,
+        title: widget.album!.title,
+        artistName: _artistName,
+        artworkUrl: widget.album!.artworkUrl,
+        artistId: _resolvedArtistId ?? widget.album!.artistId,
+        artists: _resolvedArtists ?? widget.album!.artists,
+      );
 
   @override
   void initState() {
     super.initState();
     if (!_isSingleMode) {
-      _detailsFuture = _repository.getAlbum(widget.album!.albumId).then((album) {
+      _detailsFuture =
+          _repository.getAlbum(widget.album!.albumId).then((album) {
         // Enrich album data with richer metadata from the playback queue.
         // The YouTube Music album API often returns only the primary artist,
         // while the search/play API returns all collaborators.
@@ -101,9 +106,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         return enriched;
       });
     }
-    
+
     _scrollController.addListener(() {
-      final show = _scrollController.offset > 240; 
+      final show = _scrollController.offset > 240;
       if (show != _showTitle) {
         setState(() {
           _showTitle = show;
@@ -111,7 +116,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       }
     });
   }
-  
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -132,13 +137,16 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final Map<String, Track> richMap = {};
     for (final t in queue) {
       final existing = richMap[t.id];
-      if (existing == null || (t.artists?.length ?? 0) > (existing.artists?.length ?? 0)) {
+      if (existing == null ||
+          (t.artists?.length ?? 0) > (existing.artists?.length ?? 0)) {
         richMap[t.id] = t;
       }
     }
     if (currentTrack != null) {
       final existing = richMap[currentTrack.id];
-      if (existing == null || (currentTrack.artists?.length ?? 0) > (existing.artists?.length ?? 0)) {
+      if (existing == null ||
+          (currentTrack.artists?.length ?? 0) >
+              (existing.artists?.length ?? 0)) {
         richMap[currentTrack.id] = currentTrack;
       }
     }
@@ -146,7 +154,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     // Enrich each album track with richer artist data from the queue
     final enrichedTracks = album.tracks!.map((t) {
       final rich = richMap[t.id];
-      if (rich != null && (rich.artists?.length ?? 0) > (t.artists?.length ?? 0)) {
+      if (rich != null &&
+          (rich.artists?.length ?? 0) > (t.artists?.length ?? 0)) {
         // Keep album-level fields (albumId, albumTitle, artwork), but adopt richer artists
         return t.copyWith(
           artistName: rich.displayArtist,
@@ -172,7 +181,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
   }
 
-
   /// Enrich a single track with richer artist data from the playback queue.
   Track _enrichTrackFromPlayback(Track track) {
     final controller = context.read<PlaybackController>();
@@ -191,7 +199,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
     // Also check the queue
     for (final q in controller.queue) {
-      if (q.id == track.id && (q.artists?.length ?? 0) > (track.artists?.length ?? 0)) {
+      if (q.id == track.id &&
+          (q.artists?.length ?? 0) > (track.artists?.length ?? 0)) {
         return track.copyWith(
           artistName: q.displayArtist,
           artistId: q.artistId,
@@ -207,10 +216,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Widget build(BuildContext context) {
     if (_isSingleMode) {
       // Enrich the single's track from playback for richer artist data
-      final enrichedTrack = _enrichTrackFromPlayback(widget.singleDetail!.track);
+      final enrichedTrack =
+          _enrichTrackFromPlayback(widget.singleDetail!.track);
 
       // Update resolved artists if the enriched track has more
-      if (_resolvedArtists == null && enrichedTrack.artists != null &&
+      if (_resolvedArtists == null &&
+          enrichedTrack.artists != null &&
           enrichedTrack.artists!.length > 1) {
         // Schedule update after build
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -225,46 +236,46 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       }
 
       return _buildContent(
-        releaseDate: "${widget.singleDetail!.releaseYear}",
-        label: "",
-        nbTracks: 1,
-        duration: widget.singleDetail!.duration,
-        tracks: [enrichedTrack],
-        hasData: true,
-        isLoading: false
-      );
+          releaseDate: "${widget.singleDetail!.releaseYear}",
+          label: "",
+          nbTracks: 1,
+          duration: widget.singleDetail!.duration,
+          tracks: [enrichedTrack],
+          hasData: true,
+          isLoading: false);
     }
 
     return Scaffold(
       backgroundColor: AppColors.background,
       body: FutureBuilder<SavedAlbum>(
-        future: _detailsFuture,
-        builder: (context, snapshot) {
-           final hasData = snapshot.hasData;
-           final albumData = snapshot.data;
-           
-           final releaseDate = albumData?.releaseDate ?? '';
-           final label = albumData?.label ?? '';
-           final nbTracks = albumData?.trackCount ?? 0;
-           final duration = albumData?.duration ?? 0; 
-           
-           // Use fetched artwork if available, otherwise fallback to widget
-           final artworkUrl = hasData ? albumData?.artworkUrl : (widget.album?.artworkUrl);
+          future: _detailsFuture,
+          builder: (context, snapshot) {
+            final hasData = snapshot.hasData;
+            final albumData = snapshot.data;
 
-           final List<Track> tracks = albumData?.tracks ?? [];
+            final releaseDate = albumData?.releaseDate ?? '';
+            final label = albumData?.label ?? '';
+            final nbTracks = albumData?.trackCount ?? 0;
+            final duration = albumData?.duration ?? 0;
 
-           return _buildContent(
-             releaseDate: releaseDate,
-             label: label,
-             nbTracks: nbTracks,
-             duration: duration,
-             tracks: tracks,
-             hasData: hasData,
-             isLoading: !hasData && snapshot.connectionState == ConnectionState.waiting,
-             artworkUrl: artworkUrl,
-           );
-        }
-      ),
+            // Use fetched artwork if available, otherwise fallback to widget
+            final artworkUrl =
+                hasData ? albumData?.artworkUrl : (widget.album?.artworkUrl);
+
+            final List<Track> tracks = albumData?.tracks ?? [];
+
+            return _buildContent(
+              releaseDate: releaseDate,
+              label: label,
+              nbTracks: nbTracks,
+              duration: duration,
+              tracks: tracks,
+              hasData: hasData,
+              isLoading: !hasData &&
+                  snapshot.connectionState == ConnectionState.waiting,
+              artworkUrl: artworkUrl,
+            );
+          }),
     );
   }
 
@@ -282,9 +293,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final effectiveArtworkUrl = artworkUrl ?? _artworkUrl;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Stack(
-        children: [
+        backgroundColor: AppColors.background,
+        body: Stack(
+          children: [
             // Dynamic ambient background from album artwork
             DynamicBackground(
               imageUrl: effectiveArtworkUrl,
@@ -318,7 +329,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       fit: StackFit.expand,
                       children: [
                         Hero(
-                          tag: _isSingleMode ? "track_${widget.singleDetail!.track.id}" : "album_${widget.album!.albumId}",
+                          tag: _isSingleMode
+                              ? "track_${widget.singleDetail!.track.id}"
+                              : "album_${widget.album!.albumId}",
                           child: AppImage(
                             url: effectiveArtworkUrl,
                             sizePx: Lh3UrlBuilder.headerSize,
@@ -328,186 +341,229 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         Container(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.transparent,
-                                _dominantColor.withOpacity(0.1),
-                                _dominantColor.withOpacity(0.7),
-                                _dominantColor,
-                              ],
-                              stops: const [0.0, 0.5, 0.85, 1.0]
-                            ),
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  _dominantColor.withOpacity(0.1),
+                                  _dominantColor.withOpacity(0.7),
+                                  _dominantColor,
+                                ],
+                                 stops: const [
+                                  0.4,
+                                  0.65,
+                                  0.92,
+                                  1.0
+                                ]),
                           ),
                         ),
                       ],
                     ),
                   ),
                 ),
-                
                 if (isLoading)
-                   SliverList(
-                     delegate: SliverChildBuilderDelegate(
-                       (context, index) => _buildSkeletonRow(),
-                       childCount: 8, // Show 8 placeholder rows
-                     ),
-                   )
+                  SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) => _buildSkeletonRow(),
+                      childCount: 8, // Show 8 placeholder rows
+                    ),
+                  )
                 else if (hasData) ...[
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24.0, vertical: 16.0),
                       child: Column(
                         children: [
-                           Text(
-                             _title,
-                             textAlign: TextAlign.center,
-                             style: TextStyle(
-                               fontSize: 28, 
-                               fontWeight: FontWeight.w800, 
-                               height: 1.2,
-                               color: _foregroundColor
-                             ),
-                             maxLines: 2,
-                             overflow: TextOverflow.ellipsis,
-                           ),
-                           const SizedBox(height: 8),
-                       GestureDetector(
-                         onTap: _isNavigatingToArtist ? null : _onArtistTap,
-                         child: _isNavigatingToArtist 
-                            ? SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: _foregroundColor))
-                           : Text(
-                               _artistName,
-                               textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 18, color: _foregroundColor.withOpacity(0.7), fontWeight: FontWeight.w500),
-                             ),
-                       ),
-                           const SizedBox(height: 12),
-                           Row(
-                             mainAxisAlignment: MainAxisAlignment.center,
-                             children: [
-                               Text(
-                                 "${releaseDate.split('-').first} • $nbTracks ${_isSingleMode ? 'song' : 'songs'} • ${_formatTotalDuration(duration)}",
-                                 style: TextStyle(color: _foregroundColor.withOpacity(0.5), fontSize: 13, fontWeight: FontWeight.w500),
-                               ),
-                             ],
-                           ),
-                           const SizedBox(height: 24),
-                           
-                           // NEW 3-BUTTON ROW
-                           Row(
-                             mainAxisAlignment: MainAxisAlignment.center,
-                             children: [
-                               Consumer<PlaybackController>(
+                          Text(
+                            _title,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                height: 1.2,
+                                color: _foregroundColor),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 8),
+                          GestureDetector(
+                            onTap: _isNavigatingToArtist ? null : _onArtistTap,
+                            child: _isNavigatingToArtist
+                                ? SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: _foregroundColor))
+                                : Text(
+                                    _artistName,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                        fontSize: 18,
+                                        color:
+                                            _foregroundColor.withOpacity(0.7),
+                                        fontWeight: FontWeight.w500),
+                                  ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                "${releaseDate.split('-').first} • $nbTracks ${_isSingleMode ? 'song' : 'songs'} • ${_formatTotalDuration(duration)}",
+                                style: TextStyle(
+                                    color: _foregroundColor.withOpacity(0.5),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 24),
+
+                          // NEW 3-BUTTON ROW
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Consumer<PlaybackController>(
                                   builder: (context, playback, _) {
-                                    final isPlaying = playback.isPlaying;
-                                    final currentTrack = playback.currentTrack;
-                                    // Use albumId from widget.album if available, or try to get from singleDetail
-                                    final albumId = widget.album?.albumId ?? (widget.singleDetail?.track.albumId ?? 0);
-                                    final isContext = currentTrack?.albumId == albumId;
-                                    
-                                    return _buildActionButton(
-                                      icon: (isPlaying && isContext) ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                      label: (isPlaying && isContext) ? "Pause" : "Play",
-                                      onTap: () {
-                                         if (isContext) {
-                                            playback.togglePlayPause();
-                                         } else {
-                                            if (tracks.isNotEmpty) playback.playQueue(tracks);
-                                         }
-                                      }, 
-                                      primary: true,
-                                    );
-                                  }
-                               ),
-                               const SizedBox(width: 24),
-                               
-                               Consumer<LibraryController>(
-                                 builder: (context, lib, _) {
-                                   if (_isSingleMode) {
-                                      final isLiked = lib.isLiked(widget.singleDetail!.track);
-                                      return _buildActionButton(
-                                        icon: isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                                        label: isLiked ? "Liked" : "Like",
-                                        onTap: () => lib.toggleLike(widget.singleDetail!.track),
-                                         color: isLiked ? AppColors.primaryEnd : _foregroundColor,
-                                      );
-                                   } else {
-                                      final isSaved = lib.isAlbumSaved(widget.album!.albumId);
-                                      return _buildActionButton(
-                                        icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-                                        label: isSaved ? "Saved" : "Save",
-                                        onTap: () => lib.toggleSaveAlbum(widget.album!),
-                                         color: isSaved ? AppColors.primaryEnd : _foregroundColor,
-                                      );
-                                   }
-                                 }
-                               ),
-                               const SizedBox(width: 24),
-                               
-                               _buildActionButton(
-                                 icon: Icons.playlist_add_rounded, 
-                                 label: "Add to",
-                                 onTap: () {
+                                final isPlaying = playback.isPlaying;
+                                final currentTrack = playback.currentTrack;
+                                // Use albumId from widget.album if available, or try to get from singleDetail
+                                final albumId = widget.album?.albumId ??
+                                    (widget.singleDetail?.track.albumId ?? 0);
+                                final isContext =
+                                    currentTrack?.albumId == albumId;
+
+                                return _buildActionButton(
+                                  icon: (isPlaying && isContext)
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                  label: (isPlaying && isContext)
+                                      ? "Pause"
+                                      : "Play",
+                                  onTap: () {
+                                    if (isContext) {
+                                      playback.togglePlayPause();
+                                    } else {
+                                      if (tracks.isNotEmpty)
+                                        playback.playQueue(tracks);
+                                    }
+                                  },
+                                  primary: true,
+                                );
+                              }),
+                              const SizedBox(width: 24),
+                              Consumer<LibraryController>(
+                                  builder: (context, lib, _) {
+                                if (_isSingleMode) {
+                                  final isLiked =
+                                      lib.isLiked(widget.singleDetail!.track);
+                                  return _buildActionButton(
+                                    icon: isLiked
+                                        ? Icons.favorite_rounded
+                                        : Icons.favorite_border_rounded,
+                                    label: isLiked ? "Liked" : "Like",
+                                    onTap: () => lib
+                                        .toggleLike(widget.singleDetail!.track),
+                                    color: isLiked
+                                        ? AppColors.primaryEnd
+                                        : _foregroundColor,
+                                  );
+                                } else {
+                                  final isSaved =
+                                      lib.isAlbumSaved(widget.album!.albumId);
+                                  return _buildActionButton(
+                                    icon: isSaved
+                                        ? Icons.bookmark_rounded
+                                        : Icons.bookmark_border_rounded,
+                                    label: isSaved ? "Saved" : "Save",
+                                    onTap: () =>
+                                        lib.toggleSaveAlbum(widget.album!),
+                                    color: isSaved
+                                        ? AppColors.primaryEnd
+                                        : _foregroundColor,
+                                  );
+                                }
+                              }),
+                              const SizedBox(width: 24),
+                              _buildActionButton(
+                                  icon: Icons.playlist_add_rounded,
+                                  label: "Add to",
+                                  onTap: () {
                                     if (tracks.isEmpty) {
-                                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No tracks to add")));
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(const SnackBar(
+                                              content:
+                                                  Text("No tracks to add")));
                                       return;
                                     }
                                     showModalBottomSheet(
-                                       context: context,
-                                       useRootNavigator: true,
-                                       isScrollControlled: true,
-                                       backgroundColor: Colors.transparent,
-                                       builder: (context) => AddToPlaylistSheet(tracks: tracks), // Adds all tracks
+                                      context: context,
+                                      useRootNavigator: true,
+                                      isScrollControlled: true,
+                                      backgroundColor: Colors.transparent,
+                                      builder: (context) => AddToPlaylistSheet(
+                                          tracks: tracks), // Adds all tracks
                                     );
-                                 }
-                               ),
-                             ],
-                           ),
+                                  }),
+                            ],
+                          ),
                         ],
                       ),
                     ),
                   ),
-    
                   if (tracks.isNotEmpty)
-                  SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final track = tracks[index];
-                        return TrackListTile(
-                          track: track,
-                          index: index,
-                          foregroundColor: _foregroundColor,
-                          onTap: () {
-                             context.read<PlaybackController>().playQueue(tracks, index: index);
-                          },
-                        );
-                      },
-                      childCount: tracks.length,
-                    ),
-                  )
-                  else 
-                    const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(32), child: Center(child: Text("No tracks available for this album.", style: TextStyle(color: Colors.grey))))),
-                  
-                  if (label.isNotEmpty)
-                     SliverToBoxAdapter(
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final track = tracks[index];
+                          return TrackListTile(
+                            track: track,
+                            index: index,
+                            foregroundColor: _foregroundColor,
+                            onTap: () {
+                              context
+                                  .read<PlaybackController>()
+                                  .playQueue(tracks, index: index);
+                            },
+                          );
+                        },
+                        childCount: tracks.length,
+                      ),
+                    )
+                  else
+                    const SliverToBoxAdapter(
                         child: Padding(
-                           padding: const EdgeInsets.only(top: 24, bottom: 40),
-                           child: Center(
-                             child: Text(
-                                "© $label", 
-                                style: const TextStyle(color: Colors.white24, fontSize: 11),
-                                textAlign: TextAlign.center,
-                             ),
-                           ),
+                            padding: EdgeInsets.all(32),
+                            child: Center(
+                                child: Text(
+                                    "No tracks available for this album.",
+                                    style: TextStyle(color: Colors.grey))))),
+                  if (label.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 24, bottom: 40),
+                        child: Center(
+                          child: Text(
+                            "© $label",
+                            style: const TextStyle(
+                                color: Colors.white24, fontSize: 11),
+                            textAlign: TextAlign.center,
+                          ),
                         ),
-                     ),
+                      ),
+                    ),
                   const BottomContentPadding(isSliver: true),
                 ]
               ],
             ),
 
             // Top fade gradient — matches dominant background color
-            TopFadeGradient(color: _dominantColor),
+            DynamicEdgeFade.dynamic(
+              key: ValueKey('fade_album_${widget.album?.albumId ?? widget.singleDetail?.track.id}'),
+              color: _dominantColor,
+            ),
 
             // Floating controls
             FloatingTopControls(
@@ -525,8 +581,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   ),
                   GlassMenuButton(
                     child: _isSingleMode
-                        ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track, iconColor: _foregroundColor)
-                        : OverflowMenu(type: MenuType.album, album: _resolvedAlbum, iconColor: _foregroundColor),
+                        ? OverflowMenu(
+                            type: MenuType.track,
+                            track: widget.singleDetail!.track,
+                            iconColor: _foregroundColor)
+                        : OverflowMenu(
+                            type: MenuType.album,
+                            album: _resolvedAlbum,
+                            iconColor: _foregroundColor),
                   ),
                 ],
               ),
@@ -535,37 +597,60 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 onBack: () => Navigator.pop(context),
                 foregroundColor: _foregroundColor,
                 trailing: _isSingleMode
-                    ? OverflowMenu(type: MenuType.track, track: widget.singleDetail!.track, iconColor: _foregroundColor)
-                    : OverflowMenu(type: MenuType.album, album: _resolvedAlbum, iconColor: _foregroundColor),
+                    ? OverflowMenu(
+                        type: MenuType.track,
+                        track: widget.singleDetail!.track,
+                        iconColor: _foregroundColor)
+                    : OverflowMenu(
+                        type: MenuType.album,
+                        album: _resolvedAlbum,
+                        iconColor: _foregroundColor),
               ),
             ),
-        ],
-      )
-    );
+          ],
+        ));
   }
 
-  Widget _buildActionButton({required IconData icon, required String label, required VoidCallback onTap, bool primary = false, Color color = Colors.white}) {
+  Widget _buildActionButton(
+      {required IconData icon,
+      required String label,
+      required VoidCallback onTap,
+      bool primary = false,
+      Color color = Colors.white}) {
     return Column(
       children: [
         GestureDetector(
           onTap: onTap,
           child: ClipOval(
             child: BackdropFilter(
-              filter: primary ? ImageFilter.blur() : ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              filter: primary
+                  ? ImageFilter.blur()
+                  : ImageFilter.blur(sigmaX: 18, sigmaY: 18),
               child: Container(
-                width: 56, height: 56,
+                width: 56,
+                height: 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: primary ? _foregroundColor : _foregroundColor.withOpacity(0.12),
-                  border: primary ? null : Border.all(color: _foregroundColor.withOpacity(0.15), width: 0.5),
+                  color: primary
+                      ? _foregroundColor
+                      : _foregroundColor.withOpacity(0.12),
+                  border: primary
+                      ? null
+                      : Border.all(
+                          color: _foregroundColor.withOpacity(0.15),
+                          width: 0.5),
                 ),
-                child: Icon(icon, color: primary ? _dominantColor : _foregroundColor, size: 26),
+                child: Icon(icon,
+                    color: primary ? _dominantColor : _foregroundColor,
+                    size: 26),
               ),
             ),
           ),
         ),
         const SizedBox(height: 8),
-        Text(label, style: TextStyle(color: _foregroundColor.withOpacity(0.7), fontSize: 12)),
+        Text(label,
+            style: TextStyle(
+                color: _foregroundColor.withOpacity(0.7), fontSize: 12)),
       ],
     );
   }
@@ -594,7 +679,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(height: 14, width: double.infinity, color: Colors.white),
+                  Container(
+                      height: 14, width: double.infinity, color: Colors.white),
                   const SizedBox(height: 6),
                   Container(height: 11, width: 120, color: Colors.white),
                 ],
@@ -609,28 +695,31 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
   }
 
-
   Future<void> _onArtistTap() async {
     // Guard against placeholder artist
     if (isPlaceholderArtist(_artistName)) return;
 
     // Build the valid artists list from API-resolved data
     final validArtists = (_resolvedArtists ?? [])
-        .where((a) => (a['id'] ?? '').isNotEmpty && (a['name'] ?? '').isNotEmpty)
+        .where(
+            (a) => (a['id'] ?? '').isNotEmpty && (a['name'] ?? '').isNotEmpty)
         .toList();
 
     if (validArtists.isEmpty) {
       // Fallback: try single artist ID
-      final fallbackId = _resolvedArtistId
-          ?? widget.album?.artistId
-          ?? widget.singleDetail?.track.artistId
-          ?? '';
+      final fallbackId = _resolvedArtistId ??
+          widget.album?.artistId ??
+          widget.singleDetail?.track.artistId ??
+          '';
 
       if (fallbackId.isNotEmpty) {
-        Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-          artistId: fallbackId,
-          artistName: _artistName,
-        )));
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => ArtistDetailScreen(
+                      artistId: fallbackId,
+                      artistName: _artistName,
+                    )));
         return;
       }
 
@@ -641,18 +730,23 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         if (!mounted) return;
         setState(() => _isNavigatingToArtist = false);
         if (results.isNotEmpty) {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-            artistId: results.first.id,
-            artistName: results.first.name,
-            pictureUrl: results.first.picture,
-          )));
+          Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => ArtistDetailScreen(
+                        artistId: results.first.id,
+                        artistName: results.first.name,
+                        pictureUrl: results.first.picture,
+                      )));
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Artist info unavailable")));
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Artist info unavailable")));
         }
       } catch (e) {
         if (mounted) {
           setState(() => _isNavigatingToArtist = false);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Artist info unavailable")));
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Artist info unavailable")));
         }
       }
       return;
@@ -660,10 +754,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
     // Single artist → route directly
     if (validArtists.length == 1) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-        artistId: validArtists.first['id']!,
-        artistName: validArtists.first['name']!,
-      )));
+      Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => ArtistDetailScreen(
+                    artistId: validArtists.first['id']!,
+                    artistName: validArtists.first['name']!,
+                  )));
       return;
     }
 
@@ -684,7 +781,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           decoration: BoxDecoration(
             color: sheetBg,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(top: BorderSide(color: sheetFg.withOpacity(0.05), width: 1)),
+            border: Border(
+                top: BorderSide(color: sheetFg.withOpacity(0.05), width: 1)),
           ),
           padding: const EdgeInsets.symmetric(vertical: 16),
           child: SafeArea(
@@ -692,7 +790,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                   child: Text(
                     "Choose Artist",
                     style: TextStyle(
@@ -704,19 +803,23 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 ),
                 Divider(color: sheetFg.withOpacity(0.1)),
                 ...artists.map((a) => ListTile(
-                  leading: Icon(Icons.person_outline, color: sheetFg.withOpacity(0.7)),
-                  title: Text(
-                    a['name'] ?? '',
-                    style: TextStyle(color: sheetFg, fontSize: 16),
-                  ),
-                  onTap: () {
-                    Navigator.pop(sheetCtx);
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-                      artistId: a['id']!,
-                      artistName: a['name']!,
-                    )));
-                  },
-                )),
+                      leading: Icon(Icons.person_outline,
+                          color: sheetFg.withOpacity(0.7)),
+                      title: Text(
+                        a['name'] ?? '',
+                        style: TextStyle(color: sheetFg, fontSize: 16),
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetCtx);
+                        Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => ArtistDetailScreen(
+                                      artistId: a['id']!,
+                                      artistName: a['name']!,
+                                    )));
+                      },
+                    )),
                 const SizedBox(height: 8),
               ],
             ),

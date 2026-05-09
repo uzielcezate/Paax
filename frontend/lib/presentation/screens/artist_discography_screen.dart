@@ -93,29 +93,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
             ],
           ),
 
-          // ── Top fade gradient — stronger for chip visibility ──
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              child: Container(
-                height: 150,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      widget.dominantColor,
-                      widget.dominantColor.withValues(alpha: 0.9),
-                      widget.dominantColor.withValues(alpha: 0.5),
-                      widget.dominantColor.withValues(alpha: 0.0),
-                    ],
-                    stops: const [0.0, 0.4, 0.7, 1.0],
-                  ),
-                ),
-              ),
-            ),
+          // ── Top fade gradient — dynamic color, 75% intensity ──
+          DynamicEdgeFade.dynamic(
+            key: ValueKey('fade_discography_${widget.artistName}'),
+            color: widget.dominantColor,
           ),
 
           // ── Pinned floating controls ──────────────────────────
