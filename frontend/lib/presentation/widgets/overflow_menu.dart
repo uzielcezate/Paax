@@ -83,7 +83,7 @@ class OverflowMenu extends StatelessWidget {
     return GestureDetector(
       onTap: () => _showMenu(context),
       behavior: HitTestBehavior.opaque,
-      child: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white, size: 20),
+      child: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white, size: 22),
     );
   }
 }

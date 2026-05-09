@@ -202,7 +202,7 @@ class GlassChip extends StatelessWidget {
           style: TextStyle(
             color: textColor ?? Colors.white.withValues(alpha: 0.8),
             fontSize: 13,
-            fontWeight: FontWeight.w500,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ),
@@ -224,7 +224,7 @@ class GlassCircleButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.size = 46,
-    this.iconSize = 18,
+    this.iconSize = 20,
     this.iconColor = Colors.white,
     this.enableBlur = true,
   });
@@ -318,7 +318,7 @@ class ScrolledTopPill extends StatelessWidget {
               width: 38,
               height: 46,
               child: Center(
-                child: Icon(Icons.arrow_back_ios_new, size: 18, color: foregroundColor),
+                child: Icon(Icons.arrow_back_ios_new, size: 20, color: foregroundColor),
               ),
             ),
           ),
@@ -330,7 +330,7 @@ class ScrolledTopPill extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: foregroundColor,
-                fontWeight: FontWeight.bold,
+                fontWeight: FontWeight.w800,
                 fontSize: 16,
               ),
             ),

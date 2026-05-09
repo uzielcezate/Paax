@@ -109,7 +109,7 @@ class MiniPlayer extends StatelessWidget {
                             track.title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: fgColor),
+                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: fgColor),
                           ),
                           Text(
                             track.displayArtist,
