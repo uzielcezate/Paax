@@ -1,7 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../../core/utils/dominant_color_service.dart';
-import '../state/theme_state.dart';
 
 class SortBottomSheet extends StatelessWidget {
   final List<String> options;
@@ -19,14 +16,14 @@ class SortBottomSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeState = context.watch<ThemeState>();
-    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
-    final sheetFg = DominantColorService.foregroundOn(sheetBg);
+    // Pure black sheet — lightweight, performant
+    const sheetBg = Color(0xFF000000);
+    const sheetFg = Colors.white;
 
     return Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: sheetBg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: SafeArea(
         top: false,
@@ -38,12 +35,12 @@ class SortBottomSheet extends StatelessWidget {
               child: Container(
                 margin: const EdgeInsets.only(top: 12, bottom: 8),
                 width: 40, height: 4,
-                decoration: BoxDecoration(color: sheetFg.withOpacity(0.24), borderRadius: BorderRadius.circular(2)),
+                decoration: BoxDecoration(color: const Color(0xFF333333), borderRadius: BorderRadius.circular(2)),
               ),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              child: Text(title, style: TextStyle(color: sheetFg, fontSize: 18, fontWeight: FontWeight.bold)),
+              child: Text(title, style: const TextStyle(color: sheetFg, fontSize: 18, fontWeight: FontWeight.bold)),
             ),
             Flexible(
               child: ListView.builder(

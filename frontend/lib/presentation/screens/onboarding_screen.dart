@@ -79,7 +79,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   onPressed: () {
                     if (_currentPage < _pages.length - 1) {
                       _pageController.nextPage(
-                        duration: const Duration(milliseconds: 300),
+                        duration: const Duration(milliseconds: 120),
                         curve: Curves.easeIn,
                       );
                     } else {

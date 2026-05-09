@@ -51,6 +51,7 @@ dependencies:
   web: ^1.1.1
   audio_service: ^0.18.18
   flutter_inappwebview: ^6.1.5
+  oc_liquid_glass: ^0.1.5
 
 dev_dependencies:
   flutter_test:

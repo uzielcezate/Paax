@@ -1,9 +1,7 @@
 
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/utils/dominant_color_service.dart';
 import '../../domain/entities/track.dart';
 import 'add_to_playlist_sheet.dart';
 import '../../domain/entities/saved_album.dart';
@@ -132,15 +130,15 @@ class _MenuContent extends StatelessWidget {
     }
     // ... rest of build logic using effectiveTrack instead of track
     
-    final themeState = context.watch<ThemeState>();
-    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
-    final sheetFg = DominantColorService.foregroundOn(sheetBg);
+    // Pure black sheet — lightweight, no dynamic color
+    const sheetBg = Color(0xFF000000);
+    const sheetFg = Colors.white;
 
     return Container(
       decoration: BoxDecoration(
         color: sheetBg, 
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(top: BorderSide(color: sheetFg.withOpacity(0.05), width: 1)),
+        border: const Border(top: BorderSide(color: Color(0xFF1A1A1A), width: 1)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 24),
       child: SafeArea(
@@ -148,7 +146,7 @@ class _MenuContent extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildHeader(context, effectiveTrack, sheetFg),
-            Divider(color: sheetFg.withOpacity(0.1), height: 32),
+            const Divider(color: Color(0xFF1A1A1A), height: 32),
             ..._buildActions(context, effectiveTrack, sheetFg),
             const SizedBox(height: 8),
           ],
@@ -207,7 +205,7 @@ class _MenuContent extends StatelessWidget {
               child: const Icon(Icons.music_note, color: Colors.white54),
             ),
       title: Text(title, style: TextStyle(color: sheetFg, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(subtitle, style: TextStyle(color: sheetFg.withOpacity(0.54), fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(subtitle, style: const TextStyle(color: Color(0xFF888888), fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
     );
   }
 
@@ -496,15 +494,14 @@ class _MenuContent extends StatelessWidget {
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (sheetCtx) {
-        final ts = sheetCtx.watch<ThemeState>();
-        final sBg = DominantColorService.adaptiveSheetColor(ts.backgroundColor);
-        final sFg = DominantColorService.foregroundOn(sBg);
-        return Container(
-          decoration: BoxDecoration(
-            color: sBg,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(top: BorderSide(color: sFg.withOpacity(0.05), width: 1)),
-          ),
+         const sBg = Color(0xFF000000);
+         const sFg = Colors.white;
+         return Container(
+           decoration: const BoxDecoration(
+             color: sBg,
+             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+             border: Border(top: BorderSide(color: Color(0xFF1A1A1A), width: 1)),
+           ),
           padding: const EdgeInsets.symmetric(vertical: 16),
           child: SafeArea(
             child: Column(
@@ -521,7 +518,7 @@ class _MenuContent extends StatelessWidget {
                     ),
                   ),
                 ),
-                Divider(color: sFg.withOpacity(0.1)),
+                 Divider(color: const Color(0xFF1A1A1A)),
                 ...artists.map((a) => ListTile(
                   leading: Icon(Icons.person_outline, color: sFg.withOpacity(0.7)),
                   title: Text(

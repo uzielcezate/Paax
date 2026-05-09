@@ -83,7 +83,7 @@ class _QueuedNetworkImageState extends State<QueuedNetworkImage> {
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
-        fadeInDuration: const Duration(milliseconds: 300),
+        fadeInDuration: const Duration(milliseconds: 120),
         cacheManager: ThrottledCacheManager(),
         memCacheHeight: widget.memCacheHeight ?? (widget.height != null ? (widget.height! * 2).toInt() : null),
         memCacheWidth: widget.memCacheWidth ?? (widget.width != null ? (widget.width! * 2).toInt() : null),

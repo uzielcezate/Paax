@@ -1,12 +1,9 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/utils/dominant_color_service.dart';
 import '../../core/image/lh3_url_builder.dart';
 import '../../domain/entities/track.dart';
 import '../state/playback_controller.dart';
-import '../state/theme_state.dart';
 import 'app_image.dart';
 
 /// Shows the playback queue as a modal bottom sheet.
@@ -26,8 +23,8 @@ class _QueueSheetContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height * 0.85;
-    // Queue sheet is only opened from the full player — always dark with white text
-    const sheetBg = AppColors.surface;
+    // Pure black sheet — lightweight, performant
+    const sheetBg = Color(0xFF000000);
     const sheetFg = Colors.white;
 
     return Container(
@@ -53,7 +50,7 @@ class _QueueSheetContent extends StatelessWidget {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: sheetFg.withOpacity(0.24),
+                    color: const Color(0xFF333333),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -87,7 +84,7 @@ class _QueueSheetContent extends StatelessWidget {
                 ),
               ),
 
-              Divider(color: sheetFg.withValues(alpha: 0.08), height: 1),
+              Divider(color: const Color(0xFF1A1A1A), height: 1),
 
               // ── Content ──
               Expanded(

@@ -36,7 +36,7 @@ class LibraryChipTabs extends StatelessWidget implements PreferredSizeWidget {
           return GestureDetector(
             onTap: () => onTabSelected(index),
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
+              duration: const Duration(milliseconds: 100),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(24),

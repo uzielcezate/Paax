@@ -344,7 +344,7 @@ class _PlayerControlsState extends State<_PlayerControls> {
                  controller.togglePlayPause();
                },
                child: AnimatedSwitcher(
-                 duration: const Duration(milliseconds: 200),
+                 duration: const Duration(milliseconds: 100),
                  transitionBuilder: (child, animation) {
                    return ScaleTransition(scale: animation, child: child);
                  },

@@ -187,7 +187,7 @@ class MainWrapperState extends State<MainWrapper> {
                      
                      return MaterialPageRoute(
                          builder: (context) => AnimatedPadding(
-                          duration: const Duration(milliseconds: 300),
+                          duration: const Duration(milliseconds: 100),
                           curve: Curves.easeInOut,
                           // Remove bottom padding so content extends behind the glass bars
                           padding: EdgeInsets.zero, 
@@ -264,7 +264,7 @@ class MainWrapperState extends State<MainWrapper> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                    AnimatedSize(
-                     duration: const Duration(milliseconds: 150),
+                     duration: const Duration(milliseconds: 80),
                      curve: Curves.easeInOut,
                      child: hasTrack ? const MiniPlayer() : const SizedBox.shrink(),
                    ),

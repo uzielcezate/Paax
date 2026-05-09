@@ -1,5 +1,7 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'paax_glass_container.dart';
 
 /// ─── Glass Design Tokens ────────────────────────────────────────────────────
 class GlassTokens {
@@ -58,6 +60,21 @@ class GlassSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // On mobile with blur enabled, use liquid glass
+    if (enableBlur && !kIsWeb) {
+      return PaaxGlassContainer(
+        width: width,
+        height: height,
+        borderRadius: borderRadius.resolve(TextDirection.ltr).topLeft.x,
+        showShadow: showShadow,
+        showBorder: showBorder,
+        padding: padding,
+        overrideFill: overrideFill,
+        child: child,
+      );
+    }
+
+    // Web fallback or blur disabled
     final innerContainer = Container(
       padding: padding,
       decoration: BoxDecoration(
@@ -171,31 +188,21 @@ class GlassChip extends StatelessWidget {
       );
     }
 
-    // Unselected — real frosted glass with blur
+    // Unselected — liquid glass on mobile, BackdropFilter on web
     return GestureDetector(
       onTap: onTap,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: unselectedColor ?? Colors.white.withValues(alpha: 0.045),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: (unselectedColor ?? Colors.white).withValues(alpha: 0.08),
-                width: GlassTokens.borderWidth,
-              ),
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: textColor ?? Colors.white.withValues(alpha: 0.8),
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+      child: PaaxGlassContainer(
+        borderRadius: 20,
+        showShadow: false,
+        showBorder: true,
+        overrideFill: unselectedColor ?? const Color(0x0BFFFFFF),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: textColor ?? Colors.white.withValues(alpha: 0.8),
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ),
@@ -380,7 +387,7 @@ class FloatingTopControls extends StatelessWidget {
           // Default circles (fade out on scroll)
           AnimatedOpacity(
             opacity: showScrolledPill ? 0.0 : 1.0,
-            duration: const Duration(milliseconds: 200),
+            duration: const Duration(milliseconds: 100),
             child: IgnorePointer(
               ignoring: showScrolledPill,
               child: SizedBox(
@@ -392,7 +399,7 @@ class FloatingTopControls extends StatelessWidget {
           // Scrolled pill (fade in on scroll)
           AnimatedOpacity(
             opacity: showScrolledPill ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 200),
+            duration: const Duration(milliseconds: 100),
             child: IgnorePointer(
               ignoring: !showScrolledPill,
               child: scrolledPill,

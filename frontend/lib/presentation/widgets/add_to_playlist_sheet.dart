@@ -1,13 +1,9 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/playlist.dart';
 import '../state/library_controller.dart';
-import '../state/theme_state.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/utils/dominant_color_service.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'playlist_cover.dart';
 
 class AddToPlaylistSheet extends StatelessWidget {
@@ -19,9 +15,9 @@ class AddToPlaylistSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final library = context.watch<LibraryController>();
     final playlists = library.playlists;
-    final themeState = context.watch<ThemeState>();
-    final sheetBg = DominantColorService.adaptiveSheetColor(themeState.backgroundColor);
-    final sheetFg = DominantColorService.foregroundOn(sheetBg);
+    // Pure black sheet — lightweight, performant
+    const sheetBg = Color(0xFF000000);
+    const sheetFg = Colors.white;
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.6,
@@ -29,7 +25,7 @@ class AddToPlaylistSheet extends StatelessWidget {
       decoration: BoxDecoration(
         color: sheetBg, 
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(top: BorderSide(color: sheetFg.withOpacity(0.1), width: 1)),
+        border: const Border(top: BorderSide(color: Color(0xFF1A1A1A), width: 1)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -37,7 +33,7 @@ class AddToPlaylistSheet extends StatelessWidget {
           Container(
             width: 40, height: 4,
             margin: const EdgeInsets.only(bottom: 20),
-            decoration: BoxDecoration(color: sheetFg.withOpacity(0.24), borderRadius: BorderRadius.circular(2)),
+            decoration: BoxDecoration(color: const Color(0xFF333333), borderRadius: BorderRadius.circular(2)),
           ),
           Text(
             "Add to Playlist",
@@ -49,11 +45,11 @@ class AddToPlaylistSheet extends StatelessWidget {
             title: Text("New Playlist", style: TextStyle(color: sheetFg)),
             onTap: () => _showCreateDialog(context, library),
           ),
-          Divider(color: sheetFg.withOpacity(0.1)),
+          const Divider(color: Color(0xFF1A1A1A)),
           if (playlists.isEmpty)
             Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Text("No playlists yet", style: TextStyle(color: sheetFg.withOpacity(0.5))),
+              child: Text("No playlists yet", style: TextStyle(color: const Color(0xFF888888))),
             ),
           
           Expanded(
@@ -69,7 +65,7 @@ class AddToPlaylistSheet extends StatelessWidget {
                 return ListTile(
                   leading: PlaylistCover(playlist: pl, size: 48),
                   title: Text(pl.name, style: TextStyle(color: sheetFg)),
-                  subtitle: Text("${pl.tracks.length} tracks", style: TextStyle(color: sheetFg.withOpacity(0.54), fontSize: 12)),
+                  subtitle: Text("${pl.tracks.length} tracks", style: const TextStyle(color: Color(0xFF888888), fontSize: 12)),
                   trailing: alreadyAdded 
                       ? Icon(Icons.check, color: sheetFg)
                       : null,
