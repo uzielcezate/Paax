@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:oc_liquid_glass/oc_liquid_glass.dart';
+import 'package:provider/provider.dart';
+import '../state/theme_state.dart';
 import 'glass_surface.dart';
 
 /// Whether the current platform supports liquid glass (Impeller-based shaders).
@@ -13,11 +15,11 @@ bool get _useLiquidGlass => !kIsWeb;
 const _liquidSettings = OCLiquidGlassSettings(
   refractStrength: -0.03,    // Very low refraction — subtle bend
   blurRadiusPx: 1.5,         // Frosted feel
-  specStrength: 8.0,         // Mild specular highlights
+  specStrength: 3.0,         // Subtle specular highlights
   specPower: 80.0,           // Tight highlight falloff
   specWidth: 0.4,            // Narrow highlight
-  lightbandStrength: 0.15,   // Very subtle light band
-  lightbandColor: Color(0x1AFFFFFF), // Faint white
+  lightbandStrength: 0.05,   // Very subtle light band
+  lightbandColor: Color(0x0DFFFFFF), // Extremely faint white
 );
 
 /// ─── PaaxGlassContainer ─────────────────────────────────────────────────────
@@ -64,10 +66,30 @@ class PaaxGlassContainer extends StatelessWidget {
       return _buildFallback();
     }
 
-    return _buildLiquidGlass();
+    // Adaptive tint for readability
+    Color tintColor;
+    if (overrideFill != null) {
+      tintColor = overrideFill!;
+    } else {
+      final bgColor = context.watch<ThemeState>().backgroundColor;
+      // Calculate luminance to determine if background is light or dark
+      final luminance = bgColor.computeLuminance();
+      
+      if (luminance > 0.5) {
+        // Bright background -> subtle black tint for readability
+        tintColor = Colors.black.withOpacity(0.20);
+      } else {
+        // Dark background -> subtle white tint or lower black tint
+        // A low opacity white helps text pop, but if too dark, black tint can also work.
+        // Usually white 0.15 looks good on dark.
+        tintColor = Colors.white.withOpacity(0.12);
+      }
+    }
+
+    return _buildLiquidGlass(tintColor);
   }
 
-  Widget _buildLiquidGlass() {
+  Widget _buildLiquidGlass(Color tintColor) {
     final shadow = showShadow
         ? BoxShadow(
             color: Colors.black.withOpacity(0.25),
@@ -83,7 +105,7 @@ class PaaxGlassContainer extends StatelessWidget {
         width: width,
         height: height,
         borderRadius: borderRadius,
-        color: overrideFill ?? const Color(0x0BFFFFFF), // Very subtle white tint
+        color: tintColor, 
         shadow: shadow,
         child: Container(
           padding: padding,
@@ -91,8 +113,8 @@ class PaaxGlassContainer extends StatelessWidget {
               ? BoxDecoration(
                   borderRadius: BorderRadius.circular(borderRadius),
                   border: Border.all(
-                    color: const Color(0x1AFFFFFF), // ~0.10 opacity white border
-                    width: 0.5,
+                    color: const Color(0x0AFFFFFF), // ~4% opacity white border for a very thin line
+                    width: 0.4, // Thinner border
                   ),
                 )
               : null,

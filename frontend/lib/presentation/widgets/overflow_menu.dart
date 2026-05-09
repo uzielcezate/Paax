@@ -80,9 +80,10 @@ class OverflowMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      icon: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white),
-      onPressed: () => _showMenu(context),
+    return GestureDetector(
+      onTap: () => _showMenu(context),
+      behavior: HitTestBehavior.opaque,
+      child: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white, size: 20),
     );
   }
 }

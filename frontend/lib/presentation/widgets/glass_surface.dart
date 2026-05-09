@@ -381,31 +381,40 @@ class FloatingTopControls extends StatelessWidget {
       left: 12,
       right: 12,
       height: 46,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Default circles (fade out on scroll)
-          AnimatedOpacity(
-            opacity: showScrolledPill ? 0.0 : 1.0,
-            duration: const Duration(milliseconds: 100),
-            child: IgnorePointer(
-              ignoring: showScrolledPill,
-              child: SizedBox(
-                height: 46,
-                child: defaultControls,
+      child: AnimatedCrossFade(
+        duration: const Duration(milliseconds: 100),
+        crossFadeState: showScrolledPill ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+        layoutBuilder: (topChild, topKey, bottomChild, bottomKey) {
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              Positioned(
+                key: bottomKey,
+                top: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: bottomChild,
               ),
-            ),
-          ),
-          // Scrolled pill (fade in on scroll)
-          AnimatedOpacity(
-            opacity: showScrolledPill ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 100),
-            child: IgnorePointer(
-              ignoring: !showScrolledPill,
-              child: scrolledPill,
-            ),
-          ),
-        ],
+              Positioned(
+                key: topKey,
+                top: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: topChild,
+              ),
+            ],
+          );
+        },
+        firstChild: SizedBox(
+          height: 46,
+          child: defaultControls,
+        ),
+        secondChild: SizedBox(
+          height: 46,
+          child: scrolledPill,
+        ),
       ),
     );
   }
