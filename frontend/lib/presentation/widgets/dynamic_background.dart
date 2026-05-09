@@ -65,8 +65,8 @@ class _DynamicBackgroundState extends State<DynamicBackground> {
   Widget build(BuildContext context) {
     return Positioned.fill(
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 80),
-        curve: Curves.easeOut,
+        duration: const Duration(milliseconds: 50),
+        curve: Curves.linear,
         color: _dominantColor,  // ONE solid color. No gradient.
       ),
     );

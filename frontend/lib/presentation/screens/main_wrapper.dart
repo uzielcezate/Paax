@@ -201,8 +201,8 @@ class MainWrapperState extends State<MainWrapper> {
                      
                      return MaterialPageRoute(
                          builder: (context) => AnimatedPadding(
-                          duration: const Duration(milliseconds: 100),
-                          curve: Curves.easeInOut,
+                          duration: const Duration(milliseconds: 70),
+                          curve: Curves.easeOut,
                           // Remove bottom padding so content extends behind the glass bars
                           padding: EdgeInsets.zero, 
                           child: builder(context), 
@@ -216,7 +216,7 @@ class MainWrapperState extends State<MainWrapper> {
 
             // ── Top edge fade gradient ──
             // Only shown on root pages (Home/Search/Library/Profile).
-            // Detail screens manage their own dynamic-color fades.
+            // Always instantly pure black to avoid stale colored fades from ThemeState.
             if (_isOnRootPage)
             Positioned(
               top: 0,
@@ -230,10 +230,10 @@ class MainWrapperState extends State<MainWrapper> {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
-                        bgColor,
-                        bgColor.withValues(alpha: 0.65),
-                        bgColor.withValues(alpha: 0.25),
-                        bgColor.withValues(alpha: 0.0),
+                        const Color(0xFF000000),
+                        const Color(0xFF000000).withValues(alpha: 0.65),
+                        const Color(0xFF000000).withValues(alpha: 0.25),
+                        const Color(0xFF000000).withValues(alpha: 0.0),
                       ],
                       stops: const [0.0, 0.35, 0.65, 1.0],
                     ),
@@ -244,6 +244,7 @@ class MainWrapperState extends State<MainWrapper> {
 
             // ── Bottom edge gradient ──
             // Only shown on root pages.
+            // Always instantly pure black.
             if (_isOnRootPage)
             Positioned(
               left: 0,
@@ -257,10 +258,10 @@ class MainWrapperState extends State<MainWrapper> {
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
                       colors: [
-                        bgColor.withValues(alpha: 0.96),
-                        bgColor.withValues(alpha: 0.65),
-                        bgColor.withValues(alpha: 0.25),
-                        bgColor.withValues(alpha: 0.0),
+                        const Color(0xFF000000).withValues(alpha: 0.96),
+                        const Color(0xFF000000).withValues(alpha: 0.65),
+                        const Color(0xFF000000).withValues(alpha: 0.25),
+                        const Color(0xFF000000).withValues(alpha: 0.0),
                       ],
                       stops: const [0.0, 0.35, 0.65, 1.0],
                     ),
@@ -278,8 +279,8 @@ class MainWrapperState extends State<MainWrapper> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                    AnimatedSize(
-                     duration: const Duration(milliseconds: 80),
-                     curve: Curves.easeInOut,
+                     duration: const Duration(milliseconds: 70),
+                     curve: Curves.easeOut,
                      child: hasTrack ? const MiniPlayer() : const SizedBox.shrink(),
                    ),
                    _buildFloatingNavBar(bottomPadding, fgColor),

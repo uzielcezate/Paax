@@ -237,7 +237,7 @@ class GlassCircleButton extends StatelessWidget {
         width: size,
         height: size,
         borderRadius: BorderRadius.circular(size / 2),
-        showShadow: true,
+        showShadow: false,
         enableBlur: enableBlur,
         child: Center(
           child: Icon(icon, size: iconSize, color: iconColor),
@@ -268,7 +268,7 @@ class GlassMenuButton extends StatelessWidget {
       width: size,
       height: size,
       borderRadius: BorderRadius.circular(size / 2),
-      showShadow: true,
+      showShadow: false,
       enableBlur: enableBlur,
       padding: const EdgeInsets.all(1),
       child: Center(
@@ -307,6 +307,7 @@ class ScrolledTopPill extends StatelessWidget {
   Widget build(BuildContext context) {
     return GlassPill(
       height: 46,
+      showShadow: false,
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
         children: [
@@ -382,7 +383,9 @@ class FloatingTopControls extends StatelessWidget {
       right: 12,
       height: 46,
       child: AnimatedCrossFade(
-        duration: const Duration(milliseconds: 100),
+        duration: const Duration(milliseconds: 70),
+        firstCurve: Curves.linear,
+        secondCurve: Curves.linear,
         crossFadeState: showScrolledPill ? CrossFadeState.showSecond : CrossFadeState.showFirst,
         layoutBuilder: (topChild, topKey, bottomChild, bottomKey) {
           return Stack(
