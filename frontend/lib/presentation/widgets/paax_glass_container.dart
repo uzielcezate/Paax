@@ -15,9 +15,9 @@ bool get _useLiquidGlass => !kIsWeb;
 const _liquidSettings = OCLiquidGlassSettings(
   refractStrength: -0.03,    // Very low refraction — subtle bend
   blurRadiusPx: 1.5,         // Frosted feel
-  specStrength: 3.0,         // Subtle specular highlights
-  specPower: 80.0,           // Tight highlight falloff
-  specWidth: 0.4,            // Narrow highlight
+  specStrength: 4.0,         // Slightly brighter specular highlight for 3D top edge
+  specPower: 70.0,           // Slightly softer falloff
+  specWidth: 0.3,            // Ultra-thin highlight rim
   lightbandStrength: 0.05,   // Very subtle light band
   lightbandColor: Color(0x0DFFFFFF), // Extremely faint white
 );
@@ -92,10 +92,10 @@ class PaaxGlassContainer extends StatelessWidget {
   Widget _buildLiquidGlass(Color tintColor) {
     final shadow = showShadow
         ? BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 16,
+            color: Colors.black.withOpacity(0.35), // Deeper atmospheric shadow
+            blurRadius: 24, // Softer diffusion
             spreadRadius: -2,
-            offset: const Offset(0, 4),
+            offset: const Offset(0, 8), // More floating depth
           )
         : null;
 
@@ -113,8 +113,8 @@ class PaaxGlassContainer extends StatelessWidget {
               ? BoxDecoration(
                   borderRadius: BorderRadius.circular(borderRadius),
                   border: Border.all(
-                    color: const Color(0x0AFFFFFF), // ~4% opacity white border for a very thin line
-                    width: 0.4, // Thinner border
+                    color: const Color(0x1AFFFFFF), // ~10% white for a clearer glass rim
+                    width: 0.3, // Ultra-thin border
                   ),
                 )
               : null,

@@ -237,7 +237,7 @@ class GlassCircleButton extends StatelessWidget {
         width: size,
         height: size,
         borderRadius: BorderRadius.circular(size / 2),
-        showShadow: false,
+        showShadow: true,
         enableBlur: enableBlur,
         child: Center(
           child: Icon(icon, size: iconSize, color: iconColor),
@@ -268,7 +268,7 @@ class GlassMenuButton extends StatelessWidget {
       width: size,
       height: size,
       borderRadius: BorderRadius.circular(size / 2),
-      showShadow: false,
+      showShadow: true,
       enableBlur: enableBlur,
       padding: const EdgeInsets.all(1),
       child: Center(
@@ -307,7 +307,7 @@ class ScrolledTopPill extends StatelessWidget {
   Widget build(BuildContext context) {
     return GlassPill(
       height: 46,
-      showShadow: false,
+      showShadow: true,
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
         children: [
