@@ -37,18 +37,18 @@ class MiniPlayer extends StatelessWidget {
         );
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: GlassSurface(
-          height: 64,
-          borderRadius: BorderRadius.circular(32),
+          height: 52,
+          borderRadius: BorderRadius.circular(26),
           padding: const EdgeInsets.symmetric(horizontal: 6),
           child: Stack(
             children: [
               // Progress Bar (Top Edge)
               Positioned(
                 top: 0,
-                left: 20,
-                right: 20,
+                left: 16,
+                right: 16,
                 height: 2,
                 child: Builder(
                   builder: (context) {
@@ -85,19 +85,19 @@ class MiniPlayer extends StatelessWidget {
                     Hero(
                       tag: "mini_player_art_${track.id}",
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(22),
+                        borderRadius: BorderRadius.circular(18),
                         child: AppImage(
                           url: track.artworkUrl,
                           sizePx: Lh3UrlBuilder.miniPlayerSize,
-                          width: 44,
-                          height: 44,
+                          width: 36,
+                          height: 36,
                           fit: BoxFit.cover,
-                          borderRadius: 22,
+                          borderRadius: 18,
                           forceLoad: true,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     
                     // Title & Artist
                     Expanded(
@@ -132,7 +132,7 @@ class MiniPlayer extends StatelessWidget {
                         onPressed: () => lib.toggleLike(track),
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                     ),
                     
@@ -143,7 +143,7 @@ class MiniPlayer extends StatelessWidget {
                         return IconButton(
                           icon: Icon(
                             isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                            size: 30,
+                            size: 26,
                           ),
                           color: fgColor,
                           onPressed: () {
@@ -151,7 +151,7 @@ class MiniPlayer extends StatelessWidget {
                           },
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                         );
                       }
                     ),

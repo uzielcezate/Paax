@@ -303,7 +303,7 @@ class MainWrapperState extends State<MainWrapper> {
         top: 4,
       ),
       child: GlassPill(
-        height: 60,
+        height: 48,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -331,10 +331,10 @@ class MainWrapperState extends State<MainWrapper> {
             Icon(
               icon,
               color: isSelected ? fgColor : fgColor.withValues(alpha: 0.38),
-              size: 24,
+              size: 22,
             ),
             if (isSelected) ...[
-              const SizedBox(height: 3),
+              const SizedBox(height: 2),
               Container(
                 width: 4, height: 4,
                 decoration: BoxDecoration(
