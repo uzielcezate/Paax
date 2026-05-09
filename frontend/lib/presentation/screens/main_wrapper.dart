@@ -91,7 +91,8 @@ class MainWrapperState extends State<MainWrapper> {
         _currentIndex = index;
       });
     }
-    _refreshRootPageFlag();
+    // Immediately check — tab switch always lands on root
+    _refreshRootPageFlag(eager: true);
   }
 
   void navigateTo(Route route) {
@@ -102,16 +103,29 @@ class MainWrapperState extends State<MainWrapper> {
   }
 
   /// Recalculates whether the active tab is at root (no pushed routes).
-  /// Schedules a post-frame check because navigator state isn't available
-  /// until after the current frame finishes building.
-  void _refreshRootPageFlag() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+  /// When [eager] is true, sets `_isOnRootPage = true` immediately
+  /// (used for tab switches where we know we're landing on root).
+  /// Schedules two post-frame verifications to catch animation-delayed pops.
+  void _refreshRootPageFlag({bool eager = false}) {
+    if (eager && !_isOnRootPage) {
+      // Switching tabs always lands on root — update immediately
+      setState(() => _isOnRootPage = true);
+    }
+
+    void _check() {
       if (!mounted) return;
       final nav = _navigatorKeys[_currentIndex].currentState;
       final onRoot = nav == null || !nav.canPop();
       if (onRoot != _isOnRootPage) {
         setState(() => _isOnRootPage = onRoot);
       }
+    }
+
+    // First check: immediately after current frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _check();
+      // Second check: one frame later to catch animation-delayed pops
+      WidgetsBinding.instance.addPostFrameCallback((_) => _check());
     });
   }
 

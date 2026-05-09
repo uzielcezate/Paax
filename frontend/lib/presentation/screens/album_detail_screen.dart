@@ -561,7 +561,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
             // Top fade gradient — matches dominant background color
             DynamicEdgeFade.dynamic(
-              key: ValueKey('fade_album_${widget.album?.albumId ?? widget.singleDetail?.track.id}'),
+              key: ValueKey('fade_top_album_${widget.album?.albumId ?? widget.singleDetail?.track.id}'),
+              color: _dominantColor,
+            ),
+
+            // Bottom fade — dissolves content behind mini player / nav
+            DynamicEdgeFade.dynamicBottom(
+              key: ValueKey('fade_bot_album_${widget.album?.albumId ?? widget.singleDetail?.track.id}'),
               color: _dominantColor,
             ),
 

@@ -253,7 +253,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           
           // Top fade gradient — matches dominant background color
           DynamicEdgeFade.dynamic(
-            key: ValueKey('fade_artist_${widget.artistId}'),
+            key: ValueKey('fade_top_artist_${widget.artistId}'),
+            color: _dominantColor,
+          ),
+          
+          // Bottom fade — dissolves content behind mini player / nav
+          DynamicEdgeFade.dynamicBottom(
+            key: ValueKey('fade_bot_artist_${widget.artistId}'),
             color: _dominantColor,
           ),
           

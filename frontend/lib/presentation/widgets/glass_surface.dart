@@ -447,6 +447,15 @@ class DynamicEdgeFade extends StatelessWidget {
     this.fromTop = true,
   });
 
+  // ── Factory: dynamic bottom fade — stronger to dissolve content ──
+  // behind mini player and bottom nav. Goes nearly opaque at the edge.
+  const DynamicEdgeFade.dynamicBottom({
+    super.key,
+    required this.color,
+    this.height = 200,
+    this.maxOpacity = 0.98,
+  }) : fromTop = false;
+
   // ── Fully custom ──
   const DynamicEdgeFade({
     super.key,
@@ -461,6 +470,30 @@ class DynamicEdgeFade extends StatelessWidget {
     final begin = fromTop ? Alignment.topCenter : Alignment.bottomCenter;
     final end   = fromTop ? Alignment.bottomCenter : Alignment.topCenter;
 
+    // Bottom fades use a stronger 5-stop gradient that ramps hard
+    // in the lower portion to dissolve content behind mini player/nav.
+    final List<Color> colors;
+    final List<double> stops;
+
+    if (!fromTop) {
+      colors = [
+        color.withOpacity(maxOpacity),
+        color.withOpacity(maxOpacity * 0.85),
+        color.withOpacity(maxOpacity * 0.45),
+        color.withOpacity(maxOpacity * 0.12),
+        Colors.transparent,
+      ];
+      stops = const [0.0, 0.25, 0.55, 0.80, 1.0];
+    } else {
+      colors = [
+        color.withOpacity(maxOpacity),
+        color.withOpacity(maxOpacity * 0.58),
+        color.withOpacity(maxOpacity * 0.21),
+        Colors.transparent,
+      ];
+      stops = const [0.0, 0.3, 0.6, 1.0];
+    }
+
     return Positioned(
       top: fromTop ? 0 : null,
       bottom: fromTop ? null : 0,
@@ -473,13 +506,8 @@ class DynamicEdgeFade extends StatelessWidget {
             gradient: LinearGradient(
               begin: begin,
               end: end,
-              colors: [
-                color.withOpacity(maxOpacity),
-                color.withOpacity(maxOpacity * 0.58),
-                color.withOpacity(maxOpacity * 0.21),
-                Colors.transparent,
-              ],
-              stops: const [0.0, 0.3, 0.6, 1.0],
+              colors: colors,
+              stops: stops,
             ),
           ),
         ),

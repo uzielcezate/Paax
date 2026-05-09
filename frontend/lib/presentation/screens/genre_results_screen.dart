@@ -259,7 +259,13 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
 
           // Top fade gradient — matches genre color
           DynamicEdgeFade.dynamic(
-            key: ValueKey('fade_genre_${widget.genreSlug}'),
+            key: ValueKey('fade_top_genre_${widget.genreSlug}'),
+            color: _dominantColor,
+          ),
+
+          // Bottom fade — dissolves content behind mini player / nav
+          DynamicEdgeFade.dynamicBottom(
+            key: ValueKey('fade_bot_genre_${widget.genreSlug}'),
             color: _dominantColor,
           ),
 

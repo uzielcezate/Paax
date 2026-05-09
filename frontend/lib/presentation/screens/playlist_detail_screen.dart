@@ -462,7 +462,13 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
       // Top fade gradient — matches dominant background color
       DynamicEdgeFade.dynamic(
-        key: ValueKey('fade_playlist_${widget.playlist.id}'),
+        key: ValueKey('fade_top_playlist_${widget.playlist.id}'),
+        color: _dominantColor,
+      ),
+
+      // Bottom fade — dissolves content behind mini player / nav
+      DynamicEdgeFade.dynamicBottom(
+        key: ValueKey('fade_bot_playlist_${widget.playlist.id}'),
         color: _dominantColor,
       ),
 

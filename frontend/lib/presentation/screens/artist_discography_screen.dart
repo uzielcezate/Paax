@@ -95,7 +95,13 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
 
           // ── Top fade gradient — dynamic color, 75% intensity ──
           DynamicEdgeFade.dynamic(
-            key: ValueKey('fade_discography_${widget.artistName}'),
+            key: ValueKey('fade_top_discography_${widget.artistName}'),
+            color: widget.dominantColor,
+          ),
+
+          // Bottom fade — dissolves content behind mini player / nav
+          DynamicEdgeFade.dynamicBottom(
+            key: ValueKey('fade_bot_discography_${widget.artistName}'),
             color: widget.dominantColor,
           ),
 
