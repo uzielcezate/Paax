@@ -28,6 +28,25 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 2.4 — Persistent YouTube matcher (2026-07-17)
+
+- **Added** — `paax-api` persistent YouTube matching that writes to
+  `tracks.youtube_*` (never touches canonical metadata):
+  `services/youtube/candidate_classifier` (audio_only / lyric_video /
+  official_music_video / live / remix / cover / other; rejects renditions absent
+  from the Deezer title), `services/youtube/track_matcher` (two-slot resolver —
+  best audio + best MV — with duration/title/artist/trust scoring),
+  `services/catalog/playback_service` (`PlaybackMatchingService`): on-demand
+  `resolve_and_persist`, `report_failure` revalidation (increment failure count,
+  mark stale/unavailable, find a replacement, keep the catalog track),
+  `schedule_missing_matches` (bounded-concurrency background matching so
+  artist/album reads never block).
+- **Playback rule** — `preferred_youtube_video_id` = audio slot; MV only when no
+  acceptable audio; a valid audio preferred is never replaced by a later MV; both
+  IDs + `youtube_*_match_type` persisted.
+- **Tests** — +13 (classifier, matcher preference/rejection/duration, persistence,
+  never-replace-audio, revalidation, missing-match-safe); 62 total, all passing.
+
 ### Phase 2.3 — Redis cache-first & stale-while-revalidate (2026-07-17)
 
 - **Added** — `paax-api` `cache/` package (folded the old `cache.py` into

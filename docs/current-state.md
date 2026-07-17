@@ -51,7 +51,7 @@ Full list: [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 | Task | Owner | Target | Notes |
 |------|-------|--------|-------|
-| **Phase 2 backend (Supabase-first catalog)** | AI agent | in progress | **2.1–2.3 done** (data layer + Deezer ingestion + Redis cache-first/stale-while-revalidate: `cache/` package, distributed locks, negative cache, cache-first catalog/search/home services — on `paax-api` branch `feat/phase2-supabase-catalog`, not pushed; 49 tests). Next: 2.4 persistent YouTube matcher. See [decisions.md](decisions.md) ADR-009, [CACHE_STRATEGY.md](CACHE_STRATEGY.md). |
+| **Phase 2 backend (Supabase-first catalog)** | AI agent | in progress | **2.1–2.4 done** (data layer + Deezer ingestion + Redis SWR + persistent YouTube matcher writing `tracks.youtube_*`: audio-only preference, candidate classification, on-demand resolve + failure revalidation — on `paax-api` branch `feat/phase2-supabase-catalog`, not pushed; 62 tests). Next: 2.5 artwork caching + `/v2/*` endpoint migration + Railway deploy. See [decisions.md](decisions.md) ADR-009. |
 | "Liquid glass" UI polish (Phase 5) | uzielcezate | ongoing | Latest commits tune shadows/edges/nav bar |
 | Branding Beaty → Paax | uzielcezate | ongoing | `applicationId`, `frontend/README.md`, root `README.md` still say Beaty |
 | Streaming consolidation (IFrame vs Worker vs IPv6 proxy) | uzielcezate | TBD | Pick one server fallback, delete the rest (ADR-006) |
