@@ -7,6 +7,7 @@ import 'core/theme/app_theme.dart';
 import 'core/config/api_config.dart';
 import 'core/config/supabase_config.dart';
 import 'data/local/hive_storage.dart';
+import 'data/repositories/library_repository.dart';
 import 'presentation/state/auth_controller.dart';
 import 'presentation/state/library_controller.dart';
 import 'presentation/state/playback_controller.dart';
@@ -98,7 +99,22 @@ class PaaxApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthController()),
-        ChangeNotifierProvider(create: (_) => LibraryController()),
+        // Phase 3.2A: LibraryController gets a cloud-sync repository and is
+        // driven by the auth session — on sign-in/restore it flushes pending
+        // ops, hydrates cloud data, and runs the one-time Hive→cloud migration;
+        // on sign-out it clears session state. onUserSession is idempotent per
+        // identity, so calling it on every AuthController notification is safe.
+        ChangeNotifierProxyProvider<AuthController, LibraryController>(
+          create: (_) => LibraryController(LibraryRepository()),
+          update: (_, auth, lib) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            // ignore: discarded_futures
+            lib!.onUserSession(uid);
+            return lib;
+          },
+        ),
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),
         ChangeNotifierProvider(create: (_) => PlaybackController()),
         ChangeNotifierProvider(create: (_) => ThemeState()),

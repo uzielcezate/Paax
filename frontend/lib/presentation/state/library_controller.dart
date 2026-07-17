@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/local/hive_storage.dart';
+import '../../data/repositories/library_repository.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/saved_album.dart';
@@ -11,12 +12,38 @@ class LibraryController extends ChangeNotifier {
   List<SavedAlbum> _savedAlbums = [];
   Set<String> _hiddenTrackIds = {};
   Map<String, int> _pinnedPlaylistMap = {};
-  
+
+  /// Phase 3.2A — optional cloud-sync repository. Null keeps the controller
+  /// purely local (existing tests/usages compile unchanged).
+  final LibraryRepository? _repo;
+
   List<Track> get likedTracks => _likedTracks;
   List<Playlist> get playlists => _playlists;
   List<SavedAlbum> get savedAlbums => _savedAlbums;
-  
-  LibraryController() {
+
+  LibraryController([this._repo]) {
+    _loadData();
+  }
+
+  /// Tracks the last auth identity handled so a ProxyProvider can safely call
+  /// [onUserSession] on every AuthController notification without re-hydrating.
+  String? _sessionUid;
+  bool _sessionUidSet = false;
+
+  /// Wire the auth flow to this: pushes any pending ops, hydrates cloud data
+  /// into Hive, runs the one-time migration, then reloads from Hive. No-op when
+  /// no repository was injected. Idempotent per identity — repeated calls with
+  /// the same user id are ignored. Never throws to the UI.
+  Future<void> onUserSession(String? userId) async {
+    if (_repo == null) return;
+    if (_sessionUidSet && userId == _sessionUid) return; // same identity — skip
+    _sessionUid = userId;
+    _sessionUidSet = true;
+    try {
+      await _repo.onUserSession(userId);
+    } catch (_) {
+      // Cloud sync is best-effort; local library is already authoritative.
+    }
     _loadData();
   }
   
@@ -39,6 +66,8 @@ class LibraryController extends ChangeNotifier {
   Future<void> toggleFollowArtist(Artist artist) async {
     await HiveStorage.toggleFollowArtist(artist);
     _loadData();
+    // Fire-and-forget cloud sync with the post-toggle state.
+    _repo?.pushFollow(artist, nowFollowed: HiveStorage.isArtistFollowed(artist.id));
   }
 
   bool isArtistFollowed(String id) {
@@ -50,6 +79,7 @@ class LibraryController extends ChangeNotifier {
     // Ensure we work with ID
     await HiveStorage.toggleLike(track);
     _loadData();
+    _repo?.pushLike(track, nowLiked: HiveStorage.isLiked(track.id));
   }
   
   bool isLiked(Track track) {
@@ -132,6 +162,7 @@ class LibraryController extends ChangeNotifier {
   Future<void> toggleSaveAlbum(SavedAlbum album) async {
     await HiveStorage.toggleSaveAlbum(album);
     _loadData();
+    _repo?.pushSave(album, nowSaved: HiveStorage.isAlbumSaved(album.albumId));
   }
   
   bool isAlbumSaved(String id) {
@@ -146,6 +177,18 @@ class LibraryController extends ChangeNotifier {
     await HiveStorage.toggleHideTrack(trackId);
     _hiddenTrackIds = HiveStorage.getHiddenTrackIds();
     notifyListeners();
+    // Best-effort: recover the Track (for its Deezer id) from the loaded liked
+    // list so the cloud side can resolve it. If not found, pushHide is a
+    // documented local-only no-op.
+    Track? track;
+    for (final t in _likedTracks) {
+      if (t.id == trackId) {
+        track = t;
+        break;
+      }
+    }
+    _repo?.pushHide(trackId,
+        nowHidden: HiveStorage.isTrackHidden(trackId), track: track);
   }
 
   // ── Pinned Playlists ──
