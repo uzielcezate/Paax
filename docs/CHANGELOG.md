@@ -28,6 +28,27 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 2.5 — Artwork caching + normalized /v2 + deploy (2026-07-17)
+
+- **Added** — `services/artwork/ArtworkService`: background download (host-
+  allowlisted to Deezer CDN, size/timeout capped, MIME+image validated) → WebP →
+  Supabase Storage `music-images` (`artists|albums|genres/{id}/…webp`) → update
+  cached URL/status → invalidate cache. Never fails catalog endpoints.
+- **Added** — normalized Supabase-first `/v2/*` endpoints (`api/v2_catalog_router`):
+  `/v2/artists|albums|tracks/{id}` + `/deezer/{id}`, discography, top,
+  `resolve-playback`, `report-playback-failure`, `/v2/find`, `/v2/home`.
+  Additive — legacy `/v2/artist|album|track|search|chart` unchanged (Flutter
+  migrates in Phase 3).
+- **Added** — `app_container` (single service graph at startup), richer `/health`
+  (healthy/degraded/unavailable + dependency states, no secrets), request-
+  correlation IDs + structured logging (`observability`), Redis rate limiting
+  (`services/rate_limit`, degrades open) on expensive endpoints.
+- **Tests** — +13 (artwork, rate limiter, `/v2` integration via TestClient);
+  **75 total**, all passing.
+- **Deploy** — Railway `paax-api` (GitHub `main` auto-deploy). Requires
+  `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` to activate the normalized catalog;
+  degrades gracefully (legacy endpoints keep working) until set.
+
 ### Phase 2.4 — Persistent YouTube matcher (2026-07-17)
 
 - **Added** — `paax-api` persistent YouTube matching that writes to

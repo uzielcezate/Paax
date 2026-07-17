@@ -28,6 +28,7 @@
 - **Caching** — Redis + in-memory in `paax-api`; 7-day YouTube match cache. See [CACHE_STRATEGY.md](CACHE_STRATEGY.md).
 - **Deploys** — `paax-api` (Railway), Cloudflare Worker resolver, `paax-stream` (Railway, standby), web PWA/TWA. See [deployment.md](deployment.md).
 - **Supabase Phase-1 foundation (deployed, not yet consumed by app code)** — 34-table RLS-enabled Postgres schema, views/functions/triggers, 3 Storage buckets, seeded billing plans, 11 migrations in `supabase/migrations/`, owner bootstrap script. The app still runs on Hive + demo auth. See [backend/database-schema.md](backend/database-schema.md), [decisions.md](decisions.md) ADR-009.
+- **Phase 2 backend (Supabase-first catalog) — COMPLETE, deployed** — `paax-api` now reads catalog cache-first (Redis → Supabase → Deezer ingest), persists complete artist/album/track graphs with preserved per-track credits, persists YouTube matches (`tracks.youtube_*`, audio-preferred), caches artwork to Storage, and exposes normalized `/v2/*` endpoints. **Prepared-but-not-connected**: Flutter still calls the legacy `/v2` endpoints until Phase 3. Requires `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` on Railway to activate (degrades to legacy otherwise). 75 backend tests. See [backend/phase2-catalog.md](backend/phase2-catalog.md), [decisions.md](decisions.md) ADR-010.
 
 ---
 
@@ -51,7 +52,7 @@ Full list: [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 | Task | Owner | Target | Notes |
 |------|-------|--------|-------|
-| **Phase 2 backend (Supabase-first catalog)** | AI agent | in progress | **2.1–2.4 done** (data layer + Deezer ingestion + Redis SWR + persistent YouTube matcher writing `tracks.youtube_*`: audio-only preference, candidate classification, on-demand resolve + failure revalidation — on `paax-api` branch `feat/phase2-supabase-catalog`, not pushed; 62 tests). Next: 2.5 artwork caching + `/v2/*` endpoint migration + Railway deploy. See [decisions.md](decisions.md) ADR-009. |
+| Frontend Phase 3 (Supabase Auth + cloud sync in Flutter) | — | not started | Next phase; connect Flutter to the normalized `/v2` endpoints, migrate Hive. |
 | "Liquid glass" UI polish (Phase 5) | uzielcezate | ongoing | Latest commits tune shadows/edges/nav bar |
 | Branding Beaty → Paax | uzielcezate | ongoing | `applicationId`, `frontend/README.md`, root `README.md` still say Beaty |
 | Streaming consolidation (IFrame vs Worker vs IPv6 proxy) | uzielcezate | TBD | Pick one server fallback, delete the rest (ADR-006) |
