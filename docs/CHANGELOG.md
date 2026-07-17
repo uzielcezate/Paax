@@ -28,6 +28,26 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 2.3 — Redis cache-first & stale-while-revalidate (2026-07-17)
+
+- **Added** — `paax-api` `cache/` package (folded the old `cache.py` into
+  `cache/store.py`, re-exported so `from cache import …` is unchanged):
+  `cache_keys` (centralized key registry — no raw key strings elsewhere),
+  `cache_policy` (TTL/freshness from config), `distributed_lock` (ownership-safe,
+  expiring, bounded-wait Redis lock that degrades open without Redis),
+  `response_cache` (hit/miss/stale envelopes + negative cache + targeted
+  invalidation).
+- **Added** — cache-first catalog services (`services/catalog/`): `CatalogService`
+  (Redis → Supabase(fresh/stale-while-revalidate) → locked Deezer ingest →
+  cache), `SearchService` (DB-first trigram + Deezer discovery merge/dedupe,
+  never waits on YouTube matching), `HomeService` (ONE bounded chart refresh with
+  a circuit-breaker cooldown that serves stale instead of 500 on Deezer 403/429),
+  `BackgroundJobs` (in-process SWR refresh; process-restart limitation documented).
+- **Added** — `mappers/discovery_mapper` normalized search/home item builders.
+- **Tests** — +18 (locks, response cache, SWR paths, negative cache, search
+  merge/dedupe, home breaker); 49 total, all passing.
+- Backend-only. Redis remains transient (Supabase is the source of truth).
+
 ### Phase 2.2 — Deezer ingestion & reconciliation (2026-07-17)
 
 - **Added (DB)** — migration `20260717145607_catalog_phase2_2_ingestion_upserts`:
