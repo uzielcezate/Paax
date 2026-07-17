@@ -28,6 +28,34 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 3.1 — Real Supabase authentication in Flutter (2026-07-17)
+
+- **Added** — The Flutter app is wired to **Supabase Auth** (anon key, PKCE):
+  email+password sign-in, a 3-step registration wizard (account → identity →
+  location) with live password-strength and debounced username-availability
+  checks, mandatory **email verification** (`paax://auth/confirm`), **password
+  recovery** (`paax://auth/reset-password`), and a Complete-Profile fallback.
+- **Added** — Deterministic routing: `AuthController` exposes an `AppAuthState`
+  state machine (`initializing`/`unauthenticated`/`unverified`/`profileLoading`/
+  `completeProfile`/`onboarding`/`ready`/`recovery`) that `AuthGate` maps to a
+  single destination. New: `auth_repository`, `profile_repository`,
+  `PendingRegistration` local store, `Profile` entity, `AuthValidators`,
+  `AuthErrorMapper`/`AuthFailure`, and the `auth/*` screens.
+- **Added** — Auth deep-link handling: Android intent-filter (`paax://auth`) and
+  iOS `CFBundleURLSchemes` (`paax`).
+- **Added** — Live integration test `frontend/test/live/auth_live_test.dart`
+  (email-free anon-contract, 4/4 passing against the live project).
+- **Removed** — The demo auth stub (`auth_screen.dart`, hard-coded
+  `user@gmail.com`/`12345`) and the unused old intro `onboarding_screen.dart`.
+- **Changed** — Logout now signs out via Supabase and **preserves** the local
+  Hive library (previously a full wipe); Profile → "Clear Data" wipes local data
+  then signs out. Both fixed to route via `AuthGate` (the deleted `AuthScreen`
+  navigation left the build broken).
+- **Security** — Client holds the anon key only; `profiles` RLS + a
+  `protect_profiles_privileged_columns` trigger reject client edits to
+  `app_role`/`subscription_*` with `42501`; password reset is enumeration-neutral.
+- **Docs** — Rewrote [features/authentication.md](features/authentication.md).
+
 ### Phase 2.6 — Catalog integrity: discography attribution (2026-07-17)
 
 - **Fixed** — `paax-api` artist-profile ingestion attributed albums to a

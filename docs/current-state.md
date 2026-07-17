@@ -7,9 +7,9 @@
 
 ## Project Status
 
-**Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (demo auth, no tests/CI, debug signing, streaming not consolidated).
-**Last Updated**: 2026-07-16
-**Updated By**: documentation pass (AI agent)
+**Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (no CI, debug signing, streaming not consolidated). **Real Supabase auth landed in Phase 3.1** (branch `feat/paax-branding-auth`), replacing the demo stub.
+**Last Updated**: 2026-07-17
+**Updated By**: Phase 3.1 auth integration (AI agent)
 
 > For the at-a-glance health dashboard (build/tests/deploys/bug counts, milestone progress), see [PROJECT_STATUS.md](PROJECT_STATUS.md). This doc and that one should always agree.
 
@@ -27,7 +27,8 @@
 - **Image resilience** — throttling/backoff/domain-sharding to survive Google/Deezer 429s. See [performance.md](performance.md).
 - **Caching** — Redis + in-memory in `paax-api`; 7-day YouTube match cache. See [CACHE_STRATEGY.md](CACHE_STRATEGY.md).
 - **Deploys** — `paax-api` (Railway), Cloudflare Worker resolver, `paax-stream` (Railway, standby), web PWA/TWA. See [deployment.md](deployment.md).
-- **Supabase Phase-1 foundation (deployed, not yet consumed by app code)** — 34-table RLS-enabled Postgres schema, views/functions/triggers, 3 Storage buckets, seeded billing plans, 11 migrations in `supabase/migrations/`, owner bootstrap script. The app still runs on Hive + demo auth. See [backend/database-schema.md](backend/database-schema.md), [decisions.md](decisions.md) ADR-009.
+- **Supabase Phase-1 foundation** — 34-table RLS-enabled Postgres schema, views/functions/triggers, 3 Storage buckets, seeded billing plans, 11 migrations in `supabase/migrations/`, owner bootstrap script. See [backend/database-schema.md](backend/database-schema.md), [decisions.md](decisions.md) ADR-009.
+- **Real authentication (Phase 3.1) — Flutter wired to Supabase Auth** — email+password with PKCE, mandatory email verification, password recovery, a 3-step registration wizard, an RLS-protected `profiles` row (auto-created by trigger, privileged columns guarded), deep-link callbacks (`paax://auth/*`) on Android + iOS, and a deterministic `AuthController`/`AuthGate` routing state machine. Client uses the anon key only. The demo stub (`user@gmail.com`/`12345`) and old intro `onboarding_screen.dart` are removed. Verified live (email-free anon-contract integration test `frontend/test/live/auth_live_test.dart` 4/4 + disposable-account lifecycle: trigger, RLS, `42501` privilege-escalation guard). See [features/authentication.md](features/authentication.md). **Cloud library sync (Hive → Supabase) is still Phase 3.2+ — the library remains on-device Hive.**
 - **Phase 2 backend (Supabase-first catalog) — COMPLETE, deployed** — `paax-api` now reads catalog cache-first (Redis → Supabase → Deezer ingest), persists complete artist/album/track graphs with preserved per-track credits, persists YouTube matches (`tracks.youtube_*`, audio-preferred), caches artwork to Storage, and exposes normalized `/v2/*` endpoints. **Prepared-but-not-connected**: Flutter still calls the legacy `/v2` endpoints until Phase 3. Requires `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` on Railway to activate (degrades to legacy otherwise). **Live and healthy** (Supabase + Redis). **85 backend tests.** Phase 2.6 fixed artist discography attribution (no more "Unknown Artist" placeholders; PR #3). See [backend/phase2-catalog.md](backend/phase2-catalog.md), [decisions.md](decisions.md) ADR-010, [KNOWN_ISSUES.md](KNOWN_ISSUES.md) ISSUE-021.
 
 ---
@@ -52,7 +53,7 @@ Full list: [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 | Task | Owner | Target | Notes |
 |------|-------|--------|-------|
-| Frontend Phase 3 (Supabase Auth + cloud sync in Flutter) | — | not started | Next phase; connect Flutter to the normalized `/v2` endpoints, migrate Hive. |
+| Frontend Phase 3.2 (cloud library sync + 5-artist onboarding) | — | not started | Phase 3.1 auth is **done** (real Supabase sign-in). Next: migrate Hive library to Supabase, real onboarding (the `onboarding` route is a placeholder). |
 | "Liquid glass" UI polish (Phase 5) | uzielcezate | ongoing | Latest commits tune shadows/edges/nav bar |
 | Branding Beaty → Paax | uzielcezate | ongoing | `applicationId`, `frontend/README.md`, root `README.md` still say Beaty |
 | Streaming consolidation (IFrame vs Worker vs IPv6 proxy) | uzielcezate | TBD | Pick one server fallback, delete the rest (ADR-006) |
@@ -65,6 +66,7 @@ See [tasks/in-progress.md](tasks/in-progress.md).
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-07-17 | Phase 3.1 — Flutter wired to real Supabase Auth (verification, recovery, profile, deep links, routing state machine); demo stub + old onboarding removed; live integration test added | AI agent |
 | 2026-07-16 | Supabase Phase 1 deployed — schema (34 tables) + RLS + storage + billing foundation (ADR-009); not yet integrated | AI agent |
 | 2026-07-16 | Full documentation pass — all `docs/` filled from code | AI agent |
 | 2026 (recent) | Liquid-glass polish: black sheets, slimmer mini player/nav, shadow/edge tuning | uzielcezate |

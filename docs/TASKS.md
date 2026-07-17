@@ -33,7 +33,7 @@ Limit to 3 — the highest-leverage, lowest-effort items that unblock a real Paa
 ### Features
 
 - [ ] **TASK-201** — Implement offline **downloads** (download queue, offline library, storage mgmt). Prereq: a real audio path (TASK-204). *(FR-001)*
-- [ ] **TASK-202** — Real **per-user auth + cloud library sync** to replace the demo stub. *(FR-002)* — **Supabase Phase-1 foundation complete (2026-07-16, ADR-009)**: schema (34 RLS tables), storage buckets, and billing readiness deployed. Remaining: backend ingestion (Phase 2) + Flutter integration (Phase 3) — the app still runs on Hive + the demo stub and consumes nothing from Supabase yet.
+- [ ] **TASK-202** — Real **per-user auth + cloud library sync** to replace the demo stub. *(FR-002)* — **Phase 1 foundation (2026-07-16, ADR-009)** + **Phase 2 backend catalog (ADR-010)** complete. **Phase 3.1 auth complete (2026-07-17)**: Flutter now signs in against Supabase Auth (verification, recovery, RLS profile, deep links) — demo stub removed. **Remaining (Phase 3.2+)**: migrate the Hive library to Supabase cloud sync + real 5-artist onboarding.
 - [ ] **TASK-203** — Build a working **Settings** screen (storage/cache, playback prefs, about/version). *(FR-003)*
 - [ ] **TASK-204** — Wire a server-side **streaming path** into playback (choose Worker vs paax-stream) instead of the direct IFrame. *(FR-004 / IDEA-006)*
 - [ ] **TASK-205** — Genuine **personalized recommendations** from local play history (not just recent searches). *(FR-005)*

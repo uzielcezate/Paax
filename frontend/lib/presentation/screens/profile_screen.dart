@@ -7,7 +7,6 @@ import '../state/auth_controller.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart'; // Added
 import '../../domain/entities/track.dart'; // Added
-import 'auth_screen.dart';
 import '../widgets/bottom_content_padding.dart';
 import '../widgets/section_header.dart'; // Added
 import '../widgets/black_glass_blur_surface.dart'; // Added
@@ -114,11 +113,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           const SizedBox(height: 8),
                           // Logout
                           _buildMenuItem("Log out", Icons.logout, () {
+                             // Signs out; AuthGate reacts to the state change and
+                             // routes back to Welcome. Local library is preserved.
                              context.read<AuthController>().logout();
-                             Navigator.of(context).pushAndRemoveUntil(
-                               MaterialPageRoute(builder: (_)=> const AuthScreen()),
-                               (route) => false,
-                             );
                           }),
                        ],
                      ),
@@ -323,12 +320,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           TextButton(onPressed: ()=>Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
             onPressed: () async {
-              await context.read<AuthController>().logout(); 
-               Navigator.of(context).pushAndRemoveUntil(
-                     MaterialPageRoute(builder: (_)=> const AuthScreen()),
-                     (route) => false,
-                   );
-            }, 
+              // Wipe the on-device library, then sign out. AuthGate routes back
+              // to Welcome once signed out (whole shell is rebuilt, so no stale
+              // in-memory state remains).
+              final auth = context.read<AuthController>();
+              Navigator.pop(context);
+              await HiveStorage.clearAll();
+              await auth.logout();
+            },
             child: const Text("Clear", style: TextStyle(color: Colors.red))
           ),
         ],

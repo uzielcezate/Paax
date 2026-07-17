@@ -1,60 +1,103 @@
 # Feature: Authentication
 
 > **Purpose**: Documents the design, flows, and implementation of the authentication feature.
-> **Update when**: Auth flows change, real auth is introduced, or security requirements evolve.
+> **Update when**: Auth flows change, security requirements evolve, or a new provider is added.
 
 ---
 
 ## Overview
 
-> **Read this first: Paax has no real authentication.** What ships today is a **local demo/stub**, not a production auth system. There is no identity provider, no server-side account, no password verification, no token, and no session in any security sense. The "login" gate exists to make the app feel complete and to hold a locally-stored display name — nothing more.
+> **Paax now has real authentication.** As of **Phase 3.1** (branch `feat/paax-branding-auth`) the Flutter app is wired to **Supabase Auth** as the single identity authority. The previous local demo/stub (hard-coded `user@gmail.com` / `12345`) is **gone**. Real accounts, email verification, password recovery, and an RLS-protected `profiles` row are live.
 
-Because Paax stores **all** user state on-device in Hive and its backends are stateless metadata/stream proxies (see [architecture](../architecture.md)), there is simply no server to authenticate *against* for the end user *in the live app*. This is a deliberate current-state limitation, documented honestly per [`docs/security.md`](../security.md) and [backend auth](../backend/auth.md). As of 2026-07-16 a **server-side identity foundation exists** (Supabase Auth, ADR-009 — see [the section below](#supabase-auth-foundation-deployed-not-integrated)), but the app is **not connected to it** — the demo stub remains the live behavior until Phase 3.
+The client uses **only the public anon key** (`lib/core/config/supabase_config.dart`). The `service_role` key never ships in the app — all privileged operations stay in `paax-api`, and every table is protected by Row Level Security. Auth uses the **PKCE** flow (`AuthFlowType.pkce`), initialized once in `main.dart`.
 
-`AuthController` (`frontend/lib/presentation/state/auth_controller.dart` — a `ChangeNotifier`) owns the whole flow: `UserProfile? currentUser`, `isAuthenticated`, and `onboardingCompleted`. The onboarding + auth gate lives **above** the app shell in `main.dart` via `Consumer<AuthController>`.
+`AuthController` (`frontend/lib/presentation/state/auth_controller.dart`, a `ChangeNotifier`) is the single source of truth for routing. It exposes a deterministic `AppAuthState` that `AuthGate` maps to exactly one screen — no imperative `Navigator` juggling for the core flow.
+
+---
+
+## Architecture
+
+| Layer | File | Responsibility |
+|-------|------|----------------|
+| Config | `core/config/supabase_config.dart` | Public URL + anon key (compile-time overridable via `--dart-define`); deep-link redirect constants |
+| Repository | `data/repositories/auth_repository.dart` | Thin, injectable wrapper over Supabase Auth (sign up/in/out, resend, reset, update password, refresh) |
+| Repository | `data/repositories/profile_repository.dart` | RLS-safe reads/writes of `public.profiles`; **whitelists** non-privileged columns; `username_available` RPC |
+| Local store | `data/local/pending_registration.dart` | Versioned, **non-sensitive** pending-registration payload in `SharedPreferences` (7-day TTL) |
+| Entity | `domain/entities/profile.dart` | Mirrors the `profiles` row; `isComplete`, `greetingName`, read-only privileged fields |
+| Errors | `core/auth/auth_errors.dart` | `AuthFailure` + `AuthErrorMapper` — friendly messages, no raw payloads, no account enumeration |
+| Validators | `core/auth/validators.dart` | Pure email/password/username/DOB/country validators mirroring the server policy |
+| State | `presentation/state/auth_controller.dart` | Session restore, auth-event subscription, routing state machine, all actions |
+| Router | `presentation/screens/auth/auth_gate.dart` | `Selector<AuthController, AppAuthState>` → one destination |
+| Screens | `presentation/screens/auth/*.dart` | Welcome, Login, Register (3-step), Verify Email, Forgot/Reset Password, Complete Profile, Onboarding placeholder |
+
+### Routing state machine
+
+`AppAuthState` ∈ `initializing`, `unauthenticated`, `unverified`, `profileLoading`, `completeProfile`, `onboarding` (Phase 3.2 placeholder), `ready`, `recovery`.
+
+```
+initializing ──▶ unauthenticated ──▶ (register/login)
+                     ▲                     │
+                     │              unverified ──(email confirmed)──▶ profileLoading
+                  (logout)                                                │
+                                          completeProfile ◀──(incomplete/lost pending)──┤
+                                                 │                                       │
+                                              onboarding ◀──(profile complete, !onboarded)┤
+                                                 │                                       │
+                                                ready ◀──────────(complete + onboarded)──┘
+
+recovery  ◀── AuthChangeEvent.passwordRecovery (paax://auth/reset-password deep link)
+```
 
 ---
 
 ## Supported Auth Methods
 
-- [x] Email + Password — **stubbed.** `login` accepts exactly one hard-coded credential pair; `signup` always succeeds without validation.
-- [ ] Magic Link / Passwordless — not supported
-- [ ] Google OAuth — not supported
-- [ ] Apple Sign-In — not supported
-- [ ] Phone / SMS OTP — not supported
-- [ ] Guest / Anonymous — no explicit guest mode; the demo login effectively is one
+- [x] Email + Password — **real** (Supabase Auth, PKCE, email confirmation required)
+- [ ] Magic Link / Passwordless — not yet
+- [ ] Google OAuth — not yet
+- [ ] Apple Sign-In — not yet
+- [ ] Phone / SMS OTP — not yet
+- [ ] Guest / Anonymous — not offered
 
-> Separately, the **server** has a single shared YouTube Music OAuth account (`YTMUSIC_OAUTH_JSON`) used only by paax-api's v1 authenticated ytmusicapi library/playlist endpoints. It is **not** per-user and is unrelated to app login. See [backend auth](../backend/auth.md) and [environment](../environment.md).
+> Separately, the **server** has a single shared YouTube Music OAuth account (`YTMUSIC_OAUTH_JSON`) used only by paax-api's v1 ytmusicapi endpoints. It is unrelated to app login. See [backend auth](../backend/auth.md).
 
 ---
 
 ## User Flows
 
-### Onboarding gate
+### Registration (3-step wizard)
 
-On first launch, `main.dart` shows a 3-page onboarding `PageView` (`onboarding_screen.dart`). Completing it sets `onboarding_completed` in the Hive `settings` box. The gate order is: **onboarding → auth → app shell**.
+`register_screen.dart` — **Account** (email, password + live strength checklist, confirm) → **Identity** (given/family name, username with debounced availability check, DOB, gender) → **Location** (country, state/region, optional city). The Supabase account is created **only** on the final step.
 
-### Registration Flow (stub)
+1. `AuthController.register` normalizes email/username, builds `display_name`, and calls `signUp(email, password, data: {username, display_name})` with `emailRedirectTo = paax://auth/confirm`.
+2. A **`PendingRegistration`** (non-sensitive profile fields only — never the password or tokens) is saved locally so the full profile can be applied after verification.
+3. State resolves to **`unverified`** → `VerifyEmailScreen`.
 
-1. User opens the signup form (`auth_screen.dart`).
-2. User enters any name/email/password.
-3. `AuthController.signup` **always succeeds** — no validation, no uniqueness check, no server call.
-4. A `UserProfile` is written to the Hive `user_profile` box and `isAuthenticated` flips true; the app shell mounts.
+### Email verification
 
-### Login Flow (stub)
+- Supabase sends a confirmation email with the `paax://auth/confirm` deep link. `supabase_flutter` captures the link and completes the PKCE exchange automatically.
+- `VerifyEmailScreen` offers **Resend** (45-second cooldown) and **"I already verified"** (`refreshVerificationStatus` → refreshes the session and re-resolves).
+- On the first **verified** session, `_maybeApplyPending` writes the stored `PendingRegistration` to the profile — **only if it matches the authenticated email** — then clears it (only after a confirmed DB write).
 
-1. User enters credentials on the login form.
-2. `AuthController.login` checks them against the **hard-coded demo pair** `user@gmail.com` / `12345`.
-3. On match: a `UserProfile(name: "Uziel")` is saved to Hive and `isAuthenticated` becomes true.
-4. On mismatch: an invalid-credentials error is shown; no lockout, no rate limit (there is no server to protect).
+### Login
 
-### Password Reset Flow
+1. `signInWithPassword(email, password)`.
+2. If Supabase reports **email not confirmed**, the controller routes to `unverified` (so the user can resend) and surfaces a friendly message.
+3. Otherwise → `profileLoading` → `completeProfile` / `onboarding` / `ready` based on the profile.
 
-**Not implemented.** There is no password store and no email delivery. A forgotten password is meaningless here — any user can log in with the demo pair or sign up fresh.
+### Password recovery
 
-### Token Refresh Flow
+1. `ForgotPasswordScreen` → `sendPasswordReset(email)` → `resetPasswordForEmail(email, redirectTo: paax://auth/reset-password)`. The outcome is **neutral** — success is shown regardless of whether the address exists (no account enumeration); only rate-limit/network errors surface.
+2. Opening the emailed link fires `AuthChangeEvent.passwordRecovery` → state `recovery` → `ResetPasswordScreen`.
+3. `updatePassword(newPassword)` → `updateUser(password:)`. The recovery session persists, so the user is routed straight into the app.
 
-**Not applicable.** No tokens are issued, so there is nothing to refresh. Authentication "persists" only because the `UserProfile` remains in Hive across restarts.
+### Complete profile (fallback)
+
+If a verified user has no complete profile (pending payload lost/expired, or a prior write failed), `CompleteProfileScreen` collects the required fields and writes **RLS-safe columns only**. Required for completeness: `username`, `display_name`, `birth_date`, `country_code` (see `Profile.isComplete`).
+
+### Logout
+
+`AuthController.logout` calls `signOut()` and clears in-memory auth state. **It no longer wipes the local Hive library** (the old stub did a full `clearAll`). The email-scoped `PendingRegistration` is intentionally retained so a genuine re-login with the same email can still finish onboarding; a different account can never receive it (email match enforced).
 
 ---
 
@@ -62,67 +105,95 @@ On first launch, `main.dart` shows a 3-page onboarding `PageView` (`onboarding_s
 
 | Aspect | Reality |
 |--------|---------|
-| Access Token Lifetime | None — no tokens exist |
-| Refresh Token Lifetime | None |
-| Refresh Rotation | Not applicable |
-| Session persistence | The `UserProfile` in the Hive `user_profile` box (single object at key 0: `name`, `email`, `minutesListened`). Presence of a profile = "logged in". |
-| **Logout Behavior** | `logout` calls `HiveStorage.clearAll()` — a **full local wipe**. This clears not just the profile but the entire library (liked/playlists/albums/artists), recently played, recent searches, and settings. There is no server session to revoke. |
-
-> The logout-wipes-everything behavior is worth flagging as a UX sharp edge: on this stub there is no cloud backup, so logging out is effectively "reset the app". See [profile](profile.md), which also exposes a "clear data" action.
+| Provider | Supabase Auth (GoTrue), PKCE flow |
+| Access token | Short-lived JWT; **refreshed automatically** by `supabase_flutter` |
+| Refresh token | Managed + rotated by the SDK; persisted in the platform secure store |
+| Session persistence | The SDK restores the session on launch; `AuthGate` shows a splash during `initializing`/`profileLoading` so the Login screen never flashes for a signed-in user |
+| Logout | `signOut()` revokes the session server-side; local auth state cleared. Hive library is preserved |
 
 ---
 
-## Screen Inventory
+## Profiles & Authorization (server)
 
-Navigation is manual (`Navigator`) — there are no named routes/deep links for auth (see [routing](../frontend/routing.md)).
+- `public.profiles` is **1:1 with `auth.users`**. The `on_auth_user_created` trigger (`private.handle_new_user()`) creates the row on signup, deriving the username from signup metadata when it is valid and free, otherwise a safe `user_<id>`. It never fails signup and never reads role/tier from metadata.
+- **RLS**: users may `SELECT`/`INSERT`/`UPDATE` only their own row (`auth.uid() = id`). The anon role sees nothing.
+- **Privileged columns** (`id`, `app_role`, `subscription_tier`, `subscription_status`, `subscription_expires_at`, `created_at`) are guarded by the `protect_profiles_privileged_columns` BEFORE UPDATE trigger, which **raises `42501`** if a client (`anon`/`authenticated`) tries to change them. The client also whitelists writable columns (`ProfileRepository.writableFields`) as defense-in-depth.
+- `onboarding_completed` is server-managed and never set by the Complete-Profile path (onboarding is Phase 3.2).
 
-| Screen | Route | Description |
-|--------|-------|-------------|
-| Onboarding | (gate in `main.dart`) | 3-page intro `PageView`; sets `onboarding_completed` |
-| Login / Signup | (gate in `main.dart`) | Combined auth form (`auth_screen.dart`); demo creds pre-implied |
-| Forgot Password | — | Not implemented |
+See [database](../database.md), [backend/database-schema.md](../backend/database-schema.md), and [`.claude/rules/supabase.md`](../../.claude/rules/supabase.md).
+
+---
+
+## Deep Links
+
+| Platform | Config | Value |
+|----------|--------|-------|
+| Android | `AndroidManifest.xml` intent-filter | `scheme="paax" host="auth"` (`paax://auth/*`) |
+| iOS | `Info.plist` `CFBundleURLSchemes` | `paax` |
+| Redirects | Supabase Dashboard → URL Configuration | `paax://auth/confirm`, `paax://auth/reset-password` (must be allow-listed) |
+
+Both redirect URLs use the `auth` host, so the scoped Android intent-filter (not a broad catch-all) matches both. `supabase_flutter` + `app_links` handle the incoming links in Dart.
+
+---
+
+## Password & Username Policy
+
+Enforced in **both** the client (`AuthValidators`) and Supabase:
+
+- **Password**: ≥ 8 chars, with uppercase, lowercase, digit, and special character. The Supabase Dashboard policy must match (a manual step; configured for this project).
+- **Username**: `^[a-z0-9_.]{3,30}$`, cannot start/end with `.`/`_`, no repeated separators; case-insensitive uniqueness via the `username_available` RPC + a DB uniqueness constraint (Postgrest `23505` → "That username is taken").
 
 ---
 
 ## Edge Cases & Error States
 
-| Error | User Message | Behavior |
-|-------|-------------|----------|
-| Invalid credentials | "Email or password incorrect" (login) | Form error; user retries. No lockout / no rate limit (no server). |
-| Account not verified | — | Not applicable — there is no verification step |
-| Session expired | — | Cannot happen — the local profile never expires |
-| Signup "failure" | — | Cannot happen — `signup` always succeeds |
+| Error | Kind | User Message |
+|-------|------|--------------|
+| Wrong email/password | `invalidCredentials` | "Incorrect email or password" |
+| Unverified email at login | `emailNotConfirmed` | "Please verify your email to continue" (+ routes to Verify screen) |
+| Email already registered | `emailAlreadyRegistered` | "This email is already registered" |
+| Weak password (server) | `weakPassword` | "Password must be 8+ chars with upper, lower, number and symbol" |
+| Username taken (`23505`) | `usernameTaken` | "That username is taken" |
+| Too many attempts (`429`) | `rateLimited` | "Too many attempts. Please try again in a moment" |
+| Expired/used link | `expiredLink` | "This link has expired or was already used" |
+| No connection | `network` | "No internet connection" |
+| Server 5xx | `unavailable` | "Service temporarily unavailable. Try again later" |
+
+Raw provider payloads are never surfaced. Password reset is neutral (no enumeration).
 
 ---
 
-## Supabase Auth foundation (deployed, not integrated)
+## Verification (Phase 3.1)
 
-> **Status**: server-side foundation **deployed 2026-07-16** (ADR-009, Phase 1). The Flutter app does **not** use any of this yet — everything above this section remains the live behavior. Flutter integration is **Phase 3** (see [`../tasks/backlog.md`](../tasks/backlog.md) TASK-B20).
+Auth was verified live against the Supabase project (ref `jecgmiuypuathhvjuhea`).
 
-- **Real accounts are now possible server-side**: Supabase Auth is deployed as the single identity authority, with a `profiles` table 1:1 with `auth.users` (see [`../backend/database-schema.md`](../backend/database-schema.md)).
-- **Profiles auto-create on signup**: a `security definer` trigger (`private.handle_new_user()`) creates the profile row — using the metadata username only if valid and free, otherwise deriving a safe `user_<id>`; it never fails signup and never reads role/tier from metadata.
-- **Password policy** (min 8 chars, upper + lower + digit + special; regex `^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$`) must be enforced in **both** places: the Flutter auth forms (Phase 3) **and** the Supabase Dashboard (a **manual step** — not migration-configurable; tracked as backlog TASK-B19).
-- **Roles**: `app_role` ∈ `user`/`moderator`/`admin`/`owner` on `profiles`. Roles and subscription tier are **privileged, trigger-guarded columns** — clients can never self-promote or self-assign paid tiers.
-- **Not in scope yet**: no Flutter sign-in, no token flow in the app, no Hive migration — the demo stub stays live until Phase 3.
+- **Committed live integration test** — `frontend/test/live/auth_live_test.dart` (run: `flutter test test/live/auth_live_test.dart`). Uses the public anon key only, sends **no email** (so it is repeatable and never trips the email rate limit), and asserts the anon-facing contract: `username_available` RPC reachable, anon cannot read `profiles` (RLS), weak password rejected before account creation, unknown credentials fail closed. **4/4 pass.**
+- **Account-lifecycle verification** — against a disposable account (no email side effects): the `on_auth_user_created` trigger creates a `profiles` row with the derived username and `user`/`free`/`inactive` defaults; `username_available` flips to `false` for the taken handle; as the `authenticated` role a user can read/update only their own row; and a privilege-escalation UPDATE (`app_role='owner'`) is **rejected with `42501`**. Disposable artifacts were deleted afterward (0 leftover).
+- **`flutter analyze`** — no errors; the auth files are lint-clean.
+- **Email link click-through** and **live SMTP delivery** are covered by manual QA (they require a real inbox and cannot run headless).
 
 ---
 
-## Security Notes (must-read)
+## Security Notes
 
-- This is a **stub, not security**. Do not treat the login screen as an access control boundary. Anyone with the device (or the demo credentials) is "authenticated".
-- Real auth is a prerequisite for any per-user server state. The server identity store **now exists** (Supabase Auth foundation, ADR-009 — see the section above), but it is **not wired into the app**; per-request token validation and client integration are Phase 3. See [`.claude/rules/security.md`](../../.claude/rules/security.md) and [`.claude/rules/supabase.md`](../../.claude/rules/supabase.md).
-- Related backend caveat: paax-api's v1 write endpoints (`/rate`, `/playlists*`) have **no per-user auth** and mutate the single shared server account — another reason those endpoints are not exposed as user features. See [api](../api.md) and [security](../security.md).
+- The client holds **only** the anon key; RLS is the enforcement boundary. Never embed the `service_role` key.
+- Clients cannot self-promote role or self-assign a paid tier (trigger-guarded + client whitelist).
+- Password reset and (where possible) login errors avoid account enumeration.
+- Related backend caveat: paax-api's v1 write endpoints (`/rate`, `/playlists*`) still have **no per-user auth** and mutate the shared server account — they are not exposed as user features. See [api](../api.md), [security](../security.md).
 
 ---
 
 ## Related Files
 
-- Controller: `frontend/lib/presentation/state/auth_controller.dart` — see [state-management](../frontend/state-management.md)
-- Screens: `frontend/lib/presentation/screens/onboarding_screen.dart`, `frontend/lib/presentation/screens/auth_screen.dart`
-- Gate: `frontend/lib/main.dart` (`Consumer<AuthController>`)
-- Local store: `frontend/lib/data/local/hive_storage.dart` (`user_profile` box, `clearAll`) — see [database](../database.md)
-- Cross-references: [security](../security.md), [backend auth](../backend/auth.md), [profile](profile.md)
+- Controller: `frontend/lib/presentation/state/auth_controller.dart`
+- Repositories: `frontend/lib/data/repositories/{auth,profile}_repository.dart`
+- Config: `frontend/lib/core/config/supabase_config.dart`
+- Screens: `frontend/lib/presentation/screens/auth/*.dart`
+- Gate: `frontend/lib/presentation/screens/auth/auth_gate.dart` (mounted from `main.dart`)
+- Local store: `frontend/lib/data/local/pending_registration.dart`
+- Live test: `frontend/test/live/auth_live_test.dart`
+- Cross-references: [security](../security.md), [backend auth](../backend/auth.md), [profile](profile.md), [decisions.md](../decisions.md) (ADR-009)
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*

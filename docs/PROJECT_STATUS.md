@@ -12,7 +12,7 @@
 | Build | 🟢 Passing | Flutter builds (web/Android); `flutter analyze` is the gate |
 | Tests | 🔴 None | No automated tests / CI — see [testing.md](testing.md) |
 | Deployments | 🟢 Healthy | paax-api, Worker, paax-stream, web PWA up; no uptime monitoring |
-| Open Bugs (Critical) | 3 | Deezer `verify=False`; unauth write endpoints; debug-key release signing |
+| Open Bugs (Critical) | 3 | Deezer `verify=False`; unauth v1 write endpoints; debug-key release signing |
 | Open Bugs (Total) | ~8 | See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) |
 | Tech Debt Level | High | Dead/orphaned streaming code, dual config, no tests, ad-hoc spacing — [TECH_DEBT.md](TECH_DEBT.md) |
 
@@ -24,7 +24,7 @@
 Phase: [ ] Concept  [ ] Design  [ ] MVP  [x] Alpha  [ ] Beta  [ ] GA  [ ] Maintenance
 ```
 
-**Description**: Feature-rich and demoable end-to-end (browse, play, library, lyrics, polished UI), but **not production-ready** — demo auth, no tests/CI, debug signing, and unconsolidated streaming block a real launch. Focus is shifting to production hardening (see [roadmap.md](roadmap.md)).
+**Description**: Feature-rich and demoable end-to-end (browse, play, library, lyrics, polished UI), and now with **real Supabase authentication** (Phase 3.1 — see [features/authentication.md](features/authentication.md)) replacing the old demo stub. Still **not production-ready** — no tests/CI, debug signing, and unconsolidated streaming block a real launch; the music library remains on-device (Hive), with cloud sync deferred to Phase 3.2+. Focus is on production hardening (see [roadmap.md](roadmap.md)).
 
 ---
 
@@ -38,10 +38,10 @@ Phase: [ ] Concept  [ ] Design  [ ] MVP  [x] Alpha  [ ] Beta  [ ] GA  [ ] Mainte
 | 1 | Consolidate streaming (one path + fallback), remove dead code | ⬜ Not started |
 | 2 | Real signing config + Paax `applicationId` | ⬜ Not started |
 | 3 | Fix Deezer `verify=False`; gate/remove unauth write endpoints | ⬜ Not started |
-| 4 | Real per-user auth (replace demo stub) | 🟨 Foundation deployed (Supabase Phase 1, ADR-009, 2026-07-16); integration pending — app still on demo auth |
+| 4 | Real per-user auth (replace demo stub) | 🟢 Done (Phase 3.1, 2026-07-17) — Supabase Auth wired into the Flutter app; demo stub removed. See [features/authentication.md](features/authentication.md) |
 | 5 | Automated test baseline + CI | ⬜ Not started |
 
-**Completion**: 0 / 5 goals complete (0%) — milestone just defined.
+**Completion**: 1 / 5 goals complete (20%) — real per-user auth landed (Phase 3.1).
 
 ---
 
@@ -66,7 +66,7 @@ Single maintainer (`uzielcezate`); no formal sprints. Development is continuous 
 | Blocker | Impact | Owner | Since |
 |---------|--------|-------|-------|
 | Streaming fragmentation (IFrame vs Worker vs IPv6 proxy) unresolved | Medium | uzielcezate | 2026 |
-| No real auth → no cross-device data, blocks public launch | High | uzielcezate | 2026 |
+| No cloud library sync → no cross-device data (auth landed Phase 3.1; sync is Phase 3.2+) | Medium | uzielcezate | 2026 |
 | Debug-key release signing + Beaty `applicationId` | High | uzielcezate | 2026 |
 
 ---
@@ -88,7 +88,7 @@ Single maintainer (`uzielcezate`); no formal sprints. Development is continuous 
 
 1. Consolidate streaming and delete dead resolver code (ADR-006).
 2. Production hardening: signing, `applicationId`, TLS, endpoint auth.
-3. Real auth + cloud sync: the Supabase Phase-1 foundation is deployed (ADR-009; see [backend/database-schema.md](backend/database-schema.md)) — next is Phase 2 backend ingestion, then Phase 3 Flutter integration; then automated tests + CI.
+3. Cloud library sync: real Supabase auth is now live in the app (Phase 3.1 — see [features/authentication.md](features/authentication.md)); next is Phase 3.2+ cloud sync of the on-device Hive library, then automated tests + CI.
 
 See [current-state.md](current-state.md), [roadmap.md](roadmap.md), [tasks/backlog.md](tasks/backlog.md).
 
