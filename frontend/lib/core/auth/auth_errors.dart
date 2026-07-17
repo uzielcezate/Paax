@@ -67,7 +67,14 @@ class AuthErrorMapper {
         return const AuthFailure(AuthErrorKind.weakPassword,
             'Password must be 8+ chars with upper, lower, number and symbol');
       }
-      if (msg.contains('expired') || msg.contains('invalid') && msg.contains('token')) {
+      // Stale/used email confirmation or recovery LINK. Scope to link/token
+      // context so a generic "session/JWT expired" isn't mislabeled as a link
+      // error (invalid-credentials / not-confirmed are already handled above).
+      final looksLikeLink = msg.contains('link') ||
+          msg.contains('token') ||
+          msg.contains('otp') ||
+          msg.contains('code');
+      if (looksLikeLink && (msg.contains('expired') || msg.contains('invalid'))) {
         return const AuthFailure(
             AuthErrorKind.expiredLink, 'This link has expired or was already used');
       }

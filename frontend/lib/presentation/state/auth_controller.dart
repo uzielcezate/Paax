@@ -181,7 +181,7 @@ class AuthController extends ChangeNotifier {
     final normUsername = AuthValidators.normalizeUsername(username);
     final displayName = AuthValidators.buildDisplayName(firstName, lastName);
     try {
-      await _auth.signUp(
+      final res = await _auth.signUp(
         email: normEmail,
         password: password,
         data: {'username': normUsername, 'display_name': displayName},
@@ -200,7 +200,15 @@ class AuthController extends ChangeNotifier {
         city: city,
       ));
       _pendingVerificationEmail = normEmail;
-      await _resolve(); // typically → unverified
+      // With email confirmation ON, signUp issues NO session → route straight to
+      // the Verify-Email screen (previously this fell through _resolve to
+      // Welcome, skipping verification). If confirmation is OFF (autoconfirm), a
+      // session exists and we resolve on into the app.
+      if (res.session == null) {
+        _set(AppAuthState.unverified);
+      } else {
+        await _resolve();
+      }
     } catch (e) {
       throw AuthErrorMapper.map(e);
     } finally {
@@ -241,6 +249,13 @@ class AuthController extends ChangeNotifier {
     try {
       await _auth.refreshSession();
     } catch (_) {/* keep going; resolve reflects current state */}
+    // Without a session there is nothing to resolve — the user must open the
+    // confirmation link on THIS device to establish one. Stay on the verify
+    // screen (with its "open the link" hint) rather than bouncing to Welcome.
+    if (_auth.currentSession == null && _pendingVerificationEmail != null) {
+      _set(AppAuthState.unverified);
+      return;
+    }
     await _resolve();
   }
 
@@ -312,9 +327,6 @@ class AuthController extends ChangeNotifier {
   // ── internals ─────────────────────────────────────────────────────────────
 
   void _set(AppAuthState s) {
-    if (_state == s && s != AppAuthState.profileLoading) {
-      // still notify for profileLoading transitions; otherwise dedupe
-    }
     _state = s;
     notifyListeners();
   }
