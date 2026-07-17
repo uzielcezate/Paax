@@ -28,6 +28,26 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 2.2 — Deezer ingestion & reconciliation (2026-07-17)
+
+- **Added (DB)** — migration `20260717145607_catalog_phase2_2_ingestion_upserts`:
+  atomic `catalog_upsert_{artist,album,track}_graph(jsonb)` RPCs (+ private
+  helpers), service-role-only. Enforce: preserve existing `youtube_*` and
+  cached-artwork columns on refresh; never downgrade `full`→`partial`; bump
+  `metadata_updated_at` only on `full`; prune junction rows only when the
+  payload is `complete`. Integration-tested against production, then cleaned up.
+- **Added** — `paax-api` ingestion layer: Deezer→payload mappers
+  (`mappers/deezer_*`), `CatalogIngestionService` (complete album graph with
+  per-track collaborators fetched from `/track/{id}` under bounded concurrency),
+  `relationship_reconciler` (artist-genre enrichment), repository graph-upsert
+  write methods. +18 unit tests (31 total).
+- **Security / Fixed** — Deezer client now uses **secure TLS** (`verify=True`,
+  certifi) instead of `verify=False`; normalized upstream errors (404→NotFound,
+  403/5xx→Unavailable, 429→RateLimited, timeout→Timeout, malformed→BadResponse,
+  including Deezer's HTTP-200-with-`error`-body quirk); bounded concurrency +
+  in-flight request de-duplication.
+- Backend-only: no Flutter, playback engine, or `/v2` endpoint changes yet.
+
 ### Phase 2.1 — Supabase catalog data layer (2026-07-17)
 
 - **Added** — `paax-api` Supabase-first catalog data layer (ADR-009 Phase 2):

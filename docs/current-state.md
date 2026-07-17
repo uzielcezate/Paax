@@ -36,7 +36,7 @@
 | Issue | Severity | Affected Area | Known Workaround |
 |-------|----------|---------------|------------------|
 | Legacy `backend` `/stream/{videoId}` throws `NameError` (`_FORMAT_FALLBACKS`) | Medium | legacy backend | Service is superseded; unused |
-| Deezer client `verify=False` (TLS validation off) | High | paax-api security | None — fix required. See [security.md](security.md) |
+| ~~Deezer client `verify=False` (TLS validation off)~~ **FIXED (Phase 2.2)** | ~~High~~ | paax-api security | TLS verification enabled in the async Deezer client (certifi CA). See [CHANGELOG.md](CHANGELOG.md) |
 | paax-api write endpoints unauthenticated (shared account) | High | paax-api | Do not expose publicly |
 | Release Android build signs with **debug keys**; `applicationId` still `com.beaty.music.beaty` | High | Android release | Blocks store release. See [deployment.md](deployment.md) |
 | Cold-cache track endpoints multi-second (eager YouTube match) | Medium | paax-api latency | Match cache warms it. See [performance.md](performance.md) |
@@ -51,7 +51,7 @@ Full list: [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 | Task | Owner | Target | Notes |
 |------|-------|--------|-------|
-| **Phase 2 backend (Supabase-first catalog)** | AI agent | in progress | **2.1 done** (data layer: config, gateway, schemas, repositories, mappers, tests — committed on `paax-api` branch `feat/phase2-supabase-catalog`, not pushed). Next: 2.2 Deezer ingestion. See [decisions.md](decisions.md) ADR-009, [backend/repositories.md](backend/repositories.md). |
+| **Phase 2 backend (Supabase-first catalog)** | AI agent | in progress | **2.1 + 2.2 done** (data layer + Deezer ingestion/reconciliation: graph-upsert RPCs, hardened Deezer client, mappers, ingestion service — on `paax-api` branch `feat/phase2-supabase-catalog`, not pushed; 31 tests). Next: 2.3 Redis stale-while-revalidate. See [decisions.md](decisions.md) ADR-009. |
 | "Liquid glass" UI polish (Phase 5) | uzielcezate | ongoing | Latest commits tune shadows/edges/nav bar |
 | Branding Beaty → Paax | uzielcezate | ongoing | `applicationId`, `frontend/README.md`, root `README.md` still say Beaty |
 | Streaming consolidation (IFrame vs Worker vs IPv6 proxy) | uzielcezate | TBD | Pick one server fallback, delete the rest (ADR-006) |
