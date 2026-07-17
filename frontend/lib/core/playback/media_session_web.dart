@@ -1,4 +1,4 @@
-// ============================================================================
+/*// ============================================================================
 // Web Media Session API — Dart interop
 // ============================================================================
 // Sets navigator.mediaSession.metadata and action handlers so the browser /
@@ -164,3 +164,4 @@ void clearMediaSession() {
     debugPrint('[MediaSession] Error clearing media session: $e');
   }
 }
+*/

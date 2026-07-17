@@ -28,6 +28,14 @@ class SavedAlbum extends HiveObject {
   final int? trackCount;
   final List<Track>? tracks;
 
+  /// Normalized release type: 'album', 'single', or 'ep'.
+  /// Not persisted to Hive.
+  final String? releaseType;
+
+  /// Structured artist list for multi-artist albums (e.g. collaborative albums).
+  /// Each entry has 'name' and 'id'. Not persisted to Hive.
+  final List<Map<String, String>>? artists;
+
   SavedAlbum({
     required this.albumId,
     required this.title,
@@ -39,5 +47,8 @@ class SavedAlbum extends HiveObject {
     this.duration,
     this.trackCount,
     this.tracks,
+    this.releaseType,
+    this.artists,
   });
 }
+

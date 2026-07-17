@@ -108,7 +108,7 @@ class _ArtistItemsScreenState extends State<ArtistItemsScreen> {
                         const SizedBox(height: 16),
                         TextButton(
                             onPressed: () => _fetchPage(isFirst: true), 
-                            child: const Text("Retry", style: TextStyle(color: AppColors.primaryStart))
+                            child: const Text("Retry", style: TextStyle(color: Colors.white))
                         )
                     ]
                 )

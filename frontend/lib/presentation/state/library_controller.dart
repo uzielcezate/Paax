@@ -9,6 +9,8 @@ class LibraryController extends ChangeNotifier {
   List<Track> _likedTracks = [];
   List<Playlist> _playlists = [];
   List<SavedAlbum> _savedAlbums = [];
+  Set<String> _hiddenTrackIds = {};
+  Map<String, int> _pinnedPlaylistMap = {};
   
   List<Track> get likedTracks => _likedTracks;
   List<Playlist> get playlists => _playlists;
@@ -26,6 +28,11 @@ class LibraryController extends ChangeNotifier {
     _playlists = HiveStorage.getPlaylists();
     _savedAlbums = HiveStorage.getSavedAlbums();
     _followedArtists = HiveStorage.getFollowedArtists();
+    _hiddenTrackIds = HiveStorage.getHiddenTrackIds();
+    _pinnedPlaylistMap = HiveStorage.getPinnedPlaylistMap();
+    // Clean up stale pinned entries for deleted playlists
+    final existingIds = _playlists.map((p) => p.id).toSet();
+    HiveStorage.cleanPinnedPlaylists(existingIds);
     notifyListeners();
   }
 
@@ -59,7 +66,7 @@ class LibraryController extends ChangeNotifier {
       name: name,
       tracks: [],
       createdAt: DateTime.now(),
-      coverColor: 0xFF9D4EDD, // Default purple
+      coverColor: 0xFF2A2A2E, // Default neutral dark gray
     );
     await HiveStorage.savePlaylist(newPlaylist);
     _loadData();
@@ -93,6 +100,15 @@ class LibraryController extends ChangeNotifier {
     await playlist.save();
     notifyListeners();
   }
+
+  /// Reorder a track within a playlist. Persists new order immediately.
+  Future<void> reorderPlaylistTrack(Playlist playlist, int oldIndex, int newIndex) async {
+    if (newIndex > oldIndex) newIndex--;
+    final track = playlist.tracks.removeAt(oldIndex);
+    playlist.tracks.insert(newIndex, track);
+    await playlist.save();
+    notifyListeners();
+  }
   
   Future<void> deletePlaylist(Playlist playlist) async {
     await playlist.delete();
@@ -120,5 +136,33 @@ class LibraryController extends ChangeNotifier {
   
   bool isAlbumSaved(String id) {
     return HiveStorage.isAlbumSaved(id);
+  }
+
+  // ── Hidden Tracks ──
+
+  bool isHidden(String trackId) => _hiddenTrackIds.contains(trackId);
+
+  Future<void> toggleHideTrack(String trackId) async {
+    await HiveStorage.toggleHideTrack(trackId);
+    _hiddenTrackIds = HiveStorage.getHiddenTrackIds();
+    notifyListeners();
+  }
+
+  // ── Pinned Playlists ──
+
+  bool isPlaylistPinned(String playlistId) =>
+      _pinnedPlaylistMap.containsKey(playlistId);
+
+  int get pinnedCount => _pinnedPlaylistMap.length;
+
+  /// Returns the pinnedAt timestamp for sorting. 0 if not pinned.
+  int pinnedAt(String playlistId) => _pinnedPlaylistMap[playlistId] ?? 0;
+
+  /// Toggle pin. Returns true=pinned, false=unpinned, null=limit reached.
+  Future<bool?> togglePinPlaylist(String playlistId) async {
+    final result = await HiveStorage.togglePinPlaylist(playlistId);
+    _pinnedPlaylistMap = HiveStorage.getPinnedPlaylistMap();
+    notifyListeners();
+    return result;
   }
 }

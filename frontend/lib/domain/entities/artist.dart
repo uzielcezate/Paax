@@ -45,4 +45,32 @@ class Artist extends HiveObject {
   // Non-persisted params for pagination
   final String? albumsParams; // "View All" params for albums
   final String? singlesParams; // "View All" params for singles
+
+  /// Creates a copy with selectively overridden fields.
+  /// Used for progressive profile rendering (basic → enriched).
+  Artist copyWith({
+    String? id,
+    String? name,
+    String? picture,
+    int? nbFans,
+    List<dynamic>? albums,
+    List<dynamic>? singles,
+    List<dynamic>? topTracks,
+    List<Artist>? relatedArtists,
+    String? albumsParams,
+    String? singlesParams,
+  }) {
+    return Artist(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      picture: picture ?? this.picture,
+      nbFans: nbFans ?? this.nbFans,
+      albums: albums ?? this.albums,
+      singles: singles ?? this.singles,
+      topTracks: topTracks ?? this.topTracks,
+      relatedArtists: relatedArtists ?? this.relatedArtists,
+      albumsParams: albumsParams ?? this.albumsParams,
+      singlesParams: singlesParams ?? this.singlesParams,
+    );
+  }
 }

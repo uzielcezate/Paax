@@ -33,7 +33,7 @@ class PlaylistCover extends StatelessWidget {
       return _buildPlaceholder();
     }
 
-    // 2+ Tracks -> 2x2 Collage
+    // 2+ Tracks -> tight 2x2 Collage (no gaps)
     List<String> collageUrls = [];
     if (uniqueUrls.length >= 4) {
       collageUrls = uniqueUrls.take(4).toList();
@@ -44,26 +44,35 @@ class PlaylistCover extends StatelessWidget {
       }
     }
 
+    final half = size / 2;
+    final imgSize = size > 100 ? Lh3UrlBuilder.headerSize : Lh3UrlBuilder.miniPlayerSize;
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: SizedBox(
         width: size,
         height: size,
         child: Column(
+          mainAxisSize: MainAxisSize.min,
+          spacing: 0,
           children: [
-            Expanded(
+            SizedBox(
+              height: half,
               child: Row(
+                spacing: 0,
                 children: [
-                  _mosaicItem(collageUrls[0]), 
-                  _mosaicItem(collageUrls[1]),
+                  _tile(collageUrls[0], half, imgSize),
+                  _tile(collageUrls[1], half, imgSize),
                 ],
               ),
             ),
-            Expanded(
+            SizedBox(
+              height: half,
               child: Row(
+                spacing: 0,
                 children: [
-                  _mosaicItem(collageUrls[2]), 
-                  _mosaicItem(collageUrls[3]),
+                  _tile(collageUrls[2], half, imgSize),
+                  _tile(collageUrls[3], half, imgSize),
                 ],
               ),
             ),
@@ -73,39 +82,52 @@ class PlaylistCover extends StatelessWidget {
     );
   }
 
+  Widget _tile(String url, double tileSize, int sizePx) {
+    return SizedBox(
+      width: tileSize,
+      height: tileSize,
+      child: AppImage(
+        url: url,
+        sizePx: sizePx,
+        width: tileSize,
+        height: tileSize,
+        fit: BoxFit.cover,
+      ),
+    );
+  }
+
   Widget _buildPlaceholder() {
+    final baseColor = Color(playlist.coverColor ?? 0xFF2A2A2E);
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: Color(playlist.coverColor ?? 0xFF37474F),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            baseColor,
+            Color.lerp(baseColor, Colors.black, 0.4)!,
+          ],
+        ),
         borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.06),
+          width: 1,
+        ),
       ),
-      child: Icon(Icons.music_note, color: Colors.white24, size: size * 0.5),
+      child: Icon(Icons.music_note_rounded, color: Colors.white24, size: size * 0.4),
     );
   }
 
   Widget _buildSingleImage(String url) {
     return AppImage(
       url: url,
-      sizePx: Lh3UrlBuilder.listSize,
+      sizePx: size > 100 ? Lh3UrlBuilder.headerSize : Lh3UrlBuilder.listSize,
       width: size,
       height: size,
       borderRadius: borderRadius,
       fit: BoxFit.cover,
-    );
-  }
-
-  Widget _mosaicItem(String url) {
-    final itemSize = size / 2;
-    return Expanded(
-      child: AppImage(
-        url: url,
-        sizePx: Lh3UrlBuilder.listSize,
-        width: itemSize,
-        height: itemSize,
-        fit: BoxFit.cover,
-      ),
     );
   }
 }

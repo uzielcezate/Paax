@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
@@ -8,7 +9,7 @@ import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
 import '../../data/repositories/music_repository_impl.dart';
 import '../../domain/repositories/music_repository.dart';
-import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/music_card.dart';
 import '../widgets/add_to_playlist_sheet.dart';
 
@@ -71,60 +72,32 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
              backgroundColor: Colors.transparent,
              forceMaterialTransparency: true,
              elevation: 0,
-             title: AnimatedOpacity(
-               duration: const Duration(milliseconds: 200),
-               opacity: _showTitle ? 1.0 : 0.0,
-               child: Text(widget.track.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-             ),
-             leading: IconButton(
-               icon: const Icon(Icons.arrow_back, color: Colors.white),
-               onPressed: () => Navigator.pop(context),
-             ),
-             flexibleSpace: Stack(
-               fit: StackFit.expand,
-               children: [
-                 FlexibleSpaceBar(
-                   collapseMode: CollapseMode.pin,
-                   background: Stack(
-                     fit: StackFit.expand,
-                     children: [
-                        Hero(
-                          tag: "track_${widget.track.id}",
-                          child: Thumbnail.hero(url: widget.track.artworkUrl, borderRadius: 0),
+             automaticallyImplyLeading: false,
+             leadingWidth: 0,
+             leading: const SizedBox.shrink(),
+             titleSpacing: 0,
+             title: null,
+             flexibleSpace: FlexibleSpaceBar(
+               collapseMode: CollapseMode.pin,
+               background: Stack(
+                 fit: StackFit.expand,
+                 children: [
+                    Hero(
+                      tag: "track_${widget.track.id}",
+                      child: Thumbnail.hero(url: widget.track.artworkUrl, borderRadius: 0),
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, AppColors.background.withOpacity(0.1), AppColors.background],
+                          stops: const [0.0, 0.7, 1.0]
                         ),
-                        
-                        Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, AppColors.background.withOpacity(0.1), AppColors.background],
-                              stops: const [0.0, 0.7, 1.0]
-                            ),
-                          ),
-                        ),
-                     ],
-                   ),
-                 ),
-                 
-                 // Glass Blur Layer (Controlled by Scroll)
-                 Positioned(
-                   top: 0,
-                   left: 0,
-                   right: 0,
-                   height: MediaQuery.of(context).padding.top + kToolbarHeight,
-                   child: AnimatedOpacity(
-                     duration: const Duration(milliseconds: 200),
-                     opacity: _showTitle ? 1.0 : 0.0,
-                     child: BlackGlassBlurSurface(
-                        height: MediaQuery.of(context).padding.top + kToolbarHeight,
-                        width: MediaQuery.of(context).size.width,
-                        bottomBorder: true,
-                        child: Container(),
-                     ),
-                   ),
-                 ),
-               ],
+                      ),
+                    ),
+                 ],
+               ),
              ),
            ),
            
@@ -156,7 +129,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                       icon: isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                       label: isLiked ? "Liked" : "Like",
                       onTap: () => lib.toggleLike(widget.track),
-                      color: isLiked ? AppColors.primaryEnd : Colors.white,
+                      color: isLiked ? Colors.white : Colors.white.withValues(alpha: 0.7),
                     );
                   }
                 ),
@@ -189,7 +162,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
             FutureBuilder<List<Track>>(
               future: _artistTracksFuture,
               builder: (context, snapshot) {
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: AppColors.primaryStart));
+                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.white));
                 if (snapshot.hasError) return const Text("Could not load recommendations", style: TextStyle(color: Colors.white54));
                 
                 // Filter out current track
@@ -228,6 +201,29 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
       ),
 
 
+            // Top fade gradient
+            const DynamicEdgeFade.black(),
+
+            // Floating controls
+            FloatingTopControls(
+              showScrolledPill: _showTitle,
+              topPadding: MediaQuery.of(context).padding.top,
+              defaultControls: Row(
+                mainAxisAlignment: MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  GlassCircleButton(
+                    icon: Icons.arrow_back_ios_new,
+                    iconSize: 18,
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              scrolledPill: ScrolledTopPill(
+                title: widget.track.title,
+                onBack: () => Navigator.pop(context),
+              ),
+            ),
         ],
       )
     );
@@ -236,20 +232,20 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
   Widget _buildActionButton({required IconData icon, required String label, required VoidCallback onTap, bool primary = false, Color color = Colors.white}) {
     return Column(
       children: [
-        Container(
-          width: 60, height: 60,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: primary ? AppColors.primaryStart : AppColors.surfaceLight,
-            gradient: primary ? AppColors.primaryGradient : null,
-          ),
-          child: IconButton(
-            icon: Icon(icon, color: primary ? Colors.white : color),
-            onPressed: onTap,
-          ),
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+                width: 60, height: 60,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: primary ? Colors.white : AppColors.surface,
+                  border: primary ? null : Border.all(color: Colors.white.withOpacity(0.08), width: 0.5),
+                ),
+                child: Icon(icon, color: primary ? Colors.black : color, size: 26),
+              ),
         ),
         const SizedBox(height: 8),
-        Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+        Text(label, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12)),
       ],
     );
   }

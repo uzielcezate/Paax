@@ -1,8 +1,11 @@
+import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shimmer/shimmer.dart';
 import '../../core/theme/app_colors.dart';
+import '../widgets/error_state_widget.dart';
 import '../../domain/entities/artist.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
@@ -11,16 +14,19 @@ import '../../domain/repositories/music_repository.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
 import '../widgets/music_card.dart';
-import '../widgets/section_header.dart';
 import 'album_detail_screen.dart';
-import '../widgets/black_glass_blur_surface.dart';
-import '../widgets/mini_player.dart'; 
+import '../widgets/glass_surface.dart';
+import '../widgets/mini_player.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/network_image_with_fallback.dart';
 import '../widgets/bottom_content_padding.dart';
 import '../../core/utils/thumbnail_prefetcher.dart';
-import 'artist_items_screen.dart';
+import '../widgets/app_image.dart';
+import '../../core/image/lh3_url_builder.dart';
+import '../../core/image/image_pipeline.dart';
+import 'artist_discography_screen.dart';
+import '../../core/utils/dominant_color_service.dart';
 
 import '../../core/utils/responsive.dart';
 import '../../core/utils/string_utils.dart';
@@ -55,21 +61,29 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   bool _showTitle = false;
   bool _isLoading = true;
   bool _hasError = false;
+  bool _isEnriching = false;
   String _resolvedArtistId = '';
   
   ThumbnailPrefetcher? _prefetcher;
   Artist? _cachedArtist;
+  // Stash raw songs for background enrichment
+  final List<dynamic> _rawSongs = [];
+
+  // Accent color from artwork
+  Color _dominantColor = DominantColorService.fallback;
+  String? _resolvedPictureUrl;
 
   @override
   void initState() {
     super.initState();
     _resolvedArtistId = widget.artistId;
+    _resolvedPictureUrl = widget.pictureUrl;
     _loadData();
     
     _prefetcher = ThumbnailPrefetcher(context);
 
     _scrollController.addListener(() {
-      final show = _scrollController.offset > 240; 
+      final show = _scrollController.offset > 200; 
       if (show != _showTitle) {
         setState(() {
           _showTitle = show;
@@ -97,6 +111,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
 
   // ... (_loadData, dispose unchanged)
   Future<void> _loadData() async {
+    final loadStopwatch = Stopwatch()..start();
     setState(() {
       _isLoading = true;
       _hasError = false;
@@ -114,17 +129,30 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         throw Exception("Could not resolve artist ID");
       }
 
-      _artistInfoFuture = _repository.getArtist(_resolvedArtistId);
-      
+      // Phase 1: Load basic artist data (no enrichment) â€” renders immediately
+      _artistInfoFuture = _repository.getArtistBasic(_resolvedArtistId);
       final artist = await _artistInfoFuture; 
       _cachedArtist = artist;
 
+      debugPrint('[Perf] ArtistDetailScreen first render in ${loadStopwatch.elapsedMilliseconds}ms');
+
       if (mounted) {
+        // Update the picture URL from API data so DynamicBackground can re-extract
+        if (artist.picture.isNotEmpty && artist.picture != _resolvedPictureUrl) {
+          _resolvedPictureUrl = artist.picture;
+        }
         setState(() {
           _isLoading = false;
         });
       }
+
+      // Precache key images in background
+      _precacheImages(artist);
+
+      // Phase 2: Enrich releases in background
+      _enrichReleases(artist);
     } catch (e) {
+      debugPrint('[Perf] ArtistDetailScreen FAILED in ${loadStopwatch.elapsedMilliseconds}ms: $e');
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -133,12 +161,126 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       }
     }
   }
+
+  /// Background enrichment â€” updates albums/singles with year and type data.
+  Future<void> _enrichReleases(Artist basicArtist) async {
+    if (!mounted) return;
+    setState(() => _isEnriching = true);
+
+    final enrichStopwatch = Stopwatch()..start();
+    try {
+      final albums = (basicArtist.albums as List).cast<SavedAlbum>();
+      final singles = (basicArtist.singles as List).cast<SavedAlbum>();
+
+      final enriched = await _repository.enrichArtistReleases(
+        existingAlbums: albums,
+        existingSingles: singles,
+        rawSongs: _rawSongs,
+      );
+
+      if (mounted) {
+        final updated = basicArtist.copyWith(
+          albums: enriched.albums,
+          singles: enriched.singles,
+        );
+        _cachedArtist = updated;
+        // Update the future so FutureBuilders rebuild
+        _artistInfoFuture = Future.value(updated);
+        debugPrint('[Perf] ArtistDetailScreen enrichment done in ${enrichStopwatch.elapsedMilliseconds}ms');
+        setState(() => _isEnriching = false);
+      }
+    } catch (err) {
+      debugPrint('[Repo] Background enrichment failed: $err');
+      if (mounted) setState(() => _isEnriching = false);
+    }
+  }
+
+  /// Precache key images so back-navigation feels instant.
+  void _precacheImages(Artist artist) {
+    if (kIsWeb) return;
+    try {
+      final mgr = ImagePipeline.instance.cacheManager;
+      final urls = <String>[
+        if (artist.picture.isNotEmpty) Lh3UrlBuilder.build(artist.picture, Lh3UrlBuilder.headerSize),
+        ...(artist.albums as List).cast<SavedAlbum>().take(5).map((a) => Lh3UrlBuilder.forList(a.artworkUrl)),
+        ...(artist.singles as List).cast<SavedAlbum>().take(5).map((s) => Lh3UrlBuilder.forList(s.artworkUrl)),
+      ].where((u) => u.isNotEmpty).toList();
+      for (final url in urls) {
+        mgr.downloadFile(url).catchError((_) => null as dynamic);
+      }
+    } catch (_) {}
+  }
   
   @override
   void dispose() {
     _scrollController.dispose();
     _prefetcher?.dispose();
     super.dispose();
+  }
+  Widget _buildSkeleton(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Stack(
+        children: [
+          const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildError(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Stack(
+        children: [
+          Center(
+            child: ErrorStateWidget(
+              rawError: "An error occurred while loading this artist profile.",
+              foregroundColor: Colors.white,
+              onRetry: _loadData,
+            ),
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -150,252 +292,301 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
+          // ── Scrollable Content ──
           CustomScrollView(
             controller: _scrollController,
             slivers: [
-              _buildSliverAppBar(context),
-              SliverToBoxAdapter(child: _buildActionButtons(context)),
-              SliverToBoxAdapter(child: const SizedBox(height: 20)),
-              
+              // 1. Scrollable Hero Header (Image + Title/Fans)
+              SliverToBoxAdapter(
+                child: SizedBox(
+                  height: MediaQuery.of(context).size.width,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Artist Image
+                      if (_resolvedPictureUrl != null && _resolvedPictureUrl!.isNotEmpty)
+                        NetworkImageWithFallback(
+                          imageUrl: _resolvedPictureUrl!.replaceAll(RegExp(r'w\d+-h\d+.*'), 'w1080-h1080'),
+                          fit: BoxFit.cover,
+                          memCacheWidth: 1080,
+                        )
+                      else
+                        FutureBuilder<Artist>(
+                          future: _artistInfoFuture,
+                          builder: (context, snapshot) {
+                            if (snapshot.hasData && snapshot.data!.picture.isNotEmpty) {
+                              final hdUrl = snapshot.data!.picture.replaceAll(RegExp(r'w\d+-h\d+.*'), 'w1080-h1080');
+                              return NetworkImageWithFallback(
+                                imageUrl: hdUrl, 
+                                fit: BoxFit.cover,
+                                memCacheWidth: 1080,
+                              );
+                            }
+                            return Container(color: Colors.black);
+                          }
+                        ),
+                      
+                      // Bottom fade into AppColors.background (#121212)
+                      Container(
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Color(0x99121212),
+                              AppColors.background,
+                            ],
+                            stops: [0.0, 0.5, 1.0],
+                          ),
+                        ),
+                      ),
+
+                      // Artist Title and Fans (Aligned to Bottom)
+                      Positioned(
+                        bottom: 24,
+                        left: 20,
+                        right: 20,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              widget.artistName,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 36,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                letterSpacing: -1.0,
+                                height: 1.1,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            FutureBuilder<Artist>(
+                              future: _artistInfoFuture,
+                              builder: (context, snapshot) {
+                                if (!snapshot.hasData) return const SizedBox.shrink();
+                                final fans = snapshot.data!.nbFans;
+                                final fanStr = formatFans(fans);
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1),
+                                  ),
+                                  child: Text(
+                                    fanStr,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // 2. Action Buttons Row (Below Image)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 16),
+                      FutureBuilder<Artist>(
+                        future: _artistInfoFuture,
+                        builder: (context, snapshot) {
+                          final artistObj = snapshot.data;
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              // Shuffle
+                              _buildActionButton(
+                                icon: Icons.shuffle_rounded,
+                                onTap: () async {
+                                  try {
+                                    final artist = await _artistInfoFuture;
+                                    if (artist.topTracks.isNotEmpty && mounted) {
+                                      final tracks = (artist.topTracks as List).cast<Track>();
+                                      final shuffled = List<Track>.from(tracks)..shuffle();
+                                      context.read<PlaybackController>().playQueue(shuffled);
+                                    }
+                                  } catch (_) {}
+                                },
+                              ),
+                              const SizedBox(width: 14),
+                              // Play (Large Center Button)
+                              Consumer<PlaybackController>(
+                                builder: (_, playback, __) {
+                                  final isPlaying = playback.isPlaying && playback.currentTrack?.artistId == _resolvedArtistId;
+                                  return _buildActionButton(
+                                    icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                    size: 58,
+                                    iconSize: 28,
+                                    primary: true,
+                                    onTap: () async {
+                                      try {
+                                        final artist = await _artistInfoFuture;
+                                        if (artist.topTracks.isNotEmpty && mounted) {
+                                          if (playback.currentTrack?.artistId == _resolvedArtistId) {
+                                            playback.togglePlayPause();
+                                          } else {
+                                            final tracks = (artist.topTracks as List).cast<Track>();
+                                            playback.playQueue(tracks);
+                                          }
+                                        }
+                                      } catch (_) {}
+                                    },
+                                  );
+                                },
+                              ),
+                              const SizedBox(width: 14),
+                              // Follow
+                              Consumer<LibraryController>(
+                                builder: (context, lib, _) {
+                                  final isFollowed = lib.isArtistFollowed(_resolvedArtistId);
+                                  return _buildActionButton(
+                                    icon: isFollowed ? Icons.check_rounded : Icons.person_add_rounded,
+                                    onTap: () {
+                                      if (artistObj != null) {
+                                        lib.toggleFollowArtist(artistObj);
+                                      }
+                                    },
+                                  );
+                                },
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+
               _buildTopTracksSection(context),
-              _buildAlbumsSection(context),
+              _buildLatestReleaseSection(context),
+              _buildDiscographyAlbumsSection(context),
+              _buildDiscographySinglesSection(context),
+              _buildDiscographyButton(context),
               _buildRelatedArtistsSection(context),
               const SliverToBoxAdapter(child: BottomContentPadding()),
             ],
           ),
-          
-        ],
-      ),
-    );
-  }
 
-  // ... (_buildError, _buildSkeleton unchanged - skipped for brevity in update, assume they exist)
-  Widget _buildError(BuildContext context) {
-      // ... (Can keep existing)
-      return Scaffold(
-       backgroundColor: AppColors.background,
-       appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0),
-       body: Center(
-         child: Column(
-           mainAxisAlignment: MainAxisAlignment.center,
-           children: [
-             Icon(Icons.error_outline, size: 48, color: Colors.white54),
-             SizedBox(height: 16),
-             Text("Artist info unavailable", style: TextStyle(color: Colors.white70)),
-             SizedBox(height: 16),
-             TextButton(
-               onPressed: _loadData,
-               child: Text("Retry", style: TextStyle(color: AppColors.primaryStart)),
-             )
-           ],
-         ),
-       ),
-     );
-  }
-
-  Widget _buildSkeleton(BuildContext context) {
-     return Scaffold(
-       backgroundColor: AppColors.background,
-       body: Shimmer.fromColors(
-         baseColor: Colors.grey[900]!,
-         highlightColor: Colors.grey[800]!,
-         child: SingleChildScrollView(
-           physics: const NeverScrollableScrollPhysics(),
-           child: Column(
-             children: [
-               Container(height: 340, color: Colors.white),
-               // ... (simulated skeleton)
-             ],
-           ),
-         ),
-       ),
-     );
-  }
-
-  Widget _buildSliverAppBar(BuildContext context) {
-    final expandedHeight = Responsive.value(context, mobile: 340.0, tablet: 400.0, desktop: 450.0);
-    
-    return SliverAppBar(
-      expandedHeight: expandedHeight,
-      pinned: true,
-      backgroundColor: Colors.transparent,
-      forceMaterialTransparency: true,
-      elevation: 0,
-      title: AnimatedOpacity(
-        duration: const Duration(milliseconds: 200),
-        opacity: _showTitle ? 1.0 : 0.0,
-        child: Text(widget.artistName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-      ),
-      actions: [
-        OverflowMenu(
-          type: MenuType.artist,
-          artist: Artist(
-            id: _resolvedArtistId,
-            name: widget.artistName,
-            picture: widget.pictureUrl ?? '',
+          // ── 3. Edge Fades ──
+          DynamicEdgeFade.dynamicBottom(
+            key: ValueKey('fade_bot_artist_${widget.artistId}'),
+            color: AppColors.background,
+            height: 120,
           ),
-        ),
-        const SizedBox(width: 8),
-      ],
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
-        onPressed: () => Navigator.pop(context),
-      ),
-      flexibleSpace: Stack(
-        fit: StackFit.expand,
-        children: [
-          FlexibleSpaceBar(
-            collapseMode: CollapseMode.pin,
-            background: Stack(
-              fit: StackFit.expand,
-              children: [
-                  if (widget.pictureUrl != null && widget.pictureUrl!.isNotEmpty)
-                   NetworkImageWithFallback(
-                     imageUrl: widget.pictureUrl!.replaceAll(RegExp(r'w\d+-h\d+.*'), 'w1080-h1080'), // Force HD
-                     fit: BoxFit.cover,
-                     memCacheWidth: 1080, // Ensure high quality memory cache
-                   )
-                 else
-                    FutureBuilder<Artist>(
-                      future: _artistInfoFuture,
-                      builder: (context, snapshot) {
-                        if (snapshot.hasData) {
-                          // Force HD URL by removing resizing params or setting large dimensions
-                          final hdUrl = snapshot.data!.picture.replaceAll(RegExp(r'w\d+-h\d+.*'), 'w1080-h1080');
-                          return NetworkImageWithFallback(
-                              imageUrl: hdUrl, 
-                              fit: BoxFit.cover,
-                              memCacheWidth: 1080,
-                          );
-                        }
-                        return Container(color: Colors.black);
-                      }
-                    ),
-                    
-                 // Gradient Scrim
-                 Container(
-                   decoration: BoxDecoration(
-                     gradient: LinearGradient(
-                       begin: Alignment.topCenter,
-                       end: Alignment.bottomCenter,
-                       colors: [
-                         Colors.transparent,
-                         Colors.black.withOpacity(0.2),
-                         Colors.black.withOpacity(0.8),
-                         AppColors.background,
-                       ],
-                       stops: const [0.4, 0.6, 0.9, 1.0],
-                     ),
-                   ),
-                 ),
 
-                 // Content Positioned at Bottom
-                 Positioned(
-                   bottom: 24,
-                   left: Responsive.spacing(context),
-                   right: Responsive.spacing(context),
-                   child: Column(
-                     crossAxisAlignment: CrossAxisAlignment.start,
-                     mainAxisSize: MainAxisSize.min,
-                     children: [
-                       // Artist Name
-                       Text(
-                         widget.artistName,
-                         maxLines: 2,
-                         overflow: TextOverflow.ellipsis,
-                         style: TextStyle(
-                           fontFamily: 'Roboto', 
-                           fontSize: Responsive.fontSize(context, 42, min: 32, max: 56), 
-                           fontWeight: FontWeight.w900, 
-                           color: Colors.white,
-                           height: 1.1,
-                           shadows: [Shadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 2))]
-                         )
-                       ),
-                       const SizedBox(height: 12),
-                       
-                       // Fans Badge & Follow Button
-                       FutureBuilder<Artist>(
-                         future: _artistInfoFuture,
-                         builder: (context, snapshot) {
-                           if (!snapshot.hasData) return const SizedBox.shrink();
-                           final fans = snapshot.data!.nbFans;
-                           final fanStr = formatFans(fans);
-                           
-                           final artistObj = snapshot.data!;
-
-                           return Row(
-                             children: [
-                               Container(
-                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                 decoration: BoxDecoration(
-                                   color: Colors.black.withOpacity(0.6),
-                                   borderRadius: BorderRadius.circular(20),
-                                   border: Border.all(color: Colors.amber.withOpacity(0.6), width: 1),
-                                   boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 4)]
-                                 ),
-                                 child: Row(
-                                   mainAxisSize: MainAxisSize.min,
-                                   children: [
-                                     const Icon(Icons.people_alt_rounded, color: Colors.amber, size: 14),
-                                     const SizedBox(width: 6),
-                                     Text(
-                                       fanStr, 
-                                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)
-                                     ),
-                                   ],
-                                 ),
-                               ),
-                               const SizedBox(width: 16),
-                               
-                               // Follow Button
-                               Consumer<LibraryController>(
-                                 builder: (context, lib, _) {
-                                    final isFollowed = lib.isArtistFollowed(_resolvedArtistId);
-                                    return GestureDetector(
-                                      onTap: () => lib.toggleFollowArtist(artistObj),
-                                      child: Container(
-                                         width: 36, height: 36,
-                                         decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            color: isFollowed ? AppColors.primaryStart : Colors.white.withOpacity(0.2),
-                                            border: Border.all(color: Colors.white.withOpacity(0.3), width: 1)
-                                         ),
-                                         child: Icon(
-                                           isFollowed ? Icons.check : Icons.person_add_rounded,
-                                           color: Colors.white, 
-                                           size: 20
-                                         ),
-                                      ),
-                                    );
-                                 },
-                               ),
-                             ],
-                           );
-                         },
-                       ),
-                     ],
-                   ),
-                 ),
-              ],
-            ),
-          ),
-          
-          // Glass Blur Layer (Controlled by Scroll)
+          // ── 4. Clean local top navigation bar ──
           Positioned(
             top: 0,
             left: 0,
             right: 0,
-            height: MediaQuery.of(context).padding.top + kToolbarHeight,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: _showTitle ? 1.0 : 0.0,
-              child: BlackGlassBlurSurface(
-                 height: MediaQuery.of(context).padding.top + kToolbarHeight,
-                 width: MediaQuery.of(context).size.width,
-                 bottomBorder: true,
-                 child: Container(),
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  color: _showTitle ? AppColors.background : Colors.transparent,
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top,
+                  ),
+                  child: SizedBox(
+                    height: 58,
+                    child: Stack(
+                      children: [
+                        // Left: back button — fixed position
+                        Positioned(
+                          left: 4,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: IconButton(
+                              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 24),
+                              onPressed: () => Navigator.pop(context),
+                            ),
+                          ),
+                        ),
+                        // Center: title — absolute center, independent of icons
+                        Positioned.fill(
+                          child: Center(
+                            child: AnimatedOpacity(
+                              opacity: _showTitle ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 150),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 56),
+                                child: Text(
+                                  widget.artistName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        // Right: overflow menu — fixed position
+                        Positioned(
+                          right: 4,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: SizedBox(
+                              width: 48,
+                              height: 48,
+                              child: Center(
+                                child: OverflowMenu(
+                                  type: MenuType.artist,
+                                  artist: Artist(
+                                    id: _resolvedArtistId,
+                                    name: widget.artistName,
+                                    picture: widget.pictureUrl ?? '',
+                                  ),
+                                  iconColor: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Soft bottom fade overlay
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  height: 45,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        _showTitle ? AppColors.background : Colors.transparent,
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -403,76 +594,32 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     );
   }
 
-  Widget _buildActionButtons(BuildContext context) {
-      return Padding(
-        padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
-        child: Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 24,
-          runSpacing: 16,
-          children: [
-             // Play Button
-             Consumer<PlaybackController>(
-               builder: (_, playback, __) {
-                  final isPlaying = playback.isPlaying && playback.currentTrack?.artistId == _resolvedArtistId;
-                  return _buildActionButton(
-                    icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                    label: isPlaying ? "Pause" : "Play",
-                    primary: true,
-                    onTap: () async {
-                       try {
-                         final artist = await _artistInfoFuture;
-                         if (artist.topTracks.isNotEmpty && mounted) {
-                            if (playback.currentTrack?.artistId == _resolvedArtistId) {
-                                playback.togglePlayPause();
-                            } else {
-                                final tracks = (artist.topTracks as List).cast<Track>();
-                                playback.playQueue(tracks);
-                            }
-                         }
-                       } catch (_) {}
-                    }
-                  );
-               }
-             ),
-             // Shuffle Button
-             _buildActionButton(
-               icon: Icons.shuffle_rounded,
-               label: "Shuffle",
-               onTap: () async {
-                  try {
-                    final artist = await _artistInfoFuture;
-                    if (artist.topTracks.isNotEmpty && mounted) {
-                       final tracks = (artist.topTracks as List).cast<Track>();
-                       final shuffled = List<Track>.from(tracks)..shuffle();
-                       context.read<PlaybackController>().playQueue(shuffled);
-                    }
-                  } catch (_) {}
-               }
-             ),
-          ],
+  /// High-contrast solid circular action button.
+  Widget _buildActionButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    double size = 46,
+    double iconSize = 22,
+    bool primary = false,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: primary ? Colors.white : Colors.white.withValues(alpha: 0.08),
+          border: primary ? null : Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1),
         ),
-      );
-  }
-
-  Widget _buildActionButton({required IconData icon, required String label, required VoidCallback onTap, bool primary = false, Color color = Colors.white}) {
-    return Column(
-      children: [
-        Container(
-          width: 56, height: 56,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: primary ? AppColors.primaryStart : AppColors.surfaceLight,
-            gradient: primary ? AppColors.primaryGradient : null,
-          ),
-          child: IconButton(
-            icon: Icon(icon, color: primary ? Colors.white : color),
-            onPressed: onTap,
+        child: Center(
+          child: Icon(
+            icon,
+            color: primary ? const Color(0xFF121212) : Colors.white,
+            size: iconSize,
           ),
         ),
-        const SizedBox(height: 8),
-        Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-      ],
+      ),
     );
   }
 
@@ -489,12 +636,14 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         return SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
-              if (index == 0) return const Padding(padding: EdgeInsets.fromLTRB(20, 24, 20, 12), child: Text("Popular", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)));
+              if (index == 0) return Padding(padding: const EdgeInsets.fromLTRB(20, 8, 20, 8), child: Text("Popular", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)));
               final track = displayTracks[index - 1];
               return TrackListTile(
                  track: track, 
                  index: index - 1,
-                 showArtwork: true, // Show artwork
+                 showArtwork: true,
+                 foregroundColor: Colors.white,
+                 allowSwipeActions: true,
                  onTap: () => context.read<PlaybackController>().playQueue(tracks, index: index - 1)
               );
             },
@@ -505,88 +654,278 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     );
   }
 
-  Widget _buildAlbumsSection(BuildContext context) {
+  // â”€â”€ Latest Release â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Widget _buildLatestReleaseSection(BuildContext context) {
     return FutureBuilder<Artist>(
       future: _artistInfoFuture,
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
-        
-        final artist = snapshot.data!;
-        final albums = (artist.albums as List).cast<SavedAlbum>();
-        final singles = (artist.singles as List).cast<SavedAlbum>();
-        
-        // Calculate responsive dimensions
+
+        final albums = (snapshot.data!.albums as List).cast<SavedAlbum>();
+        final singles = (snapshot.data!.singles as List).cast<SavedAlbum>();
+        final allReleases = [...albums, ...singles];
+        if (allReleases.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        // Sort newest first by year
+        allReleases.sort((a, b) {
+          final ya = int.tryParse(a.releaseDate ?? '') ?? 0;
+          final yb = int.tryParse(b.releaseDate ?? '') ?? 0;
+          return yb.compareTo(ya);
+        });
+        final latest = allReleases.first;
+        final yearStr = latest.releaseDate ?? '';
+
+        return SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: EdgeInsets.only(top: 24, bottom: 12),
+                  child: Text('Latest Release',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: latest))),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.12), width: 0.5),
+                    ),
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(12),
+                            bottomLeft: Radius.circular(12),
+                          ),
+                          child: AppImage(
+                            url: latest.artworkUrl,
+                            sizePx: Lh3UrlBuilder.listSize,
+                            width: 110,
+                            height: 110,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(latest.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+                                const SizedBox(height: 6),
+                                Text(() {
+                                  final type = displayReleaseType(latest.releaseType);
+                                  final year = extractYear(yearStr);
+                                  if (year != null) return '$type \u00B7 $year';
+                                  return type;
+                                }(),
+                                  style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.7))),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // â”€â”€ Ãlbumes (latest 5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Widget _buildDiscographyAlbumsSection(BuildContext context) {
+    return FutureBuilder<Artist>(
+      future: _artistInfoFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
+        final albums = (snapshot.data!.albums as List).cast<SavedAlbum>();
+        if (albums.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        final display = albums.take(5).toList();
         final cardWidth = Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
-        final cardHeight = cardWidth + 56; 
+        final cardHeight = cardWidth + 56;
 
         return SliverToBoxAdapter(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-               if (albums.isNotEmpty) ...[
-                 SectionHeader(
-                   title: "Albums",
-                   onSeeAll: artist.albumsParams != null 
-                      ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistItemsScreen(
-                          artistId: _resolvedArtistId, 
-                          title: "Albums", 
-                          initialParams: artist.albumsParams
-                      )))
-                      : null,
-                 ),
-                 SizedBox(
-                   height: cardHeight,
-                   child: ListView.builder(
-                     padding: EdgeInsets.only(left: Responsive.spacing(context)),
-                     scrollDirection: Axis.horizontal,
-                     physics: const ClampingScrollPhysics(),
-                     primary: false,
-                     itemCount: albums.length,
-                     itemBuilder: (context, index) {
-                       return _buildReleaseCard(context, albums[index], "Album", cardWidth);
-                     },
-                   ),
-                 )
-               ],
-               
-               if (singles.isNotEmpty) ...[
-                 SectionHeader(
-                   title: "Singles & EPs",
-                   onSeeAll: artist.singlesParams != null 
-                      ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistItemsScreen(
-                          artistId: _resolvedArtistId, 
-                          title: "Singles & EPs", 
-                          initialParams: artist.singlesParams
-                      )))
-                      : null,
-                 ),
-                 SizedBox(
-                   height: cardHeight,
-                   child: ListView.builder(
-                     padding: EdgeInsets.only(left: Responsive.spacing(context)),
-                     scrollDirection: Axis.horizontal,
-                     physics: const ClampingScrollPhysics(),
-                     primary: false,
-                     itemCount: singles.length,
-                     itemBuilder: (context, index) {
-                       return _buildReleaseCard(context, singles[index], "Single", cardWidth);
-                     },
-                   ),
-                 )
-               ]
+               Padding(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+                child: Text('Albums',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)),
+              ),
+              SizedBox(
+                height: cardHeight,
+                child: ListView.builder(
+                  padding: EdgeInsets.only(left: Responsive.spacing(context)),
+                  scrollDirection: Axis.horizontal,
+                  physics: const ClampingScrollPhysics(),
+                  primary: false,
+                  itemCount: display.length,
+                  itemBuilder: (context, index) {
+                    return _buildReleaseCard(context, display[index], cardWidth, showType: false);
+                  },
+                ),
+              ),
             ],
           ),
         );
       },
     );
   }
-  
-  Widget _buildReleaseCard(BuildContext context, SavedAlbum album, String subtitle, double width) {
+
+  // â”€â”€ Singles & EPs (latest 5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Widget _buildDiscographySinglesSection(BuildContext context) {
+    return FutureBuilder<Artist>(
+      future: _artistInfoFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
+        final singles = (snapshot.data!.singles as List).cast<SavedAlbum>();
+        if (singles.isEmpty && !_isEnriching) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        final display = singles.take(5).toList();
+        final cardWidth = Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
+        final cardHeight = cardWidth + 56;
+
+        return SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+                child: Row(
+                  children: [
+                    Text('Singles & EPs',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white)),
+                    if (_isEnriching) ...[
+                      const SizedBox(width: 8),
+                      const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white24,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (display.isNotEmpty)
+                SizedBox(
+                  height: cardHeight,
+                  child: ListView.builder(
+                    padding: EdgeInsets.only(left: Responsive.spacing(context)),
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    primary: false,
+                    itemCount: display.length,
+                    itemBuilder: (context, index) {
+                      return _buildReleaseCard(context, display[index], cardWidth, showType: false);
+                    },
+                  ),
+                )
+              else if (_isEnriching)
+                Shimmer.fromColors(
+                  baseColor: Colors.grey[900]!,
+                  highlightColor: Colors.grey[800]!,
+                  child: SizedBox(
+                    height: cardHeight,
+                    child: ListView.builder(
+                      padding: EdgeInsets.only(left: Responsive.spacing(context)),
+                      scrollDirection: Axis.horizontal,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: 3,
+                      itemBuilder: (_, __) => Container(
+                        width: cardWidth,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // â”€â”€ See full discography button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Widget _buildDiscographyButton(BuildContext context) {
+    return FutureBuilder<Artist>(
+      future: _artistInfoFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SliverToBoxAdapter(child: SizedBox.shrink());
+        final albums = (snapshot.data!.albums as List).cast<SavedAlbum>();
+        final singles = (snapshot.data!.singles as List).cast<SavedAlbum>();
+        if (albums.isEmpty && singles.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+
+        return SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: Responsive.spacing(context),
+              vertical: 20,
+            ),
+            child: OutlinedButton(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => ArtistDiscographyScreen(
+                    artistName: widget.artistName,
+                    albums: albums,
+                    singles: singles,
+                    dominantColor: _dominantColor,
+                    foregroundColor: Colors.white,
+                  ),
+                ));
+              },
+              style: OutlinedButton.styleFrom(
+                backgroundColor: Colors.white,
+                side: BorderSide.none,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                foregroundColor: Colors.black,
+              ),
+              child: Text('See full discography',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildReleaseCard(BuildContext context, SavedAlbum album, double width, {bool showType = true}) {
+      final year = extractYear(album.releaseDate);
+      String subtitle;
+      if (showType) {
+        final typeLabel = displayReleaseType(album.releaseType);
+        subtitle = year != null ? '$typeLabel \u00B7 $year' : typeLabel;
+      } else {
+        subtitle = year ?? '';
+      }
       return MusicCard(
         width: width,
         title: album.title,
         subtitle: subtitle, 
         imageUrl: album.artworkUrl,
+        foregroundColor: Colors.white,
         onTap: () {
            Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
         },
@@ -607,7 +946,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-               Padding(padding: EdgeInsets.all(Responsive.spacing(context)), child: const Text("Fans Also Like", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+               Padding(padding: EdgeInsets.all(Responsive.spacing(context)), child: Text("Fans Also Like", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white))),
                SizedBox(
                  height: height,
                  child: ListView.builder(
@@ -645,7 +984,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                maxLines: 1,
                                overflow: TextOverflow.ellipsis,
                                textAlign: TextAlign.center,
-                               style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                               style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13, color: Colors.white),
                              )
                            ],
                          ),

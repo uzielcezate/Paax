@@ -1,5 +1,4 @@
 
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
@@ -12,8 +11,10 @@ import '../../domain/entities/single_track_album_detail.dart';
 import '../../core/utils/string_utils.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
+
 import '../screens/artist_detail_screen.dart';
 import '../screens/album_detail_screen.dart';
+import 'playlist_cover.dart';
 import '../screens/home_screen.dart'; // Import MainWrapper if needed, but it's a circular dep maybe.
 import '../screens/main_wrapper.dart'; // To access MainWrapper.shellKey
 import 'package:share_plus/share_plus.dart';
@@ -32,8 +33,11 @@ class OverflowMenu extends StatelessWidget {
   final SingleTrackAlbumDetail? singleDetail;
   final VoidCallback? onDelete; // For playlists
   final VoidCallback? onEdit;   // For playlists
+  final VoidCallback? onEditOrder; // For playlist reorder mode
   final bool isNowPlaying; // Flag to enable dynamic current track resolution
   final VoidCallback? onNavigation;
+  final Playlist? playlistContext; // When non-null, adds 'Remove from Playlist'
+  final Color? iconColor;
 
   const OverflowMenu({
     super.key,
@@ -45,8 +49,11 @@ class OverflowMenu extends StatelessWidget {
     this.singleDetail,
     this.onDelete,
     this.onEdit,
+    this.onEditOrder,
     this.onNavigation,
     this.isNowPlaying = false, // Default false
+    this.playlistContext,
+    this.iconColor,
   });
 
   void _showMenu(BuildContext context) {
@@ -63,18 +70,21 @@ class OverflowMenu extends StatelessWidget {
         playlist: playlist,
         onDelete: onDelete,
         onEdit: onEdit,
+        onEditOrder: onEditOrder,
         parentContext: context,
         onNavigation: onNavigation, 
         isNowPlaying: isNowPlaying,
+        playlistContext: playlistContext,
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
-      onPressed: () => _showMenu(context),
+    return GestureDetector(
+      onTap: () => _showMenu(context),
+      behavior: HitTestBehavior.opaque,
+      child: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white, size: 26),
     );
   }
 }
@@ -88,9 +98,11 @@ class _MenuContent extends StatelessWidget {
   final SingleTrackAlbumDetail? singleDetail;
   final VoidCallback? onDelete;
   final VoidCallback? onEdit;
+  final VoidCallback? onEditOrder;
   final VoidCallback? onNavigation;
   final bool isNowPlaying;
   final BuildContext parentContext;
+  final Playlist? playlistContext;
 
   const _MenuContent({
     required this.type,
@@ -102,8 +114,10 @@ class _MenuContent extends StatelessWidget {
     this.singleDetail,
     this.onDelete,
     this.onEdit,
+    this.onEditOrder,
     this.onNavigation,
     this.isNowPlaying = false,
+    this.playlistContext,
   });
 
   @override
@@ -118,34 +132,42 @@ class _MenuContent extends StatelessWidget {
     }
     // ... rest of build logic using effectiveTrack instead of track
     
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF0A0A0A).withOpacity(0.85), 
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05), width: 1)),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 24),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildHeader(context, effectiveTrack),
-                Divider(color: Colors.white.withOpacity(0.1), height: 32),
-                ..._buildActions(context, effectiveTrack),
-                const SizedBox(height: 8),
-              ],
+    // Pure surface sheet — lightweight, no dynamic color
+    const sheetBg = AppColors.surface;
+    const sheetFg = Colors.white;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: sheetBg, 
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: const Border(top: BorderSide(color: Color(0xFF1A1A1A), width: 1)),
+      ),
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF333333),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
             ),
-          ),
+            _buildHeader(context, effectiveTrack, sheetFg),
+            const Divider(color: Color(0xFF1A1A1A), height: 32),
+            ..._buildActions(context, effectiveTrack, sheetFg),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildHeader(BuildContext context, Track? effectiveTrack) {
+  Widget _buildHeader(BuildContext context, Track? effectiveTrack, Color sheetFg) {
     String title = "";
     String subtitle = "";
     String? imageUrl;
@@ -156,7 +178,6 @@ class _MenuContent extends StatelessWidget {
       imageUrl = effectiveTrack.artworkUrl;
     // ... rest matches original, just use effectiveTrack instead of track
     } else if (type == MenuType.album) {
-    } else if (type == MenuType.album) {
       // Handle unified single mode as album
       if (singleDetail != null) {
          title = singleDetail!.title;
@@ -164,7 +185,13 @@ class _MenuContent extends StatelessWidget {
          imageUrl = singleDetail!.artworkUrl;
       } else if (album != null) {
          title = album!.title;
-         subtitle = album!.artistName;
+         // Prefer structured artist list over flat artistName to avoid "Various Artists"
+         final primaryArtist = (album!.artists != null && album!.artists!.isNotEmpty)
+             ? album!.artists!.first['name'] ?? album!.artistName
+             : album!.artistName;
+         subtitle = (primaryArtist.isEmpty || isPlaceholderArtist(primaryArtist))
+             ? album!.artistName
+             : primaryArtist;
          imageUrl = album!.artworkUrl;
       }
     } else if (type == MenuType.artist && artist != null) {
@@ -176,34 +203,42 @@ class _MenuContent extends StatelessWidget {
       subtitle = "Playlist • ${playlist!.trackIds.length} tracks";
     }
 
+    // For playlists, use PlaylistCover widget; for others, use imageUrl
+    Widget? leadingWidget;
+    if (type == MenuType.playlist && playlist != null) {
+      leadingWidget = PlaylistCover(playlist: playlist!, size: 48, borderRadius: 4);
+    } else if (imageUrl != null) {
+      leadingWidget = ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.network(imageUrl, width: 48, height: 48, fit: BoxFit.cover,
+          errorBuilder: (_,__,___) => Container(color: Colors.grey, width: 48, height: 48, child: const Icon(Icons.music_note)),
+        ),
+      );
+    } else {
+      leadingWidget = Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(4)),
+        child: const Icon(Icons.music_note, color: Colors.white54),
+      );
+    }
+
     return ListTile(
-      leading: imageUrl != null 
-          ? ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Image.network(imageUrl, width: 48, height: 48, fit: BoxFit.cover,
-                errorBuilder: (_,__,___) => Container(color: Colors.grey, width: 48, height: 48, child: const Icon(Icons.music_note)),
-              ),
-            )
-          : Container(
-              width: 48, height: 48, 
-              decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(4)),
-              child: const Icon(Icons.music_note, color: Colors.white54),
-            ),
-      title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+      leading: leadingWidget,
+      title: Text(title, style: TextStyle(color: sheetFg, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(subtitle, style: const TextStyle(color: Color(0xFF888888), fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
     );
   }
 
-  List<Widget> _buildActions(BuildContext context, Track? effectiveTrack) {
+  List<Widget> _buildActions(BuildContext context, Track? effectiveTrack, Color sheetFg) {
     switch (type) {
-      case MenuType.track: return _buildTrackActions(context, effectiveTrack);
-      case MenuType.album: return _buildAlbumActions(context);
-      case MenuType.artist: return _buildArtistActions(context);
-      case MenuType.playlist: return _buildPlaylistActions(context);
+      case MenuType.track: return _buildTrackActions(context, effectiveTrack, sheetFg);
+      case MenuType.album: return _buildAlbumActions(context, sheetFg);
+      case MenuType.artist: return _buildArtistActions(context, sheetFg);
+      case MenuType.playlist: return _buildPlaylistActions(context, sheetFg);
     }
   }
 
-  List<Widget> _buildTrackActions(BuildContext context, Track? effectiveTrack) {
+  List<Widget> _buildTrackActions(BuildContext context, Track? effectiveTrack, Color sheetFg) {
     if (effectiveTrack == null) return [];
     final lib = context.read<LibraryController>();
     final isLiked = lib.isLiked(effectiveTrack); // Use updated API
@@ -212,13 +247,13 @@ class _MenuContent extends StatelessWidget {
       _actionItem(context, 
         icon: isLiked ? Icons.favorite : Icons.favorite_border,
         label: isLiked ? "Unlike" : "Like",
-        color: isLiked ? AppColors.primaryEnd : Colors.white,
+        color: sheetFg,
         onTap: () {
           lib.toggleLike(effectiveTrack);
           Navigator.pop(context); 
         }
       ),
-      _actionItem(context, icon: Icons.playlist_add, label: "Add to Playlist", onTap: () {
+      _actionItem(context, icon: Icons.playlist_add, label: "Add to Playlist", color: sheetFg, onTap: () {
         Navigator.pop(context); // Close overflow menu
         showModalBottomSheet(
           context: context,
@@ -228,17 +263,17 @@ class _MenuContent extends StatelessWidget {
           builder: (context) => AddToPlaylistSheet(tracks: [effectiveTrack]),
         );
       }),
-      _actionItem(context, icon: Icons.queue_music, label: "Add to Queue", onTap: () {
+      _actionItem(context, icon: Icons.queue_music, label: "Add to Queue", color: sheetFg, onTap: () {
         final playback = context.read<PlaybackController>();
         if (playback.currentTrack == null) {
            playback.playTrack(effectiveTrack);
         } else {
            playback.addToQueue(effectiveTrack);
-           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Added to queue")));
+           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Added to queue"), duration: Duration(seconds: 2)));
         }
         Navigator.pop(context);
       }),
-      _actionItem(context, icon: Icons.album, label: "Go to Album", onTap: () {
+      _actionItem(context, icon: Icons.album, label: "Go to Album", color: sheetFg, onTap: () {
         Navigator.pop(context); 
         
         if (effectiveTrack.albumId.isEmpty || effectiveTrack.albumId == '0') {
@@ -253,9 +288,12 @@ class _MenuContent extends StatelessWidget {
              album: SavedAlbum(
                albumId: effectiveTrack.albumId,
                title: effectiveTrack.albumTitle,
-               artistName: effectiveTrack.artistName, 
+               // Don't pass track.artistName here — it's the track's artists
+               // (e.g. "DUKI, Judeline"), not the album's artist.
+               // The AlbumDetailScreen will resolve the true album artist from the API.
+               artistName: '',
                artworkUrl: effectiveTrack.artworkUrl,
-               artistId: effectiveTrack.artistId
+               artistId: '',
              )
         ));
         
@@ -267,30 +305,90 @@ class _MenuContent extends StatelessWidget {
       }),
 
       if (!isPlaceholderArtist(effectiveTrack.artistName))
-      _actionItem(context, icon: Icons.person, label: "Go to Artist", onTap: () {
-         Navigator.pop(context); // Close sheet
+      _actionItem(context, icon: Icons.person, label: "Go to Artist", color: sheetFg, onTap: () {
+         // Build valid artist list from track metadata
+         final validArtists = (effectiveTrack.artists ?? [])
+             .where((a) => (a['id'] ?? '').isNotEmpty && (a['name'] ?? '').isNotEmpty)
+             .toList();
+
+         // Fallback: use track-level artistId/artistName if artists list is empty
+         if (validArtists.isEmpty) {
+           final fallbackId = effectiveTrack.artistId ?? '';
+           if (fallbackId.isEmpty) {
+             Navigator.pop(context);
+             ScaffoldMessenger.of(parentContext).showSnackBar(
+               const SnackBar(content: Text("Artist info unavailable")),
+             );
+             return;
+           }
+           Navigator.pop(context);
+           if (onNavigation != null) onNavigation!();
+           _navigateToArtist(fallbackId, effectiveTrack.artistName, effectiveTrack);
+           return;
+         }
+
+         Navigator.pop(context); // Close overflow sheet
          if (onNavigation != null) onNavigation!();
 
-         final route = MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-            artistId: effectiveTrack.artistId ?? '',
-            artistName: effectiveTrack.artistName, 
-            sourceTrack: effectiveTrack, 
-         ));
-         
-         if (MainWrapper.shellKey.currentState != null) {
-            MainWrapper.shellKey.currentState!.navigateTo(route);
+         if (validArtists.length == 1) {
+           // Single artist — route directly
+           _navigateToArtist(
+             validArtists.first['id']!,
+             validArtists.first['name']!,
+             effectiveTrack,
+           );
          } else {
-            Navigator.push(parentContext, route);
+           // Multiple artists — show selection BottomSheet
+           _showArtistPicker(parentContext, validArtists, effectiveTrack);
          }
       }),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
-         Share.share('Check out "${effectiveTrack.title}" by ${effectiveTrack.artistName} on Beaty! https://music.youtube.com/watch?v=${effectiveTrack.id}');
+         Share.share('Check out "${effectiveTrack.title}" by ${effectiveTrack.artistName} on Paax! https://music.youtube.com/watch?v=${effectiveTrack.id}');
       }),
+      // Hide / Unhide track
+      Builder(
+        builder: (ctx) {
+          final lib = ctx.read<LibraryController>();
+          final hidden = lib.isHidden(effectiveTrack.id);
+          return _actionItem(ctx,
+            icon: hidden ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+            label: hidden ? "Unhide track" : "Hide track",
+            color: sheetFg,
+            onTap: () {
+              lib.toggleHideTrack(effectiveTrack.id);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(parentContext).showSnackBar(
+                SnackBar(
+                  content: Text(hidden ? 'Track unhidden' : 'Track hidden'),
+                  duration: const Duration(seconds: 2),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            },
+          );
+        },
+      ),
+      // Remove from Playlist (only shown when inside a playlist)
+      if (playlistContext != null)
+        _actionItem(context, icon: Icons.playlist_remove, label: "Remove from Playlist",
+          color: Colors.redAccent,
+          onTap: () {
+            final lib = context.read<LibraryController>();
+            lib.removeFromPlaylist(playlistContext!, effectiveTrack);
+            Navigator.pop(context);
+            ScaffoldMessenger.of(parentContext).showSnackBar(
+              const SnackBar(
+                content: Text('Removed from playlist'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+        ),
     ];
   }
 
-  List<Widget> _buildAlbumActions(BuildContext context) {
+  List<Widget> _buildAlbumActions(BuildContext context, Color sheetFg) {
     final effectiveAlbumId = album?.albumId ?? singleDetail?.track.albumId ?? '';
     if ((effectiveAlbumId.isEmpty || effectiveAlbumId == '0') && singleDetail == null) return [];
     
@@ -305,7 +403,7 @@ class _MenuContent extends StatelessWidget {
 
     return [
       if (!isSingle) ...[
-         _actionItem(context, icon: Icons.play_arrow, label: "Play Album", onTap: () {
+         _actionItem(context, icon: Icons.play_arrow, label: "Play Album", color: sheetFg, onTap: () {
             Navigator.pop(context); 
             if (album != null) {
                final route = MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album!));
@@ -319,7 +417,7 @@ class _MenuContent extends StatelessWidget {
          _actionItem(context, 
            icon: isSaved ? Icons.bookmark : Icons.bookmark_border,
            label: isSaved ? "Remove from Library" : "Save to Library",
-           color: isSaved ? AppColors.primaryEnd : Colors.white,
+           color: sheetFg,
            onTap: () {
              if (album != null) lib.toggleSaveAlbum(album!);
              Navigator.pop(context);
@@ -327,13 +425,14 @@ class _MenuContent extends StatelessWidget {
          ),
       ],
       if (artistId != null && artistId.isNotEmpty && artistId != '0' && !isPlaceholderArtist(artistName))
-      _actionItem(context, icon: Icons.person, label: "Go to Artist", onTap: () {
+      _actionItem(context, icon: Icons.person, label: "Go to Artist", color: sheetFg, onTap: () {
         Navigator.pop(context);
         if (onNavigation != null) onNavigation!();
 
          final route = MaterialPageRoute(builder: (_) => ArtistDetailScreen(
             artistId: artistId!,
             artistName: artistName,
+            pictureUrl: album?.artworkUrl ?? singleDetail?.artworkUrl,
          ));
          
          if (MainWrapper.shellKey.currentState != null) {
@@ -342,18 +441,18 @@ class _MenuContent extends StatelessWidget {
             Navigator.push(parentContext, route);
          }
       }),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
         Navigator.pop(context);
         if (effectiveAlbumId.isNotEmpty && effectiveAlbumId != '0') {
-            Share.share('Check out "${album?.title ?? singleDetail?.title}" by $artistName on Beaty! https://music.youtube.com/browse/$effectiveAlbumId');
+            Share.share('Check out "${album?.title ?? singleDetail?.title}" by $artistName on Paax! https://music.youtube.com/browse/$effectiveAlbumId');
         } else {
-             Share.share('Check out "${singleDetail?.title}" by $artistName on Beaty!');
+             Share.share('Check out "${singleDetail?.title}" by $artistName on Paax!');
         }
       }),
     ];
   }
 
-  List<Widget> _buildArtistActions(BuildContext context) {
+  List<Widget> _buildArtistActions(BuildContext context, Color sheetFg) {
     if (artist == null) return [];
     final lib = context.read<LibraryController>();
     final isFollowed = lib.isArtistFollowed(artist!.id);
@@ -362,28 +461,58 @@ class _MenuContent extends StatelessWidget {
       _actionItem(context, 
         icon: isFollowed ? Icons.check : Icons.person_add_alt,
         label: isFollowed ? "Unfollow" : "Follow",
-        color: isFollowed ? AppColors.primaryEnd : Colors.white,
+        color: sheetFg,
         onTap: () {
            lib.toggleFollowArtist(artist!);
            Navigator.pop(context);
         }
       ),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
-         Share.share('Check out ${artist!.name} on Beaty! https://deezer.com/artist/${artist!.id}');
+         Share.share('Check out ${artist!.name} on Paax! https://deezer.com/artist/${artist!.id}');
       }),
     ];
   }
 
-  List<Widget> _buildPlaylistActions(BuildContext context) {
+  List<Widget> _buildPlaylistActions(BuildContext context, Color sheetFg) {
     if (playlist == null) return [];
     return [
-      _actionItem(context, icon: Icons.play_arrow, label: "Play Playlist", onTap: () {
+      _actionItem(context, icon: Icons.play_arrow, label: "Play Playlist", color: sheetFg, onTap: () {
          Navigator.pop(context);
          // Play playlist logic
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Play playlist not implemented")));
       }),
-      _actionItem(context, icon: Icons.edit, label: "Edit Playlist", onTap: () {
+      // Pin / Unpin playlist
+      Builder(
+        builder: (ctx) {
+          final lib = ctx.read<LibraryController>();
+          final isPinned = lib.isPlaylistPinned(playlist!.id);
+          return _actionItem(ctx,
+            icon: isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+            label: isPinned ? "Unpin playlist" : "Pin playlist",
+            color: sheetFg,
+            onTap: () async {
+              final result = await lib.togglePinPlaylist(playlist!.id);
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (result == null) {
+                ScaffoldMessenger.of(parentContext).showSnackBar(
+                  const SnackBar(
+                    content: Text('You can pin up to 5 playlists'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+          );
+        },
+      ),
+      if (onEditOrder != null)
+        _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           onEditOrder!();
+        }),
+      _actionItem(context, icon: Icons.edit, label: "Edit Playlist", color: sheetFg, onTap: () {
          Navigator.pop(context);
          if (onEdit != null) onEdit!();
       }),
@@ -391,9 +520,9 @@ class _MenuContent extends StatelessWidget {
          Navigator.pop(context);
          if (onDelete != null) onDelete!();
       }),
-      _actionItem(context, icon: Icons.share, label: "Share", onTap: () {
+      _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
-          Share.share('Check out my playlist "${playlist!.name}" on Beaty!');
+          Share.share('Check out my playlist "${playlist!.name}" on Paax!');
       }),
     ];
   }
@@ -403,6 +532,91 @@ class _MenuContent extends StatelessWidget {
       leading: Icon(icon, color: color),
       title: Text(label, style: TextStyle(color: color, fontSize: 16)),
       onTap: onTap,
+    );
+  }
+
+  /// Navigate to an artist profile via the shell navigator (keeps bottom nav)
+  /// or falls back to a direct push.
+  void _navigateToArtist(String artistId, String artistName, Track? sourceTrack) {
+    final route = MaterialPageRoute(
+      builder: (_) => ArtistDetailScreen(
+        artistId: artistId,
+        artistName: artistName,
+        pictureUrl: sourceTrack?.artworkUrl,
+        sourceTrack: sourceTrack,
+      ),
+    );
+    if (MainWrapper.shellKey.currentState != null) {
+      MainWrapper.shellKey.currentState!.navigateTo(route);
+    } else {
+      Navigator.push(parentContext, route);
+    }
+  }
+
+  /// Shows a multi-artist selection BottomSheet (Spotify-style).
+  void _showArtistPicker(
+    BuildContext ctx,
+    List<Map<String, String>> artists,
+    Track? sourceTrack,
+  ) {
+    showModalBottomSheet(
+      context: ctx,
+      useRootNavigator: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) {
+         const sBg = AppColors.surface;
+         const sFg = Colors.white;
+         return Container(
+           decoration: const BoxDecoration(
+             color: sBg,
+             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+             border: Border(top: BorderSide(color: Color(0xFF1A1A1A), width: 1)),
+           ),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Drag handle
+                Padding(
+                  padding: const EdgeInsets.only(top: 12, bottom: 4),
+                  child: Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF333333),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                  child: Text(
+                    "Choose Artist",
+                    style: TextStyle(
+                      color: sFg,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                 Divider(color: const Color(0xFF1A1A1A)),
+                ...artists.map((a) => ListTile(
+                  leading: Icon(Icons.person_outline, color: sFg.withOpacity(0.7)),
+                  title: Text(
+                    a['name'] ?? '',
+                    style: TextStyle(color: sFg, fontSize: 16),
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetCtx); // Close picker
+                    _navigateToArtist(a['id']!, a['name']!, sourceTrack);
+                  },
+                )),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -35,6 +35,9 @@ class Track extends HiveObject {
   @HiveField(9)
   final List<Map<String, String>>? artists;
 
+  @HiveField(10)
+  final bool isExplicit;
+
   Track({
     required this.id,
     required this.title,
@@ -46,6 +49,7 @@ class Track extends HiveObject {
     required this.duration,
     this.artistId,
     this.artists,
+    this.isExplicit = false,
   });
 
   /// Single source of truth for the artist subtitle line shown in all UIs.
@@ -77,6 +81,7 @@ class Track extends HiveObject {
     artworkUrl: '',
     duration: 0,
     artists: [],
+    isExplicit: false,
   );
 
   Track copyWith({
@@ -90,6 +95,7 @@ class Track extends HiveObject {
     int? duration,
     String? artistId,
     List<Map<String, String>>? artists,
+    bool? isExplicit,
   }) {
     return Track(
       id: id ?? this.id,
@@ -102,6 +108,7 @@ class Track extends HiveObject {
       duration: duration ?? this.duration,
       artistId: artistId ?? this.artistId,
       artists: artists ?? this.artists,
+      isExplicit: isExplicit ?? this.isExplicit,
     );
   }
 }

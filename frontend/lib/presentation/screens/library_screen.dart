@@ -18,6 +18,7 @@ import '../widgets/playlist_cover.dart';
 import '../../core/image/lh3_url_builder.dart';
 import '../widgets/app_image.dart';
 import '../widgets/sort_bottom_sheet.dart';
+import '../widgets/glass_surface.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -28,67 +29,270 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   int _selectedIndex = 0;
+  final ValueNotifier<double> _scrollOffset = ValueNotifier(0.0);
 
+  // Per-tab search/sort state (lifted from tabs)
+  final List<String> _searchQueries = ["", "", "", ""];
+  final List<int> _sortOptions = [0, 0, 0, 0];
 
+  // Sort options per tab
+  static const List<List<String>> _sortLabelsPerTab = [
+    ["Recently Added", "Title", "Artist", "Album"],
+    ["Recently Added", "Name"],
+    ["Recently Added", "Title", "Artist"],
+    ["Recently Followed", "Name"],
+  ];
+
+  String _currentSortLabel() {
+    final opt = _sortOptions[_selectedIndex];
+    final labels = _sortLabelsPerTab[_selectedIndex];
+    if (opt >= 0 && opt < labels.length) return labels[opt];
+    return labels[0];
+  }
+
+  @override
+  void dispose() {
+    _scrollOffset.dispose();
+    super.dispose();
+  }
+
+  void _showCreatePlaylistDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      useRootNavigator: true,
+      barrierColor: Colors.black.withOpacity(0.55),
+      barrierDismissible: true,
+      builder: (dialogContext) => Center(
+        child: Material(
+          type: MaterialType.transparency,
+          child: AlertDialog(
+            backgroundColor: AppColors.surface,
+            title: const Text("New Playlist", style: TextStyle(color: Colors.white)),
+            content: TextField(
+              controller: controller,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: "Playlist name",
+                hintStyle: TextStyle(color: Colors.grey),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white)),
+              ),
+              autofocus: true,
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("Cancel", style: TextStyle(color: Colors.white70))),
+              TextButton(
+                onPressed: () {
+                  if (controller.text.isNotEmpty) {
+                    context.read<LibraryController>().createPlaylist(controller.text);
+                    Navigator.pop(dialogContext);
+                  }
+                },
+                child: const Text("Create", style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showSortMenu() {
+    final tabIndex = _selectedIndex;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      barrierColor: Colors.black.withOpacity(0.55),
+      builder: (ctx) => SortBottomSheet(
+        options: _sortLabelsPerTab[tabIndex],
+        selectedIndex: _sortOptions[tabIndex],
+        onSelected: (index) {
+          setState(() => _sortOptions[tabIndex] = index);
+          Navigator.pop(ctx);
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: Text("Your Library",
-                style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-              ),
-            ),
-
-            // Chip tabs
-            LibraryChipTabs(
-              selectedIndex: _selectedIndex,
-              onTabSelected: (index) => setState(() => _selectedIndex = index),
-              tabs: const ["Liked", "Playlists", "Albums", "Artists"],
-            ),
-
-            // Body
-            Expanded(
+      body: Stack(
+        children: [
+          // ── Content fills entire screen ──
+          Positioned.fill(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (notification) {
+                if (notification is ScrollUpdateNotification) {
+                  _scrollOffset.value = notification.metrics.pixels;
+                }
+                return false;
+              },
               child: IndexedStack(
                 index: _selectedIndex,
-                children: const [
-                  _LikedSongsTab(),
-                  _PlaylistsTab(),
-                  _SavedAlbumsTab(),
-                  _FollowedArtistsTab(),
+                children: [
+                  _LikedSongsTab(searchQuery: _searchQueries[0], sortOption: _sortOptions[0]),
+                  _PlaylistsTab(searchQuery: _searchQueries[1], sortOption: _sortOptions[1]),
+                  _SavedAlbumsTab(searchQuery: _searchQueries[2], sortOption: _sortOptions[2]),
+                  _FollowedArtistsTab(searchQuery: _searchQueries[3], sortOption: _sortOptions[3]),
                 ],
               ),
             ),
-          ],
-        ),
+          ),
+
+          // ── Bottom fade gradient (below header/controls) ──
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: context.read<PlaybackController>().currentTrack != null ? 240 : 160,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      AppColors.background.withValues(alpha: 0.96),
+                      AppColors.background.withValues(alpha: 0.65),
+                      AppColors.background.withValues(alpha: 0.25),
+                      AppColors.background.withValues(alpha: 0.0),
+                    ],
+                    stops: const [0.0, 0.35, 0.65, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // ── Floating header: title + chips + sort/search + fade tail ──
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  color: AppColors.background,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Title
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+                          child: Text("Your Library",
+                            style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        // Chip tabs
+                        LibraryChipTabs(
+                          selectedIndex: _selectedIndex,
+                          onTabSelected: (index) => setState(() => _selectedIndex = index),
+                          tabs: const ["Liked", "Playlists", "Albums", "Artists"],
+                        ),
+                        // Sort/Search row — integrated into top bar
+                        SearchSortHeader(
+                          currentSort: _currentSortLabel(),
+                          onSearchChanged: (val) => setState(() => _searchQueries[_selectedIndex] = val),
+                          onSortPressed: _showSortMenu,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Scroll-triggered fade tail below controls
+                ValueListenableBuilder<double>(
+                  valueListenable: _scrollOffset,
+                  builder: (_, offset, __) {
+                    final fadeOpacity = (offset / 8.0).clamp(0.0, 1.0);
+                    return IgnorePointer(
+                      child: Opacity(
+                        opacity: fadeOpacity,
+                        child: Container(
+                          height: 45,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                AppColors.background,
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          // ── Floating create playlist FAB — only on Playlists tab ──
+          if (_selectedIndex == 1)
+            Builder(
+              builder: (context) {
+                final hasMiniPlayer = context.watch<PlaybackController>().currentTrack != null;
+                final safePadding = MediaQuery.of(context).padding.bottom;
+                final fabBottom = safePadding + 63 + 8 + (hasMiniPlayer ? 71 : 0);
+                return Positioned(
+                  right: 16,
+                  bottom: fabBottom.toDouble(),
+                  child: GestureDetector(
+                    onTap: () => _showCreatePlaylistDialog(context),
+                    child: Container(
+                      width: 46,
+                      height: 46,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black38,
+                            blurRadius: 8,
+                            offset: Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: const Center(
+                        child: Icon(Icons.add_rounded, color: Color(0xFF121212), size: 24),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+        ],
       ),
     );
   }
 }
 
+
 // -----------------------------------------------------------------------------
 // LIKED SONGS TAB
 // -----------------------------------------------------------------------------
 class _LikedSongsTab extends StatefulWidget {
-  const _LikedSongsTab();
+  final String searchQuery;
+  final int sortOption;
+  const _LikedSongsTab({required this.searchQuery, required this.sortOption});
 
   @override
   State<_LikedSongsTab> createState() => _LikedSongsTabState();
 }
 
 class _LikedSongsTabState extends State<_LikedSongsTab> with AutomaticKeepAliveClientMixin {
-  String _searchQuery = "";
-  // Sort options: 0=Recents, 1=Title, 2=Artist, 3=Album
-  int _sortOption = 0; 
-
   @override
   bool get wantKeepAlive => true;
 
@@ -97,83 +301,43 @@ class _LikedSongsTabState extends State<_LikedSongsTab> with AutomaticKeepAliveC
     super.build(context);
     final tracks = context.watch<LibraryController>().likedTracks;
 
-    // Filter & Sort
     var displayedTracks = tracks.where((t) {
-      if (_searchQuery.isEmpty) return true;
-      return t.title.toLowerCase().contains(_searchQuery.toLowerCase()) || 
-             t.artistName.toLowerCase().contains(_searchQuery.toLowerCase());
+      if (widget.searchQuery.isEmpty) return true;
+      return t.title.toLowerCase().contains(widget.searchQuery.toLowerCase()) || 
+             t.artistName.toLowerCase().contains(widget.searchQuery.toLowerCase());
     }).toList();
 
-    // Sorting logic
-    if (_sortOption == 1) { // Title
+    if (widget.sortOption == 1) {
       displayedTracks.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
-    } else if (_sortOption == 2) { // Artist
+    } else if (widget.sortOption == 2) {
       displayedTracks.sort((a, b) => a.artistName.toLowerCase().compareTo(b.artistName.toLowerCase()));
-    } else if (_sortOption == 3) { // Album
+    } else if (widget.sortOption == 3) {
       displayedTracks.sort((a, b) => (a.albumTitle ?? "").toLowerCase().compareTo((b.albumTitle ?? "").toLowerCase()));
     } 
 
-    return Column(
-      children: [
-        SearchSortHeader(
-          currentSort: _getSortLabel(_sortOption),
-          onSearchChanged: (val) => setState(() => _searchQuery = val),
-          onSortPressed: _showSortMenu,
-        ),
-        
-        Expanded(
-          child: displayedTracks.isEmpty
-            ? (tracks.isEmpty
-                ? const Center(child: Text("No liked songs yet.", style: TextStyle(color: AppColors.textSecondary)))
-                : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
-            : ListView.builder(
-                key: const PageStorageKey("LikedSongsList"),
-                padding: EdgeInsets.only(
-                  top: 8,
-                  bottom: BottomContentPadding.bottomHeight(context),
-                ),
-                itemCount: displayedTracks.length,
-                itemBuilder: (context, index) {
-                  final track = displayedTracks[index];
-                  return TrackListTile(
-                    track: track, 
-                    index: index,
-                    showArtwork: true,
-                    onTap: () => context.read<PlaybackController>().playQueue(displayedTracks, index: index),
-                    onCoverTap: () => _navigateToDetail(context, track),
-                  );
-                },
-              ),
-        ),
-      ],
-    );
-  }
-
-  String _getSortLabel(int option) {
-    switch (option) {
-      case 1: return "Title";
-      case 2: return "Artist";
-      case 3: return "Album";
-      default: return "Recents";
-    }
-  }
-
-  void _showSortMenu() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      useRootNavigator: true,
-      isScrollControlled: true,
-      barrierColor: Colors.black.withOpacity(0.55),
-      builder: (context) => SortBottomSheet(
-        options: const ["Recently Added", "Title", "Artist", "Album"],
-        selectedIndex: _sortOption,
-        onSelected: (index) {
-          setState(() => _sortOption = index);
-          Navigator.pop(context);
-        },
-      ),
-    );
+    return displayedTracks.isEmpty
+      ? (tracks.isEmpty
+          ? const Center(child: Text("No liked songs yet.", style: TextStyle(color: AppColors.textSecondary)))
+          : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
+      : ListView.builder(
+          key: const PageStorageKey("LikedSongsList"),
+          padding: EdgeInsets.only(
+            top: MediaQuery.of(context).padding.top + 230,
+            bottom: BottomContentPadding.bottomHeight(context),
+          ),
+          itemCount: displayedTracks.length,
+          itemBuilder: (context, index) {
+            final track = displayedTracks[index];
+            return TrackListTile(
+              track: track, 
+              index: index,
+              showArtwork: true,
+              allowSwipeActions: true,
+              onTap: () => context.read<PlaybackController>().playQueue(displayedTracks, index: index),
+              onCoverTap: () => _navigateToDetail(context, track),
+            );
+          },
+        );
   }
 
   void _navigateToDetail(BuildContext context, dynamic track) {
@@ -198,15 +362,15 @@ class _LikedSongsTabState extends State<_LikedSongsTab> with AutomaticKeepAliveC
 // PLAYLISTS TAB
 // -----------------------------------------------------------------------------
 class _PlaylistsTab extends StatefulWidget {
-  const _PlaylistsTab();
+  final String searchQuery;
+  final int sortOption;
+  const _PlaylistsTab({required this.searchQuery, required this.sortOption});
 
   @override
   State<_PlaylistsTab> createState() => _PlaylistsTabState();
 }
 
 class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveClientMixin {
-  String _searchQuery = "";
-  int _sortOption = 0; // 0=Recents, 1=Name
 
   @override
   bool get wantKeepAlive => true;
@@ -214,135 +378,109 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final playlists = context.watch<LibraryController>().playlists;
+    final library = context.watch<LibraryController>();
+    final playlists = library.playlists;
 
-    var displayed = playlists.where((p) => p.name.toLowerCase().contains(_searchQuery.toLowerCase())).toList();
+    var filtered = playlists.where((p) => p.name.toLowerCase().contains(widget.searchQuery.toLowerCase())).toList();
 
-    if (_sortOption == 1) {
-      displayed.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    // Separate pinned and unpinned
+    final pinned = filtered.where((p) => library.isPlaylistPinned(p.id)).toList();
+    final unpinned = filtered.where((p) => !library.isPlaylistPinned(p.id)).toList();
+
+    // Sort pinned by pinnedAt ascending (first pinned = first in list)
+    pinned.sort((a, b) => library.pinnedAt(a.id).compareTo(library.pinnedAt(b.id)));
+
+    // Sort unpinned by active sort option
+    if (widget.sortOption == 1) {
+      unpinned.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     }
 
-    return Column(
-      children: [
-        SearchSortHeader(
-          currentSort: _sortOption == 1 ? "Name" : "Recents",
-          onSearchChanged: (val) => setState(() => _searchQuery = val),
-          onSortPressed: () {
-             showModalBottomSheet(
-              context: context,
-              backgroundColor: Colors.transparent,
-              useRootNavigator: true,
-              isScrollControlled: true,
-              barrierColor: Colors.black.withOpacity(0.55),
-              builder: (context) => SortBottomSheet(
-                options: const ["Recently Added", "Name"],
-                selectedIndex: _sortOption,
-                onSelected: (index) {
-                  setState(() => _sortOption = index);
-                  Navigator.pop(context);
-                },
-              ),
-            );
-          },
-        ),
+    final displayed = [...pinned, ...unpinned];
 
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: InkWell(
-            onTap: () => _showCreatePlaylistDialog(context),
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              height: 56,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [AppColors.primaryStart, AppColors.primaryEnd]),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(color: AppColors.primaryStart.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))
-                ]
+    return displayed.isEmpty
+      ? (playlists.isEmpty && widget.searchQuery.isEmpty
+          ? const Center(child: Text("Create your first playlist.", style: TextStyle(color: AppColors.textSecondary)))
+          : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
+      : ListView.builder(
+          key: const PageStorageKey("PlaylistsList"),
+          padding: EdgeInsets.only(
+            top: MediaQuery.of(context).padding.top + 230,
+            bottom: BottomContentPadding.bottomHeight(context),
+          ),
+          itemCount: displayed.length,
+          itemBuilder: (context, index) {
+            final pl = displayed[index];
+            final isPinned = library.isPlaylistPinned(pl.id);
+            return ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              leading: SizedBox(
+                width: 56, 
+                height: 56,
+                child: PlaylistCover(playlist: pl, size: 56),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.add_rounded, color: Colors.white, size: 28),
-                  SizedBox(width: 8),
-                  Text("Create Playlist", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+              title: Row(
+                children: [
+                  if (isPinned)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 5),
+                      child: Icon(Icons.push_pin_rounded, size: 14, color: Colors.white70),
+                    ),
+                  Expanded(
+                    child: Text(pl.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
                 ],
               ),
-            ),
-          ),
-        ),
-
-        Expanded(
-          child: displayed.isEmpty
-            ? (playlists.isEmpty && _searchQuery.isEmpty
-                ? const Center(child: Text("Create your first playlist.", style: TextStyle(color: AppColors.textSecondary)))
-                : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
-            : ListView.builder(
-                key: const PageStorageKey("PlaylistsList"),
-                padding: EdgeInsets.only(
-                  bottom: BottomContentPadding.bottomHeight(context),
-                ),
-                itemCount: displayed.length,
-                itemBuilder: (context, index) {
-                  final pl = displayed[index];
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    leading: SizedBox(
-                      width: 56, 
-                      height: 56,
-                      child: PlaylistCover(playlist: pl, size: 56),
-                    ),
-                    title: Text(pl.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: Text("${pl.tracks.length} tracks", style: const TextStyle(color: AppColors.textSecondary)),
-                    trailing: OverflowMenu(
-                      type: MenuType.playlist,
-                      playlist: pl,
-                      onDelete: () => _confirmDeletePlaylist(context, pl.id, pl.name),
-                    ),
-                    onTap: () {
-                       Navigator.push(context, MaterialPageRoute(builder: (_) => PlaylistDetailScreen(playlist: pl)));
-                    },
-                  );
-                },
+              subtitle: Text("iamleizu • ${pl.tracks.length} tracks", style: const TextStyle(color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+              trailing: OverflowMenu(
+                type: MenuType.playlist,
+                playlist: pl,
+                iconColor: Colors.white,
+                onEdit: () => _showRenamePlaylistDialog(context, pl),
+                onDelete: () => _confirmDeletePlaylist(context, pl.id, pl.name),
               ),
-        ),
-      ],
-    );
+              onTap: () {
+                 Navigator.push(context, MaterialPageRoute(builder: (_) => PlaylistDetailScreen(playlist: pl)));
+              },
+            );
+          },
+        );
   }
 
-  void _showCreatePlaylistDialog(BuildContext context) {
-    final controller = TextEditingController();
+  void _showRenamePlaylistDialog(BuildContext context, dynamic playlist) {
+    final controller = TextEditingController(text: playlist.name);
     showDialog(
       context: context,
-      useRootNavigator: true, 
-      barrierColor: Colors.black.withOpacity(0.55),
+      useRootNavigator: true,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
       builder: (dialogContext) => Center(
         child: Material(
           type: MaterialType.transparency,
           child: AlertDialog(
             backgroundColor: AppColors.surface,
-            title: const Text("New Playlist", style: TextStyle(color: Colors.white)),
+            title: const Text("Rename Playlist", style: TextStyle(color: Colors.white)),
             content: TextField(
               controller: controller,
+              autofocus: true,
               style: const TextStyle(color: Colors.white),
               decoration: const InputDecoration(
                 hintText: "Playlist Name",
                 hintStyle: TextStyle(color: Colors.grey),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primaryStart)),
               ),
-              autofocus: true,
             ),
             actions: [
-              TextButton(onPressed: ()=>Navigator.pop(dialogContext), child: const Text("Cancel", style: TextStyle(color: Colors.white70))),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text("Cancel", style: TextStyle(color: Colors.white70)),
+              ),
               TextButton(
                 onPressed: () {
                   if (controller.text.isNotEmpty) {
-                    context.read<LibraryController>().createPlaylist(controller.text);
+                    context.read<LibraryController>().renamePlaylist(playlist, controller.text);
                     Navigator.pop(dialogContext);
                   }
-                }, 
-                child: const Text("Create", style: TextStyle(color: AppColors.primaryStart))
+                },
+                child: const Text("Rename", style: TextStyle(color: Colors.white)),
               ),
             ],
           ),
@@ -358,7 +496,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
     showDialog(
       context: context,
       useRootNavigator: true,
-      barrierColor: Colors.black.withOpacity(0.55),
+      barrierColor: Colors.black.withValues(alpha: 0.55),
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppColors.surface,
         title: const Text("Delete Playlist?", style: TextStyle(color: Colors.white)),
@@ -375,9 +513,6 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
             onPressed: () async {
               Navigator.of(dialogContext).pop(); // close dialog first
               await library.deletePlaylist(playlist);
-              // LibraryController.deletePlaylist calls _loadData() → notifyListeners(),
-              // so the ListView watching LibraryController auto-refreshes.
-              // No navigation needed — we stay on the Playlists screen.
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
           ),
@@ -391,16 +526,15 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
 // SAVED ALBUMS TAB
 // -----------------------------------------------------------------------------
 class _SavedAlbumsTab extends StatefulWidget {
-  const _SavedAlbumsTab();
+  final String searchQuery;
+  final int sortOption;
+  const _SavedAlbumsTab({required this.searchQuery, required this.sortOption});
 
   @override
   State<_SavedAlbumsTab> createState() => _SavedAlbumsTabState();
 }
 
 class _SavedAlbumsTabState extends State<_SavedAlbumsTab> with AutomaticKeepAliveClientMixin {
-  String _searchQuery = "";
-  int _sortOption = 0; // 0=Recents, 1=Title, 2=Artist
-
   @override
   bool get wantKeepAlive => true;
 
@@ -410,91 +544,58 @@ class _SavedAlbumsTabState extends State<_SavedAlbumsTab> with AutomaticKeepAliv
     final albums = context.watch<LibraryController>().savedAlbums;
     
     var displayed = albums.where((a) => 
-      a.title.toLowerCase().contains(_searchQuery.toLowerCase()) || 
-      a.artistName.toLowerCase().contains(_searchQuery.toLowerCase())
+      a.title.toLowerCase().contains(widget.searchQuery.toLowerCase()) || 
+      a.artistName.toLowerCase().contains(widget.searchQuery.toLowerCase())
     ).toList();
 
-    if (_sortOption == 1) {
+    if (widget.sortOption == 1) {
       displayed.sort((a,b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
-    } else if (_sortOption == 2) {
+    } else if (widget.sortOption == 2) {
       displayed.sort((a,b) => a.artistName.toLowerCase().compareTo(b.artistName.toLowerCase()));
     }
 
-    return Column(
-      children: [
-        SearchSortHeader(
-          currentSort: _getSortLabel(_sortOption),
-          onSearchChanged: (val) => setState(() => _searchQuery = val),
-          onSortPressed: () {
-              showModalBottomSheet(
-              context: context,
-              backgroundColor: Colors.transparent,
-              useRootNavigator: true,
-              isScrollControlled: true,
-              barrierColor: Colors.black.withOpacity(0.55),
-              builder: (context) => SortBottomSheet(
-                options: const ["Recently Added", "Title", "Artist"],
-                selectedIndex: _sortOption,
-                onSelected: (index) {
-                  setState(() => _sortOption = index);
-                  Navigator.pop(context);
-                },
+    return displayed.isEmpty
+      ? (albums.isEmpty
+           ? const Center(child: Text("No saved albums.", style: TextStyle(color: AppColors.textSecondary)))
+           : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
+      : GridView.builder(
+          key: const PageStorageKey("AlbumsGrid"),
+          padding: EdgeInsets.fromLTRB(
+            16, MediaQuery.of(context).padding.top + 230, 16, BottomContentPadding.bottomHeight(context),
+          ),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+             crossAxisCount: 2,
+             childAspectRatio: 0.75,
+             crossAxisSpacing: 16,
+             mainAxisSpacing: 16
+          ),
+          itemCount: displayed.length,
+          itemBuilder: (context, index) {
+            final album = displayed[index];
+            return GestureDetector(
+              onTap: () {
+                 Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: AppImage(
+                      url: album.artworkUrl,
+                      sizePx: Lh3UrlBuilder.listSize,
+                      borderRadius: 16,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(album.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text(album.artistName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                ],
               ),
             );
           },
-        ),
-
-        Expanded(
-          child: displayed.isEmpty
-            ? (albums.isEmpty
-                 ? const Center(child: Text("No saved albums.", style: TextStyle(color: AppColors.textSecondary)))
-                 : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
-            : GridView.builder(
-                key: const PageStorageKey("AlbumsGrid"),
-                padding: EdgeInsets.fromLTRB(
-                  16, 16, 16, BottomContentPadding.bottomHeight(context),
-                ),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                   crossAxisCount: 2,
-                   childAspectRatio: 0.75,
-                   crossAxisSpacing: 16,
-                   mainAxisSpacing: 16
-                ),
-                itemCount: displayed.length,
-                itemBuilder: (context, index) {
-                  final album = displayed[index];
-                  return GestureDetector(
-                    onTap: () {
-                       Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
-                    },
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: AppImage(
-                            url: album.artworkUrl,
-                            sizePx: Lh3UrlBuilder.listSize,
-                            borderRadius: 16,
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(album.title, maxLines: 1, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        Text(album.artistName, maxLines: 1, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                      ],
-                    ),
-                  );
-                },
-              ),
-        ),
-      ],
-    );
-  }
-
-  String _getSortLabel(int option) {
-    if (option == 1) return "Title";
-    if (option == 2) return "Artist";
-    return "Recents";
+        );
   }
 }
 
@@ -502,16 +603,15 @@ class _SavedAlbumsTabState extends State<_SavedAlbumsTab> with AutomaticKeepAliv
 // FOLLOWED ARTISTS TAB
 // -----------------------------------------------------------------------------
 class _FollowedArtistsTab extends StatefulWidget {
-  const _FollowedArtistsTab();
+  final String searchQuery;
+  final int sortOption;
+  const _FollowedArtistsTab({required this.searchQuery, required this.sortOption});
 
   @override
   State<_FollowedArtistsTab> createState() => _FollowedArtistsTabState();
 }
 
 class _FollowedArtistsTabState extends State<_FollowedArtistsTab> with AutomaticKeepAliveClientMixin {
-  String _searchQuery = "";
-  int _sortOption = 0; // 0=Recents, 1=Name
-
   @override
   bool get wantKeepAlive => true;
 
@@ -520,88 +620,55 @@ class _FollowedArtistsTabState extends State<_FollowedArtistsTab> with Automatic
     super.build(context);
     final artists = context.watch<LibraryController>().followedArtists;
     
-    var displayed = artists.where((a) => a.name.toLowerCase().contains(_searchQuery.toLowerCase())).toList();
+    var displayed = artists.where((a) => a.name.toLowerCase().contains(widget.searchQuery.toLowerCase())).toList();
     
-    if (_sortOption == 1) {
+    if (widget.sortOption == 1) {
       displayed.sort((a,b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     }
 
-    return Column(
-      children: [
-        SearchSortHeader(
-          currentSort: _sortOption == 1 ? "Name" : "Recents",
-          onSearchChanged: (val) => setState(() => _searchQuery = val),
-          onSortPressed: () {
-             showModalBottomSheet(
-              context: context,
-              backgroundColor: Colors.transparent,
-              useRootNavigator: true,
-              isScrollControlled: true,
-              barrierColor: Colors.black.withOpacity(0.55),
-              builder: (context) => SortBottomSheet(
-                options: const ["Recently Followed", "Name"],
-                selectedIndex: _sortOption,
-                onSelected: (index) {
-                  setState(() => _sortOption = index);
-                  Navigator.pop(context);
-                },
-              ),
-            );
-          },
+    return displayed.isEmpty
+     ? (artists.isEmpty
+        ? const Center(child: Text("No followed artists.", style: TextStyle(color: AppColors.textSecondary)))
+        : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
+     : GridView.builder(
+        key: const PageStorageKey("ArtistsGrid"),
+        padding: EdgeInsets.fromLTRB(
+           16, MediaQuery.of(context).padding.top + 230, 16, BottomContentPadding.bottomHeight(context),
         ),
-        
-        Expanded(
-          child: displayed.isEmpty
-           ? (artists.isEmpty
-              ? const Center(child: Text("No followed artists.", style: TextStyle(color: AppColors.textSecondary)))
-              : const Center(child: Text("No results found", style: TextStyle(color: Colors.grey))))
-           : GridView.builder(
-              key: const PageStorageKey("ArtistsGrid"),
-              padding: EdgeInsets.fromLTRB(
-                 16, 16, 16, BottomContentPadding.bottomHeight(context),
-              ),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                 crossAxisCount: 3,
-                 childAspectRatio: 0.7,
-                 crossAxisSpacing: 16,
-                 mainAxisSpacing: 16
-              ),
-              itemCount: displayed.length,
-              itemBuilder: (context, index) {
-                final artist = displayed[index];
-                return GestureDetector(
-                  onTap: () {
-                     Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-                       artistId: artist.id,
-                       artistName: artist.name,
-                       pictureUrl: artist.picture
-                     )));
-                  },
-                  child: Column(
-                    children: [
-                      AspectRatio(
-                        aspectRatio: 1,
-                        child: AppImage(
-                          url: artist.picture,
-                          sizePx: Lh3UrlBuilder.listSize,
-                          isCircular: true,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(artist.name, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
-                    ],
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+           crossAxisCount: 3,
+           childAspectRatio: 0.7,
+           crossAxisSpacing: 16,
+           mainAxisSpacing: 16
+        ),
+        itemCount: displayed.length,
+        itemBuilder: (context, index) {
+          final artist = displayed[index];
+          return GestureDetector(
+            onTap: () {
+               Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
+                 artistId: artist.id,
+                 artistName: artist.name,
+                 pictureUrl: artist.picture
+               )));
+            },
+            child: Column(
+              children: [
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: AppImage(
+                    url: artist.picture,
+                    sizePx: Lh3UrlBuilder.listSize,
+                    isCircular: true,
+                    fit: BoxFit.cover,
                   ),
-                );
-              },
+                ),
+                const SizedBox(height: 8),
+                Text(artist.name, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
+              ],
             ),
-        ),
-      ],
-    );
+          );
+        },
+      );
   }
 }
-
-// -----------------------------------------------------------------------------
-// SORT BOTTOM SHEET
-// -----------------------------------------------------------------------------
-

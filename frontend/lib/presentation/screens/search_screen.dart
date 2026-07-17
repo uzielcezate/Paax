@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'main_wrapper.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../widgets/error_state_widget.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
@@ -16,7 +17,7 @@ import '../widgets/music_card.dart';
 import '../widgets/thumbnail.dart';
 
 import '../widgets/bottom_content_padding.dart';
-import '../widgets/black_glass_blur_surface.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/genre_card.dart';
 import 'genre_results_screen.dart';
 
@@ -31,8 +32,10 @@ import '../../core/utils/responsive.dart';
 
 class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _textController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
   // ValueNotifier for clear-button visibility — avoids full setState on every keystroke
   late final ValueNotifier<bool> _hasText;
+  final ValueNotifier<double> _scrollOffset = ValueNotifier(0.0);
   String _selectedFilter = 'All';
 
   @override
@@ -42,12 +45,17 @@ class _SearchScreenState extends State<SearchScreen> {
     _textController.addListener(() {
       _hasText.value = _textController.text.isNotEmpty;
     });
+    _scrollController.addListener(() {
+      _scrollOffset.value = _scrollController.offset;
+    });
   }
 
   @override
   void dispose() {
     _hasText.dispose();
     _textController.dispose();
+    _scrollController.dispose();
+    _scrollOffset.dispose();
     super.dispose();
   }
 
@@ -56,9 +64,8 @@ class _SearchScreenState extends State<SearchScreen> {
     final search = context.watch<app_search.SearchController>(); 
     final double topPadding = MediaQuery.of(context).padding.top;
     
-    // Header Calculations
-    final double contentHeight = 120.0; 
-    final double headerHeight = topPadding + contentHeight;
+    // Header: status bar + back/search row (40) + gap (10) + chips (34) + gap (12)
+    final double headerHeight = topPadding + 8 + 40 + 10 + 34 + 12;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -66,127 +73,190 @@ class _SearchScreenState extends State<SearchScreen> {
         children: [
           Positioned.fill(
             child: CustomScrollView(
+              controller: _scrollController,
               slivers: [
                  SliverToBoxAdapter(child: SizedBox(height: headerHeight)),
                  ..._buildBodySlivers(search),
               ],
             ),
           ),
-          
+          // ── Bottom edge fade ──
           Positioned(
-            top: 0, 
-            left: 0, 
+            left: 0,
             right: 0,
-            height: headerHeight,
-            child: BlackGlassBlurSurface(
-              blurSigma: 20.0,
-              height: headerHeight,
-              bottomBorder: true,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(height: topPadding),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
-                    child: SizedBox(
-                      height: 48,
-                      child: Row(
-                        children: [
-                           IconButton(
-                             icon: const Icon(Icons.arrow_back, color: Colors.white),
-                             onPressed: () {
-                               final mainWrapper = MainWrapper.shellKey.currentState;
-                               if (mainWrapper != null) {
-                                 mainWrapper.onBackPressed();
-                               } else {
-                                 Navigator.maybePop(context);
-                               }
-                             },
-                             padding: EdgeInsets.zero,
-                             constraints: const BoxConstraints(),
-                           ),
-                           const SizedBox(width: 16),
-                           Expanded(
-                             child: TextField(
-                                controller: _textController,
-                                style: const TextStyle(color: Colors.white, fontSize: 16),
-                                 decoration: InputDecoration(
-                                   hintText: "What do you want to listen to?",
-                                   hintStyle: const TextStyle(color: Colors.grey, fontSize: 15),
-                                   prefixIcon: const Icon(Icons.search, color: Colors.white70, size: 22),
-                                   filled: true,
-                                   fillColor: Colors.white.withOpacity(0.08),
-                                   border: OutlineInputBorder(
-                                     borderRadius: BorderRadius.circular(30),
-                                     borderSide: BorderSide.none,
-                                   ),
-                                   contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                                   isDense: true,
-                                   suffixIcon: ValueListenableBuilder<bool>(
-                                     valueListenable: _hasText,
-                                     builder: (_, hasText, __) => hasText
-                                         ? IconButton(
-                                             icon: const Icon(Icons.clear, color: Colors.grey, size: 20),
-                                             onPressed: () {
-                                               _textController.clear();
-                                               search.onQueryChanged("");
-                                             },
-                                           )
-                                         : const SizedBox.shrink(),
-                                   ),
-                                 ),
-                                 onChanged: (val) {
-                                   search.onQueryChanged(val);
-                                 },
-                              ),
-                           ),
-                        ],
-                      ),
-                    ),
+            bottom: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: context.read<PlaybackController>().currentTrack != null ? 240 : 160,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      AppColors.background.withValues(alpha: 0.96),
+                      AppColors.background.withValues(alpha: 0.65),
+                      AppColors.background.withValues(alpha: 0.25),
+                      AppColors.background.withValues(alpha: 0.0),
+                    ],
+                    stops: const [0.0, 0.35, 0.65, 1.0],
                   ),
-                  
-                  const SizedBox(height: 12),
-                  
-                   SizedBox(
-                     height: 48, 
-                     child: ListView(
-                       scrollDirection: Axis.horizontal,
-                       padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
-                       physics: const ClampingScrollPhysics(),
-                       primary: false,
-                       children: ["All", "Tracks", "Albums", "Artists"].map((filter) {
-                        final isSelected = _selectedFilter == filter;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8, bottom: 8),
-                          child: FilterChip(
-                            label: Text(filter),
-                            selected: isSelected,
-                            onSelected: (_) => setState(() => _selectedFilter = filter),
-                            backgroundColor: Colors.white.withOpacity(0.05),
-                            selectedColor: AppColors.primaryStart.withOpacity(0.8),
-                            checkmarkColor: Colors.white,
-                            labelStyle: TextStyle(
-                              color: isSelected ? Colors.white : Colors.grey[400],
-                              fontSize: 13,
-                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                              side: BorderSide(
-                                color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.1), 
-                                width: 1
-                              )
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                  const SizedBox(height: 4), 
-                ],
+                ),
               ),
+            ),
+          ),
+          // Pinned top controls: back + search bar, then chips, then scroll-triggered fade below
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  color: AppColors.background,
+                  padding: EdgeInsets.only(
+                    top: topPadding + 8,
+                    bottom: 12,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 1. Back button + Search pill (top row)
+                      Padding(
+                        padding: EdgeInsets.only(right: Responsive.spacing(context)),
+                        child: SizedBox(
+                          height: 40,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Back icon — uses same left:4 + IconButton as detail screens
+                              Padding(
+                                padding: const EdgeInsets.only(left: 4),
+                                child: IconButton(
+                                  icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 24),
+                                  onPressed: () {
+                                    final mainWrapper = MainWrapper.shellKey.currentState;
+                                    if (mainWrapper != null) {
+                                      mainWrapper.onBackPressed();
+                                    } else {
+                                      Navigator.maybePop(context);
+                                    }
+                                  },
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Container(
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.surface,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: TextField(
+                                    controller: _textController,
+                                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                                    decoration: InputDecoration(
+                                      hintText: "What do you want to listen to?",
+                                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 13),
+                                      prefixIcon: Icon(Icons.search, color: Colors.white.withOpacity(0.5), size: 18),
+                                      filled: false,
+                                      border: InputBorder.none,
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                      isDense: true,
+                                      suffixIcon: ValueListenableBuilder<bool>(
+                                        valueListenable: _hasText,
+                                        builder: (_, hasText, __) => hasText
+                                            ? IconButton(
+                                                icon: Icon(Icons.clear, color: Colors.white.withOpacity(0.4), size: 18),
+                                                onPressed: () {
+                                                  _textController.clear();
+                                                  search.onQueryChanged("");
+                                                },
+                                              )
+                                            : const SizedBox.shrink(),
+                                      ),
+                                    ),
+                                    onChanged: (val) {
+                                      search.onQueryChanged(val);
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      
+                      const SizedBox(height: 10),
+                      
+                      // 2. Filter chips (below search bar)
+                      SizedBox(
+                        height: 34,
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          physics: const ClampingScrollPhysics(),
+                          primary: false,
+                          padding: const EdgeInsets.only(left: 16),
+                          children: ["All", "Tracks", "Albums", "Artists"].map((filter) {
+                            final isSelected = _selectedFilter == filter;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: GestureDetector(
+                                onTap: () => setState(() => _selectedFilter = filter),
+                                child: Container(
+                                  alignment: Alignment.center,
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  decoration: BoxDecoration(
+                                    color: isSelected ? Colors.white : AppColors.surface,
+                                    borderRadius: BorderRadius.circular(17),
+                                  ),
+                                  child: Text(
+                                    filter,
+                                    style: TextStyle(
+                                      color: isSelected ? AppColors.background : Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Scroll-triggered fade tail below controls
+                ValueListenableBuilder<double>(
+                  valueListenable: _scrollOffset,
+                  builder: (_, offset, __) {
+                    final fadeOpacity = (offset / 8.0).clamp(0.0, 1.0);
+                    return IgnorePointer(
+                      child: Opacity(
+                        opacity: fadeOpacity,
+                        child: Container(
+                          height: 45,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                AppColors.background,
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
             ),
           ),
         ],
@@ -208,7 +278,7 @@ class _SearchScreenState extends State<SearchScreen> {
     {"name": "Jazz", "colors": [const Color(0xFFFDC830), const Color(0xFFF37335)]},
     {"name": "Classical", "colors": [const Color(0xFF4CA1AF), const Color(0xFFC4E0E5)]},
     {"name": "Country", "colors": [const Color(0xFFe65c00), const Color(0xFFF9D423)]},
-    {"name": "Metal", "colors": [const Color(0xFF000000), const Color(0xFF434343)]},
+    {"name": "Metal", "colors": [const Color(0xFF121212), const Color(0xFF434343)]},
     {"name": "Funk", "colors": [const Color(0xFFCC95C0), const Color(0xFFDBD4B4), const Color(0xFF7AA1D2)]},
     {"name": "House", "colors": [const Color(0xFF4568DC), const Color(0xFFB06AB3)]},
     {"name": "Techno", "colors": [const Color(0xFF200122), const Color(0xFF6f0000)]},
@@ -219,7 +289,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   List<Widget> _buildBodySlivers(app_search.SearchController search) {
     if (search.isLoading) {
-      return [const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: AppColors.primaryStart)))];
+      return [const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: Colors.white)))];
     }
     
     // Add top padding to content so it doesn't touch the divider immediately
@@ -233,7 +303,7 @@ class _SearchScreenState extends State<SearchScreen> {
            sliver: SliverToBoxAdapter(
              child: Padding(
                padding: const EdgeInsets.only(bottom: 16),
-               child: const Text("Browse All", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+               child: const Text("Browse All", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
              ),
            ),
          ),
@@ -269,7 +339,14 @@ class _SearchScreenState extends State<SearchScreen> {
     }
     
     if (search.error != null) {
-      return [SliverFillRemaining(child: Center(child: Text("Error: ${search.error}", style: const TextStyle(color: Colors.red))))];
+      return [
+        SliverFillRemaining(
+          child: ErrorStateWidget(
+            rawError: search.error,
+            onRetry: () => search.retry(),
+          ),
+        ),
+      ];
     }
     
     final bool hasResults = search.trackResults.isNotEmpty || search.albumResults.isNotEmpty || search.artistResults.isNotEmpty;
@@ -299,7 +376,7 @@ class _SearchScreenState extends State<SearchScreen> {
           delegate: SliverChildListDelegate([
             // Best Match (Artist)
             if (search.artistResults.isNotEmpty) ...[
-              const Text("Top Result", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text("Top Result", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 12),
               _buildArtistTile(search.artistResults.first, large: true),
               const SizedBox(height: 24),
@@ -307,14 +384,15 @@ class _SearchScreenState extends State<SearchScreen> {
 
             // Tracks
             if (search.trackResults.isNotEmpty) ...[
-              const Text("Songs", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text("Songs", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 12),
+              // Track tiles use same TrackListTile as Tracks tab â€” identical fit
               ...search.trackResults.take(4).map((t) => _buildTrackTile(t)).toList(),
               if (search.trackResults.length > 4)
                  Align(
                    alignment: Alignment.centerLeft,
                    child: TextButton(
-                     child: const Text("See all songs", style: TextStyle(color: AppColors.primaryStart)), 
+                     child: const Text("See all songs", style: TextStyle(color: Colors.white)), 
                      onPressed: () => setState(() => _selectedFilter = "Tracks")
                    )
                  ),
@@ -323,7 +401,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
             // Albums
             if (search.albumResults.isNotEmpty) ...[
-              const Text("Albums", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text("Albums", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 12),
               _buildAlbumsRail(search.albumResults),
               const SizedBox(height: 24),
@@ -331,7 +409,7 @@ class _SearchScreenState extends State<SearchScreen> {
             
             // Artists 
             if (search.artistResults.length > 1) ...[ 
-               const Text("Artists", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+               const Text("Artists", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
                const SizedBox(height: 12),
                _buildArtistsRail(search.artistResults.skip(1).toList()),
             ],
@@ -347,11 +425,12 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildTrackTile(Track track) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
+      padding: const EdgeInsets.only(bottom: 2.0),
       child: TrackListTile(
          track: track,
          index: 0, 
          showArtwork: true,
+         allowSwipeActions: true,
          onTap: () {
             context.read<PlaybackController>().playTrack(track);
          },
@@ -362,17 +441,18 @@ class _SearchScreenState extends State<SearchScreen> {
   List<Widget> _buildTracksListSlivers(List<Track> tracks) {
     return [
       SliverPadding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: EdgeInsets.zero,
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (_, i) {
                if (i == tracks.length) return const BottomContentPadding();
                return Padding(
-                 padding: const EdgeInsets.only(bottom: 8.0),
+                 padding: const EdgeInsets.only(bottom: 2.0),
                  child: TrackListTile(
                   track: tracks[i], 
                   index: i,
                   showArtwork: true,
+                  allowSwipeActions: true,
                   onTap: () {
                      context.read<PlaybackController>().playQueue(tracks, index: i);
                   }
@@ -393,34 +473,43 @@ class _SearchScreenState extends State<SearchScreen> {
             artistId: artist.id, artistName: artist.name, pictureUrl: artist.picture
          )));
       },
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            Hero(
-              tag: 'artist_${artist.id}',
-              child: CircleAvatar(
-                radius: large ? 40 : 24,
-                backgroundImage: NetworkImage(artist.picture),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Hero(
+                tag: 'artist_${artist.id}',
+                child: CircleAvatar(
+                  radius: large ? 40 : 24,
+                  backgroundImage: NetworkImage(artist.picture),
+                ),
               ),
-            ),
-            const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(artist.name, style: TextStyle(
-                  color: Colors.white, 
-                  fontWeight: FontWeight.bold,
-                  fontSize: large ? 20 : 16
-                )),
-                const Text("Artist", style: TextStyle(color: Colors.grey)),
-              ],
-            )
-          ],
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(artist.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white, 
+                        fontWeight: FontWeight.w800,
+                        fontSize: large ? 20 : 16
+                      ),
+                    ),
+                    const Text("Artist", style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -511,7 +600,7 @@ class _SearchScreenState extends State<SearchScreen> {
                        maxLines: 1, 
                        overflow: TextOverflow.ellipsis, 
                        textAlign: TextAlign.center, 
-                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
+                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)
                      ),
                    ],
                  ),
@@ -577,7 +666,7 @@ class _SearchScreenState extends State<SearchScreen> {
                            fit: BoxFit.cover,
                          )),
                          const SizedBox(height: 8),
-                         Text(album.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                         Text(album.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
                          Text(album.artistName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
                        ],
                   ),

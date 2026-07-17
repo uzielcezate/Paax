@@ -86,7 +86,21 @@ class _AppImageState extends State<AppImage> {
     // For always-visible widgets (e.g. player artwork) skip the queue entirely.
     if (widget.forceLoad && widget.url.isNotEmpty) {
       _canLoad = true;
+    } else if (!kIsWeb && widget.url.isNotEmpty) {
+      // Check disk cache — if already downloaded, skip visibility gate
+      _checkDiskCache();
     }
+  }
+
+  /// Check if image is already in disk cache for instant display.
+  Future<void> _checkDiskCache() async {
+    try {
+      final fileInfo = await ImagePipeline.instance.cacheManager
+          .getFileFromCache(_sizedUrl);
+      if (fileInfo != null && !_disposed && mounted) {
+        setState(() => _canLoad = true);
+      }
+    } catch (_) {}
   }
 
   @override
@@ -263,13 +277,9 @@ class _AppImageState extends State<AppImage> {
         height: widget.height,
         fit: widget.fit,
         filterQuality: filterQuality,
-        fadeInDuration: const Duration(milliseconds: 200),
-        fadeOutDuration: const Duration(milliseconds: 100),
+        fadeInDuration: const Duration(milliseconds: 100),
+        fadeOutDuration: Duration.zero,
         cacheManager: ImagePipeline.instance.cacheManager,
-        memCacheWidth: widget.sizePx,
-        memCacheHeight: widget.sizePx,
-        maxWidthDiskCache: widget.sizePx,
-        maxHeightDiskCache: widget.sizePx,
         useOldImageOnUrlChange: true,
         placeholder: (_, __) => _buildPlaceholder(),
         errorWidget: (_, __, error) {

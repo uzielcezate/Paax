@@ -1,4 +1,4 @@
-import '../widgets/thumbnail.dart';
+﻿import '../widgets/thumbnail.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
@@ -7,7 +7,6 @@ import '../state/auth_controller.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart'; // Added
 import '../../domain/entities/track.dart'; // Added
-import 'auth_screen.dart';
 import '../widgets/bottom_content_padding.dart';
 import '../widgets/section_header.dart'; // Added
 import '../widgets/black_glass_blur_surface.dart'; // Added
@@ -27,6 +26,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   
   @override
   Widget build(BuildContext context) {
+    
     final user = context.watch<AuthController>().currentUser;
     final library = context.watch<LibraryController>();
     final history = HiveStorage.getRecentlyPlayed();
@@ -42,89 +42,139 @@ class _ProfileScreenState extends State<ProfileScreen> {
     
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: SingleChildScrollView(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-               const SizedBox(height: 20),
-               // Header
-               _buildHeader(user?.name, user?.email),
-               
-               const SizedBox(height: 24),
-               
-               // Plan Section
-               _buildPlanSection(),
-               
-               const SizedBox(height: 16),
+      body: Stack(
+        children: [
+          SafeArea(
+            bottom: false,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                   const SizedBox(height: 20),
+                   // Header
+                   _buildHeader(user?.name, user?.email),
+                   
+                   const SizedBox(height: 24),
+                   
+                   // Plan Section
+                   _buildPlanSection(),
+                   
+                   const SizedBox(height: 16),
 
-               // Stats Row
-               Padding(
-                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                 child: Row(
-                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                   children: [
-                     _buildStatItem("Liked", library.likedTracks.length.toString()),
-                     _buildStatItem("Playlists", library.playlists.length.toString()),
-                     _buildStatItem("Minutes", minutes.toString()),
-                   ],
-                 ),
-               ),
-               
-               const SizedBox(height: 32),
-               
-               // Recently Played
-               if (history.isNotEmpty) ...[
-                 const Padding(
-                   padding: EdgeInsets.symmetric(horizontal: 20),
-                   child: SectionHeader(title: "Recently Played"),
-                 ),
-                 const SizedBox(height: 12),
-                 SizedBox(
-                   height: 155, // Increased from 140 to prevent overflow
-                   child: ListView.builder(
-                     padding: const EdgeInsets.only(left: 20),
-                     scrollDirection: Axis.horizontal,
-                     physics: const ClampingScrollPhysics(),
-                     primary: false,
-                     itemCount: history.length,
-                     itemBuilder: (context, index) {
-                       final track = history[index];
-                       return _buildRecentCard(context, track);
-                     },
+                   // Stats Row
+                   Padding(
+                     padding: const EdgeInsets.symmetric(horizontal: 20),
+                     child: Row(
+                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                       children: [
+                         _buildStatItem("Liked", library.likedTracks.length.toString()),
+                         _buildStatItem("Playlists", library.playlists.length.toString()),
+                         _buildStatItem("Minutes", minutes.toString()),
+                       ],
+                     ),
                    ),
-                 ),
-                 const SizedBox(height: 32),
-               ],
-               
-               // Settings
-               Padding(
-                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                 child: Column(
-                   children: [
-                      // Settings
-                      _buildMenuItem("Settings", Icons.settings_outlined, () {}),
-                      const SizedBox(height: 8),
-                      // Clear Data
-                      _buildMenuItem("Clear Data", Icons.delete_outline, () => _confirmClearData(context), isDestructive: true),
-                      const SizedBox(height: 8),
-                      // Logout
-                      _buildMenuItem("Log out", Icons.logout, () {
-                         context.read<AuthController>().logout();
-                         Navigator.of(context).pushAndRemoveUntil(
-                           MaterialPageRoute(builder: (_)=> const AuthScreen()),
-                           (route) => false,
-                         );
-                      }),
+                   
+                   const SizedBox(height: 32),
+                   
+                   // Recently Played
+                   if (history.isNotEmpty) ...[
+                     const Padding(
+                       padding: EdgeInsets.symmetric(horizontal: 20),
+                       child: SectionHeader(title: "Recently Played"),
+                     ),
+                     const SizedBox(height: 12),
+                     SizedBox(
+                       height: 155, // Increased from 140 to prevent overflow
+                       child: ListView.builder(
+                         padding: const EdgeInsets.only(left: 20),
+                         scrollDirection: Axis.horizontal,
+                         physics: const ClampingScrollPhysics(),
+                         primary: false,
+                         itemCount: history.length,
+                         itemBuilder: (context, index) {
+                           final track = history[index];
+                           return _buildRecentCard(context, track);
+                         },
+                       ),
+                     ),
+                     const SizedBox(height: 32),
                    ],
-                 ),
-               ),
-               
-               const BottomContentPadding(), 
-            ],
+                   
+                   // Settings
+                   Padding(
+                     padding: const EdgeInsets.symmetric(horizontal: 20),
+                     child: Column(
+                       children: [
+                          // Settings
+                          _buildMenuItem("Settings", Icons.settings_outlined, () {}),
+                          const SizedBox(height: 8),
+                          // Clear Data
+                          _buildMenuItem("Clear Data", Icons.delete_outline, () => _confirmClearData(context), isDestructive: true),
+                          const SizedBox(height: 8),
+                          // Logout
+                          _buildMenuItem("Log out", Icons.logout, () {
+                             // Signs out; AuthGate reacts to the state change and
+                             // routes back to Welcome. Local library is preserved.
+                             context.read<AuthController>().logout();
+                          }),
+                       ],
+                     ),
+                   ),
+                   
+                   const BottomContentPadding(), 
+                ],
+              ),
+            ),
           ),
-        ),
+          // â”€â”€ Top edge fade â”€â”€
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: 120,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      const Color(0xFF121212),
+                      const Color(0xFF121212).withValues(alpha: 0.65),
+                      const Color(0xFF121212).withValues(alpha: 0.25),
+                      const Color(0xFF121212).withValues(alpha: 0.0),
+                    ],
+                    stops: const [0.0, 0.35, 0.65, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // â”€â”€ Bottom edge fade â”€â”€
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: context.read<PlaybackController>().currentTrack != null ? 240 : 160,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      const Color(0xFF121212).withValues(alpha: 0.96),
+                      const Color(0xFF121212).withValues(alpha: 0.65),
+                      const Color(0xFF121212).withValues(alpha: 0.25),
+                      const Color(0xFF121212).withValues(alpha: 0.0),
+                    ],
+                    stops: const [0.0, 0.35, 0.65, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -137,7 +187,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
            decoration: BoxDecoration(
              shape: BoxShape.circle,
              color: AppColors.surfaceLight,
-             border: Border.all(color: AppColors.primaryStart, width: 2),
+             border: Border.all(color: Colors.white24, width: 2),
            ),
            child: const Icon(Icons.person, size: 45, color: Colors.white),
          ),
@@ -176,7 +226,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [AppColors.primaryStart, AppColors.primaryEnd]),
+                  color: AppColors.primaryEnd,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Text("PRO", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
@@ -270,12 +320,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           TextButton(onPressed: ()=>Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
             onPressed: () async {
-              await context.read<AuthController>().logout(); 
-               Navigator.of(context).pushAndRemoveUntil(
-                     MaterialPageRoute(builder: (_)=> const AuthScreen()),
-                     (route) => false,
-                   );
-            }, 
+              // Wipe the on-device library, then sign out. AuthGate routes back
+              // to Welcome once signed out (whole shell is rebuilt, so no stale
+              // in-memory state remains).
+              final auth = context.read<AuthController>();
+              Navigator.pop(context);
+              await HiveStorage.clearAll();
+              await auth.logout();
+            },
             child: const Text("Clear", style: TextStyle(color: Colors.red))
           ),
         ],

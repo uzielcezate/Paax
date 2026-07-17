@@ -5,6 +5,7 @@ import '../../core/utils/responsive.dart';
 import '../state/auth_controller.dart'; 
 import '../../data/repositories/music_repository_impl.dart';
 import '../../domain/repositories/music_repository.dart';
+import '../state/playback_controller.dart';
 import '../../data/local/hive_storage.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart'; 
@@ -12,6 +13,7 @@ import '../../domain/entities/artist.dart';
 import '../../domain/entities/single_track_album_detail.dart';
 import '../widgets/section_header.dart';
 import '../widgets/music_card.dart';
+import '../widgets/thumbnail.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
 import 'profile_screen.dart';
@@ -124,38 +126,88 @@ class _HomeScreenState extends State<HomeScreen> {
     
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: CustomScrollView(
-          controller: _scrollController,
-          slivers: [
-             SliverToBoxAdapter(child: _buildHeader(context, greeting, userName)),
-             
-             if (_personalizationLoaded && _forYouTracks.isNotEmpty)
-                SliverToBoxAdapter(child: _buildTrackRow(context, _forYouTitle, _forYouTracks)),
-             
-             // Lazy build the rest of the sections
-             SliverList(
-               delegate: SliverChildBuilderDelegate(
-                 (context, index) {
-                    switch (index) {
-                      case 0: return _buildCategorySection("Global Top Charts", _globalCharts);
-                      case 1: return _buildCategorySection("US Top Charts", _usCharts);
-                      case 2: return _buildCategorySection("Mexico Top Charts", _mxCharts);
-                      case 3: return _buildCategorySection("Pop Essentials", _popContent);
-                      case 4: return _buildCategorySection("Rock Classics & New", _rockContent);
-                      case 5: return _buildCategorySection("Latin & Reggaeton", _latinContent);
-                      case 6: return _buildCategorySection("Hip-Hop & Rap", _hipHopContent);
-                      case 7: return _buildCategorySection("Indie & Alternative", _indieContent);
-                      case 8: return const BottomContentPadding();
-                      default: return null;
-                    }
-                 },
-                 childCount: 9,
+      body: Stack(
+        children: [
+          CustomScrollView(
+            controller: _scrollController,
+            slivers: [
+               SliverToBoxAdapter(child: SizedBox(height: MediaQuery.of(context).padding.top)),
+               SliverToBoxAdapter(child: _buildHeader(context, greeting, userName)),
+               
+               if (_personalizationLoaded && _forYouTracks.isNotEmpty)
+                  SliverToBoxAdapter(child: _buildTrackRow(context, _forYouTitle, _forYouTracks)),
+               
+               // Lazy build the rest of the sections
+               SliverList(
+                 delegate: SliverChildBuilderDelegate(
+                   (context, index) {
+                      switch (index) {
+                        case 0: return _buildCategorySection("Global Top Charts", _globalCharts);
+                        case 1: return _buildCategorySection("US Top Charts", _usCharts);
+                        case 2: return _buildCategorySection("Mexico Top Charts", _mxCharts);
+                        case 3: return _buildCategorySection("Pop Essentials", _popContent);
+                        case 4: return _buildCategorySection("Rock Classics & New", _rockContent);
+                        case 5: return _buildCategorySection("Latin & Reggaeton", _latinContent);
+                        case 6: return _buildCategorySection("Hip-Hop & Rap", _hipHopContent);
+                        case 7: return _buildCategorySection("Indie & Alternative", _indieContent);
+                        case 8: return const BottomContentPadding();
+                        default: return null;
+                      }
+                   },
+                   childCount: 9,
+                 ),
                ),
-             ),
-          ],
-        ),
+            ],
+          ),
+          // ── Top edge fade ──
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: 120,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      AppColors.background,
+                      AppColors.background.withValues(alpha: 0.65),
+                      AppColors.background.withValues(alpha: 0.25),
+                      AppColors.background.withValues(alpha: 0.0),
+                    ],
+                    stops: const [0.0, 0.35, 0.65, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // ── Bottom edge fade ──
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: context.read<PlaybackController>().currentTrack != null ? 240 : 160,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      AppColors.background.withValues(alpha: 0.96),
+                      AppColors.background.withValues(alpha: 0.65),
+                      AppColors.background.withValues(alpha: 0.25),
+                      AppColors.background.withValues(alpha: 0.0),
+                    ],
+                    stops: const [0.0, 0.35, 0.65, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -184,7 +236,7 @@ class _HomeScreenState extends State<HomeScreen> {
                    userName,
                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
                      color: AppColors.textPrimary,
-                     fontWeight: FontWeight.bold,
+                     fontWeight: FontWeight.w800,
                      fontSize: 28
                    ),
                  ),

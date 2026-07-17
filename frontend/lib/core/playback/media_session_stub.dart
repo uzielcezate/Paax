@@ -1,12 +1,13 @@
 // ============================================================================
-// Media Session — Stub (non-web platforms)
+// Media Session — Mobile (audio_service Foreground Service)
 // ============================================================================
-// On Android/iOS the native audio_session / just_audio package handles media
-// notifications. This stub silently no-ops so the rest of the code compiles
-// on all platforms.
+// On Android, this delegates to PaaxAudioHandler to update the notification
+// with track metadata and playback state. The handler keeps the Foreground
+// Service alive so the WebView can continue playing in the background.
 // ============================================================================
 
 import '../../domain/entities/track.dart';
+import 'paax_audio_handler.dart';
 
 void setMediaSession({
   required Track track,
@@ -15,13 +16,46 @@ void setMediaSession({
   required void Function() onNext,
   required void Function() onPrevious,
 }) {
-  // No-op on non-web platforms.
+  final handler = globalAudioHandler;
+  if (handler == null) return;
+
+  // Wire the notification controls to the PlaybackController callbacks
+  handler.onPlay = onPlay;
+  handler.onPause = onPause;
+  handler.onNext = onNext;
+  handler.onPrevious = onPrevious;
+
+  // Update the notification with track info
+  handler.updateNotificationMetadata(
+    title: track.title,
+    artist: track.displayArtist,
+    artworkUrl: track.artworkUrl,
+    duration: Duration(seconds: track.duration),
+  );
 }
 
-void updateMediaSessionPlaybackState({required bool isPlaying}) {
-  // No-op on non-web platforms.
+void updateMediaSessionPlaybackState({
+  required bool isPlaying,
+  Duration position = Duration.zero,
+}) {
+  globalAudioHandler?.updatePlaybackState(
+    isPlaying: isPlaying,
+    position: position,
+  );
+}
+
+/// Updates the notification's MediaItem duration dynamically when the
+/// WebView reports the real duration (e.g. from YouTube metadata).
+void updateMediaSessionDuration(Duration duration) {
+  final handler = globalAudioHandler;
+  if (handler == null) return;
+
+  final current = handler.mediaItem.valueOrNull;
+  if (current != null && duration > Duration.zero) {
+    handler.mediaItem.add(current.copyWith(duration: duration));
+  }
 }
 
 void clearMediaSession() {
-  // No-op on non-web platforms.
+  // Keep the service alive but clear metadata
 }

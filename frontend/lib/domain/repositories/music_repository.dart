@@ -12,6 +12,14 @@ abstract class MusicRepository {
   Future<({List<SavedAlbum> playlists, List<Track> tracks, List<Artist> artists})> getGenrePage(String slug);
 
   Future<Artist> getArtist(String id);
+  /// Returns basic artist data WITHOUT release enrichment (fast).
+  Future<Artist> getArtistBasic(String id);
+  /// Enriches album/singles release metadata (years, types). Can run in background.
+  Future<({List<SavedAlbum> albums, List<SavedAlbum> singles})> enrichArtistReleases({
+    required List<SavedAlbum> existingAlbums,
+    required List<SavedAlbum> existingSingles,
+    required List<dynamic> rawSongs,
+  });
   Future<List<SavedAlbum>> getArtistAlbums(String id);
   Future<(List<SavedAlbum>, String?)> getArtistAlbumsPage(String id, String? params, String? token);
   Future<List<SavedAlbum>> getArtistSingles(String id);

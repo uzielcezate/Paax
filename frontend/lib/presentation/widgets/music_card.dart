@@ -22,6 +22,7 @@ class MusicCard extends StatelessWidget {
   final VoidCallback onTap;
   final double? width; // Nullable to allow external constraints or Responsive default
   final bool isCircle;
+  final Color? foregroundColor;
 
   const MusicCard({
     super.key,
@@ -31,6 +32,7 @@ class MusicCard extends StatelessWidget {
     required this.onTap,
     this.width,
     this.isCircle = false,
+    this.foregroundColor,
   });
 
   @override
@@ -79,9 +81,10 @@ class MusicCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     softWrap: false,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontWeight: FontWeight.bold, 
                         fontSize: 13,
+                        color: foregroundColor,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -91,7 +94,7 @@ class MusicCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     softWrap: false,
                     style: TextStyle(
-                        color: AppColors.textSecondary, 
+                        color: foregroundColor?.withOpacity(0.7) ?? AppColors.textSecondary, 
                         fontSize: 11,
                     ),
                   ),
