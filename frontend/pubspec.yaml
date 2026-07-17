@@ -1,5 +1,9 @@
 name: beaty
-description: "A new Flutter project."
+# NOTE: the Dart package identifier stays `beaty` intentionally — renaming it to
+# `paax` would rewrite every `package:beaty/...` import across the app (broad,
+# risky churn with no user-facing value). The PRODUCT is Paax everywhere users
+# see it (app label, iOS display name, applicationId com.paax.music). See ADR.
+description: "Paax — music streaming app."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -52,6 +56,10 @@ dependencies:
   audio_service: ^0.18.18
   flutter_inappwebview: ^6.1.5
   flutter_svg: ^2.0.17
+
+  # ── Phase 3.1: Supabase auth ────────────────────────────────────────────────
+  supabase_flutter: ^2.8.0   # anon-key client, session persistence, deep-link auth
+  app_links: ^6.3.2          # native deep-link capture for auth callbacks
 
 dev_dependencies:
   flutter_test:

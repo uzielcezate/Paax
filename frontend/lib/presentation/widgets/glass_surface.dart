@@ -11,8 +11,8 @@ import '../../core/theme/app_colors.dart';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// ─── Design Tokens ──────────────────────────────────────────────────────────
-class BeatyGlassTokens {
-  BeatyGlassTokens._();
+class PaaxGlassTokens {
+  PaaxGlassTokens._();
 
   // Dimensions
   static const double heightCompact = 38.0;
@@ -45,8 +45,8 @@ class GlassTokens {
 
   static const double blurSigma = 0; // No blur
   static Color fill = AppColors.surface;
-  static Color border = Colors.white.withOpacity(BeatyGlassTokens.borderOpacity);
-  static const double borderWidth = BeatyGlassTokens.borderWidth;
+  static Color border = Colors.white.withOpacity(PaaxGlassTokens.borderOpacity);
+  static const double borderWidth = PaaxGlassTokens.borderWidth;
   static Color fillLight = AppColors.elevatedSurface;
 
   static List<BoxShadow> softShadow = [
@@ -74,9 +74,9 @@ class BlurCapability {
   static void reset() => _canBlur = null;
 }
 
-/// ─── BeatyGlassSurface ─────────────────────────────────────────────────────
+/// ─── PaaxGlassSurface ─────────────────────────────────────────────────────
 /// Solid dark surface container. No BackdropFilter.
-class BeatyGlassSurface extends StatelessWidget {
+class PaaxGlassSurface extends StatelessWidget {
   final Widget child;
   final double? width;
   final double? height;
@@ -87,12 +87,12 @@ class BeatyGlassSurface extends StatelessWidget {
   final EdgeInsetsGeometry? padding;
   final Color? overrideFill;
 
-  const BeatyGlassSurface({
+  const PaaxGlassSurface({
     super.key,
     required this.child,
     this.width,
     this.height,
-    this.borderRadius = const BorderRadius.all(Radius.circular(BeatyGlassTokens.radius)),
+    this.borderRadius = const BorderRadius.all(Radius.circular(PaaxGlassTokens.radius)),
     this.showBorder = true,
     this.showShadow = true,
     this.enableBlur = true,
@@ -170,7 +170,7 @@ class GlassSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BeatyGlassSurface(
+    return PaaxGlassSurface(
       width: width,
       height: height,
       borderRadius: borderRadius,
@@ -205,7 +205,7 @@ class GlassPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BeatyGlassSurface(
+    return PaaxGlassSurface(
       width: width,
       height: height,
       borderRadius: BorderRadius.circular(height / 2),

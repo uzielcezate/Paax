@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'glass_surface.dart';
 
 /// ─── PaaxGlassContainer ─────────────────────────────────────────────────────
-/// Thin wrapper that delegates to [BeatyGlassSurface].
+/// Thin wrapper that delegates to [PaaxGlassSurface].
 ///
-/// Previously used `oc_liquid_glass` — now uses the Beaty Glass design system.
+/// Previously used `oc_liquid_glass` — now uses the Paax Glass design system.
 /// Kept for backward compatibility with `GlassSurface` and `GlassChip`.
 class PaaxGlassContainer extends StatelessWidget {
   final Widget child;
@@ -30,7 +30,7 @@ class PaaxGlassContainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BeatyGlassSurface(
+    return PaaxGlassSurface(
       width: width,
       height: height,
       borderRadius: BorderRadius.circular(borderRadius),

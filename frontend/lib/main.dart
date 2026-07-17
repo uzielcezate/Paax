@@ -38,7 +38,7 @@ void main() async {
     globalAudioHandler = await AudioService.init(
       builder: () => PaaxAudioHandler(),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.beaty.music.beaty.audio',
+        androidNotificationChannelId: 'com.paax.music.audio',
         androidNotificationChannelName: 'Paax Music',
         androidNotificationOngoing: false,
         androidStopForegroundOnPause: false,
@@ -49,7 +49,7 @@ void main() async {
   // Print active API environment (debug only — no-op in release builds)
   ApiConfig.logStartup();
 
-  runApp(const BeatyApp());
+  runApp(const PaaxApp());
 }
 
 /// Custom scroll behavior:
@@ -76,8 +76,8 @@ class PaaxScrollBehavior extends MaterialScrollBehavior {
   ) => child;
 }
 
-class BeatyApp extends StatelessWidget {
-  const BeatyApp({super.key});
+class PaaxApp extends StatelessWidget {
+  const PaaxApp({super.key});
 
   @override
   Widget build(BuildContext context) {

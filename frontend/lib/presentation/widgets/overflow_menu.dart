@@ -344,7 +344,7 @@ class _MenuContent extends StatelessWidget {
       }),
       _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
-         Share.share('Check out "${effectiveTrack.title}" by ${effectiveTrack.artistName} on Beaty! https://music.youtube.com/watch?v=${effectiveTrack.id}');
+         Share.share('Check out "${effectiveTrack.title}" by ${effectiveTrack.artistName} on Paax! https://music.youtube.com/watch?v=${effectiveTrack.id}');
       }),
       // Hide / Unhide track
       Builder(
@@ -444,9 +444,9 @@ class _MenuContent extends StatelessWidget {
       _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
         Navigator.pop(context);
         if (effectiveAlbumId.isNotEmpty && effectiveAlbumId != '0') {
-            Share.share('Check out "${album?.title ?? singleDetail?.title}" by $artistName on Beaty! https://music.youtube.com/browse/$effectiveAlbumId');
+            Share.share('Check out "${album?.title ?? singleDetail?.title}" by $artistName on Paax! https://music.youtube.com/browse/$effectiveAlbumId');
         } else {
-             Share.share('Check out "${singleDetail?.title}" by $artistName on Beaty!');
+             Share.share('Check out "${singleDetail?.title}" by $artistName on Paax!');
         }
       }),
     ];
@@ -469,7 +469,7 @@ class _MenuContent extends StatelessWidget {
       ),
       _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
-         Share.share('Check out ${artist!.name} on Beaty! https://deezer.com/artist/${artist!.id}');
+         Share.share('Check out ${artist!.name} on Paax! https://deezer.com/artist/${artist!.id}');
       }),
     ];
   }
@@ -522,7 +522,7 @@ class _MenuContent extends StatelessWidget {
       }),
       _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
-          Share.share('Check out my playlist "${playlist!.name}" on Beaty!');
+          Share.share('Check out my playlist "${playlist!.name}" on Paax!');
       }),
     ];
   }

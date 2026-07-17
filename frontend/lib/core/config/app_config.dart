@@ -17,15 +17,15 @@
 //     flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:8000
 //
 //   Production (Railway):
-//     flutter run -d chrome --dart-define=API_BASE_URL=https://beaty.up.railway.app
-//     flutter build web --dart-define=API_BASE_URL=https://beaty.up.railway.app
+//     flutter run -d chrome --dart-define=API_BASE_URL=https://api.paaxmusic.app
+//     flutter build web --dart-define=API_BASE_URL=https://api.paaxmusic.app
 //
 // Default (no --dart-define): http://localhost:8000
 
 class AppConfig {
   AppConfig._(); // Non-instantiable
 
-  /// Base URL for the Beaty FastAPI backend.
+  /// Base URL for the Paax FastAPI backend.
   ///
   /// Injected at compile time via --dart-define=API_BASE_URL=<url>.
   /// Defaults to http://localhost:8000 for local web development.
