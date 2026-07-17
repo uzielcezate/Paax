@@ -2,17 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/theme/app_theme.dart';
 import 'core/config/api_config.dart';
+import 'core/config/supabase_config.dart';
 import 'data/local/hive_storage.dart';
 import 'presentation/state/auth_controller.dart';
 import 'presentation/state/library_controller.dart';
 import 'presentation/state/playback_controller.dart';
 import 'presentation/state/search_controller.dart' as app_search;
 import 'presentation/state/theme_state.dart';
-import 'presentation/screens/onboarding_screen.dart';
-import 'presentation/screens/auth_screen.dart';
-import 'presentation/screens/main_wrapper.dart';
+import 'presentation/screens/auth/auth_gate.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:audio_service/audio_service.dart';
@@ -21,6 +21,20 @@ import 'core/playback/paax_audio_handler.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await HiveStorage.init();
+
+  // Initialize Supabase (public anon key only; RLS-protected). Auth deep links
+  // (paax://auth/...) are handled by the SDK. Fail gracefully if misconfigured.
+  try {
+    await Supabase.initialize(
+      url: SupabaseConfig.url,
+      anonKey: SupabaseConfig.anonKey,
+      authOptions:
+          const FlutterAuthClientOptions(authFlowType: AuthFlowType.pkce),
+    );
+  } catch (e) {
+    // ignore: avoid_print
+    if (!kIsWeb) print('[Paax] Supabase init failed: $e');
+  }
 
   // ── Edge-to-edge rendering ──
   // Ensures consistent layout across all Android OEMs (Oppo, Xiaomi, etc.)
@@ -94,13 +108,7 @@ class PaaxApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,
         scrollBehavior: const PaaxScrollBehavior(),
-        home: Consumer<AuthController>(
-          builder: (context, auth, _) {
-            if (!auth.onboardingCompleted) return const OnboardingScreen();
-            if (!auth.isAuthenticated) return const AuthScreen();
-            return MainWrapper(key: MainWrapper.shellKey);
-          },
-        ),
+        home: const AuthGate(),
       ),
     );
   }

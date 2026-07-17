@@ -60,6 +60,7 @@ dependencies:
   # ── Phase 3.1: Supabase auth ────────────────────────────────────────────────
   supabase_flutter: ^2.8.0   # anon-key client, session persistence, deep-link auth
   app_links: ^6.3.2          # native deep-link capture for auth callbacks
+  shared_preferences: ^2.3.2 # versioned pending-registration payload (non-sensitive)
 
 dev_dependencies:
   flutter_test:
