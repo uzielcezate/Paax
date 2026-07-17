@@ -14,6 +14,7 @@ enum AuthErrorKind {
   emailNotConfirmed,
   emailAlreadyRegistered,
   weakPassword,
+  samePassword,
   usernameTaken,
   rateLimited,
   expiredLink,
@@ -62,6 +63,17 @@ class AuthErrorMapper {
           msg.contains('user already exists')) {
         return const AuthFailure(
             AuthErrorKind.emailAlreadyRegistered, 'This email is already registered');
+      }
+      // Reusing the CURRENT password on reset. Must be matched BEFORE the
+      // generic weak-password branch (that message also contains "should"),
+      // otherwise a valid-but-unchanged password shows the wrong policy error.
+      if (error.code == 'same_password' ||
+          msg.contains('different from the old password') ||
+          msg.contains('should be different') ||
+          msg.contains('same as the old password') ||
+          (msg.contains('new password') && msg.contains('different'))) {
+        return const AuthFailure(AuthErrorKind.samePassword,
+            'Your new password must be different from your current password.');
       }
       if (msg.contains('password') && (msg.contains('weak') || msg.contains('should') || msg.contains('at least'))) {
         return const AuthFailure(AuthErrorKind.weakPassword,
