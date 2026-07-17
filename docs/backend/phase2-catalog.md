@@ -128,5 +128,17 @@ is host-allowlisted (Deezer CDN), size/timeout capped, MIME+image validated,
 entity-scoped destination paths. TLS verification enabled on all clients.
 Rate limiting on expensive endpoints. Correlation IDs on every request/log.
 
+## Discography attribution (Phase 2.6)
+
+Deezer `/artist/{id}/albums` entries frequently omit the nested `artist` field.
+`ingest_artist_profile` therefore injects the authoritative parent-artist context
+(deezer_id + canonical name) into each album graph, and `_album_artists` /
+`album_graph_payload` accept `artist_context`: explicit Deezer album-artist data
+is used and preserved (deduped); otherwise the parent context is used; when
+neither exists the album graph carries **no** album artists and is marked
+`partial`. A null-`deezer_id` "Unknown Artist" catalog row is **never** persisted
+from this flow. This keeps the `artist_discography` / `artist_latest_release`
+views populated and correctly sorted (`release_date desc nulls last`).
+
 See also: [CACHE_STRATEGY.md](../CACHE_STRATEGY.md), [api.md](../api.md),
 [security.md](../security.md), [decisions.md](../decisions.md) ADR-009/ADR-010.

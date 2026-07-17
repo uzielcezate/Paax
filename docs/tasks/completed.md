@@ -21,6 +21,21 @@ Paax is built by a single maintainer, so there is no formal ticketing history �
 
 ---
 
+### TASK-C-P2.6 — Catalog integrity: discography attribution fix
+
+**Type**: Bug fix (backend data quality)
+**Completed**: 2026-07-17 · merged `1ef1bd1` (PR #3), deployed Railway `f2919948`
+**Resolved By**: AI agent (directed by uzielcezate)
+**Summary**: Partial Deezer artist-album payloads now inherit the authoritative
+parent-artist context; no "Unknown Artist" placeholders are persisted; artist
+discography populates and sorts correctly. Production data cleaned (Daft Punk: 38
+albums relinked, 38 placeholders removed, 0 albums lost) and verified generic on
+Pink Floyd (64 albums, 0 placeholders). +9 regression tests (85 total). No schema,
+Flutter, playback, or iframe changes. See [KNOWN_ISSUES.md](../KNOWN_ISSUES.md)
+ISSUE-021.
+
+---
+
 ### TASK-C01 — Deezer + YouTube "v2" hybrid metadata pipeline
 
 **Type**: Feature (core architecture)

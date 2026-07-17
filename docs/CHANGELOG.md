@@ -28,6 +28,26 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 2.6 — Catalog integrity: discography attribution (2026-07-17)
+
+- **Fixed** — `paax-api` artist-profile ingestion attributed albums to a
+  null-`deezer_id` "Unknown Artist" placeholder when Deezer's `/artist/{id}/albums`
+  entries omit the nested `artist` field, leaving the artist discography empty and
+  accumulating one duplicate placeholder per album. `ingest_artist_profile` now
+  injects the authoritative parent-artist context (deezer_id + canonical name)
+  into each album graph; `_album_artists`/`album_graph_payload` use explicit Deezer
+  data when present (deduped), else the parent context, and **never persist an
+  "Unknown Artist"** — an unattributable album stays `partial`. No schema change
+  (PR #3, `1ef1bd1`).
+- **Data cleanup (production)** — Daft Punk (deezer 27): relinked 38 discography
+  albums to the canonical artist, removed 38 placeholder `album_artists` links,
+  deleted 38 orphan "Unknown Artist" rows (0 albums lost; verified via
+  `artist_discography` = 38, latest release correct).
+- **Verified generic** — cold-ingested Pink Floyd (deezer 860) in production: 64
+  albums linked, **0** placeholder rows created, discography = 64.
+- **Tests** — +9 regressions (85 total, all passing).
+- Flutter, UI, playback, iframe, and schema unchanged.
+
 ### Phase 2.5 — Artwork caching + normalized /v2 + deploy (2026-07-17)
 
 - **Added** — `services/artwork/ArtworkService`: background download (host-

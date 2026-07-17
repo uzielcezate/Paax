@@ -536,4 +536,14 @@ High effort, low current priority given the Android + web focus. The playback ke
 
 ---
 
-*Last updated: 2026-07-16*
+## Phase 2.6 residual (low priority)
+
+- Invalidate the Daft Punk `catalog:artist:deezer:27` response-cache key (holds a
+  pre-cleanup empty-discography response; self-heals on ≤24h TTL). Blocked only by
+  Redis MCP availability — a one-line `redis-cli DEL` clears it immediately.
+- Apply the "no persistent placeholder" rule to `build_track_artists` for
+  consistency (see [TECH_DEBT.md](../TECH_DEBT.md)).
+
+---
+
+*Last updated: 2026-07-17*

@@ -272,4 +272,32 @@
 
 ---
 
-*Last updated: 2026-07-16*
+### ISSUE-021 — Artist discography empty / "Unknown Artist" placeholders
+
+**Status**: ✅ Resolved
+**Severity**: Medium
+**Affected Area**: paax-api catalog ingestion (artist profile)
+**First Observed**: 2026-07-17
+**Resolved On**: 2026-07-17
+**PR / Commit**: PR #3 · `1ef1bd1`
+
+**Description**: `GET /v2/artists/deezer/{id}` ingested the artist but its
+discography returned empty, and duplicate null-`deezer_id` "Unknown Artist" rows
+accumulated (one per album).
+
+**Root Cause**: Deezer `/artist/{id}/albums` entries often omit the nested
+`artist` field; the album mapper fell back to an "Unknown Artist" placeholder, so
+albums were linked to placeholders instead of the requested artist.
+
+**Fix**: `ingest_artist_profile` injects the authoritative parent-artist context;
+the album mapper uses explicit data or that context and never persists a
+placeholder. Production data cleaned (Daft Punk: 38 albums relinked, 38
+placeholders removed). Verified generic on Pink Floyd (64 albums, 0 placeholders).
+
+**Residual**: none for the artist-profile flow. `mappers/deezer_common.build_track_artists`
+retains a separate track-level "Unknown Artist" fallback (out of scope; tracks
+reliably carry an artist) — tracked in TECH_DEBT.
+
+---
+
+*Last updated: 2026-07-17*

@@ -122,4 +122,16 @@ None of this runs automatically today — see [deployment.md](deployment.md).
 
 ---
 
-*Last updated: 2026-07-16*
+## paax-api backend suite (Phase 2)
+
+`paax-api` has **85 passing tests** (`pytest`, mocked externals via a fake
+Supabase gateway / `respx`): repositories, Deezer ingestion + mappers, cache +
+distributed lock + stale-while-revalidate, YouTube matcher + persistence, artwork,
+rate limiter, and `/v2` endpoints. Phase 2.6 added 9 discography-attribution
+regressions (parent-context attribution, explicit-data preservation + dedupe,
+no-placeholder-without-context, partial downgrade, ingest idempotency). Run:
+`cd paax-api && ./.venv/Scripts/python -m pytest -q`.
+
+---
+
+*Last updated: 2026-07-17*

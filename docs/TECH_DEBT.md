@@ -299,4 +299,19 @@ See [architecture-review.md](architecture-review.md) §1–§2 for the full list
 
 ---
 
-*Last updated: 2026-07-16*
+## Phase 2.6 residuals (low)
+
+- **`build_track_artists` "Unknown Artist" fallback** — `mappers/deezer_common`
+  still emits a null-`deezer_id` "Unknown Artist" for a track with no artist. Not
+  the discography bug (that flow is fixed) and tracks reliably carry an artist, so
+  low risk; consider applying the same "no persistent placeholder" rule for
+  consistency.
+- **Response-cache invalidation depends on the Redis MCP** — there is no
+  application endpoint to invalidate a specific `catalog:*` key. When the Redis
+  MCP is unavailable, a stale artist/album response self-heals only on TTL
+  (≤24h). A small internal/admin invalidation hook (or reconnected Redis access)
+  would make post-cleanup revalidation immediate.
+
+---
+
+*Last updated: 2026-07-17*

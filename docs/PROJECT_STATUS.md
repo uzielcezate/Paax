@@ -94,4 +94,13 @@ See [current-state.md](current-state.md), [roadmap.md](roadmap.md), [tasks/backl
 
 ---
 
-*Last updated: 2026-07-16*
+## Backend health (paax-api, 2026-07-17)
+
+- **Tests**: 85 passing (`pytest`).
+- **Deploy**: Railway `paax-api` healthy (deployment `f2919948`), `/health` =
+  `healthy` (supabase + redis healthy).
+- **Latest fix**: Phase 2.6 catalog discography attribution (PR #3, `1ef1bd1`).
+
+---
+
+*Last updated: 2026-07-17*
