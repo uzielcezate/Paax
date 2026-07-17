@@ -28,13 +28,21 @@ class PaaxAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> play() async {
     debugPrint('[AudioHandler] play()');
-    onPlay?.call();
+    if (onPlay != null) {
+      onPlay!();
+    } else {
+      debugPrint('[AudioHandler] WARNING: onPlay callback is null');
+    }
   }
 
   @override
   Future<void> pause() async {
     debugPrint('[AudioHandler] pause()');
-    onPause?.call();
+    if (onPause != null) {
+      onPause!();
+    } else {
+      debugPrint('[AudioHandler] WARNING: onPause callback is null');
+    }
   }
 
   @override
@@ -93,9 +101,13 @@ class PaaxAudioHandler extends BaseAudioHandler with SeekHandler {
         MediaControl.skipToNext,
       ],
       systemActions: const {
+        MediaAction.play,
+        MediaAction.pause,
         MediaAction.seek,
         MediaAction.seekForward,
         MediaAction.seekBackward,
+        MediaAction.skipToNext,
+        MediaAction.skipToPrevious,
       },
       androidCompactActionIndices: const [0, 1, 2],
       processingState: AudioProcessingState.ready,

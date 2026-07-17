@@ -1,14 +1,10 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'glass_surface.dart';
+import '../../core/theme/app_colors.dart';
 
-/// Scrolled top-bar glass surface used across detail screens.
-///
-/// Historically black-tinted; now uses the shared white glass system
-/// for consistency with the Phase 4 bubble UI.
+/// Scrolled top-bar surface — solid dark, no blur.
 class BlackGlassBlurSurface extends StatelessWidget {
   final Widget child;
-  final double blurSigma;
+  final double blurSigma; // Ignored — no blur
   final bool topBorder;
   final bool bottomBorder;
   final double? height;
@@ -26,26 +22,23 @@ class BlackGlassBlurSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-        child: Container(
-          height: height,
-          width: width,
-          decoration: BoxDecoration(
-            color: GlassTokens.fillLight,
-            border: Border(
-              top: topBorder
-                  ? BorderSide(color: GlassTokens.border, width: 0.5)
-                  : BorderSide.none,
-              bottom: bottomBorder
-                  ? BorderSide(color: GlassTokens.border, width: 0.5)
-                  : BorderSide.none,
-            ),
-          ),
-          child: child,
+    final borderColor = Colors.white.withOpacity(0.08);
+
+    return Container(
+      height: height,
+      width: width,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(
+          top: topBorder
+              ? BorderSide(color: borderColor, width: 0.5)
+              : BorderSide.none,
+          bottom: bottomBorder
+              ? BorderSide(color: borderColor, width: 0.5)
+              : BorderSide.none,
         ),
       ),
+      child: child,
     );
   }
 }

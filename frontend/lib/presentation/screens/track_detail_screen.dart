@@ -129,7 +129,7 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
                       icon: isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                       label: isLiked ? "Liked" : "Like",
                       onTap: () => lib.toggleLike(widget.track),
-                      color: isLiked ? AppColors.primaryEnd : Colors.white,
+                      color: isLiked ? Colors.white : Colors.white.withValues(alpha: 0.7),
                     );
                   }
                 ),
@@ -234,20 +234,15 @@ class _TrackDetailScreenState extends State<TrackDetailScreen> {
       children: [
         GestureDetector(
           onTap: onTap,
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: primary ? ImageFilter.blur() : ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: Container(
+          child: Container(
                 width: 60, height: 60,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: primary ? Colors.white : Colors.white.withOpacity(0.12),
-                  border: primary ? null : Border.all(color: Colors.white.withOpacity(0.15), width: 0.5),
+                  color: primary ? Colors.white : AppColors.surface,
+                  border: primary ? null : Border.all(color: Colors.white.withOpacity(0.08), width: 0.5),
                 ),
                 child: Icon(icon, color: primary ? Colors.black : color, size: 26),
               ),
-            ),
-          ),
         ),
         const SizedBox(height: 8),
         Text(label, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12)),

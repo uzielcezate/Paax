@@ -87,4 +87,13 @@ class SearchController extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// Force retry the current query (bypasses the same-query guard).
+  void retry() {
+    if (_query.isEmpty) return;
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    _performSearch();
+  }
 }

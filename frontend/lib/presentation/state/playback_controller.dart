@@ -136,6 +136,29 @@ class PlaybackController extends ChangeNotifier {
     });
   }
 
+  // ── Remote media control handlers (notification / lockscreen) ──────────────
+  // These are idempotent: play when already playing is a no-op, etc.
+  // The engine's play() has its own health-check + rehydration logic.
+
+  Future<void> _handleRemotePlay() async {
+    debugPrint('[PlaybackCtrl] Remote PLAY (isPlaying=$_isPlaying)');
+    if (_isPlaying) return; // Already playing — no-op
+    if (currentTrack == null) return; // Nothing to play
+
+    await _engine.play();
+    // Update notification state immediately so the UI reflects the action
+    // even if the playingStream callback is delayed
+    updateMediaSessionPlaybackState(isPlaying: true, position: _position);
+  }
+
+  Future<void> _handleRemotePause() async {
+    debugPrint('[PlaybackCtrl] Remote PAUSE (isPlaying=$_isPlaying)');
+    if (!_isPlaying) return; // Already paused — no-op
+
+    await _engine.pause();
+    updateMediaSessionPlaybackState(isPlaying: false, position: _position);
+  }
+
   Future<void> togglePlayPause() async {
     if (_isPlaying) {
       await _engine.pause();
@@ -226,10 +249,13 @@ class PlaybackController extends ChangeNotifier {
 
         // Update the Web Media Session with track metadata + wire up
         // lock-screen / notification controls.
+        // Important: onPlay/onPause use dedicated handlers (not toggle)
+        // so they are idempotent — calling play when already playing
+        // or pause when already paused is safe and won't invert state.
         setMediaSession(
           track: track,
-          onPlay: () => _engine.play(),
-          onPause: () => _engine.pause(),
+          onPlay: _handleRemotePlay,
+          onPause: _handleRemotePause,
           onNext: () => playNext(),
           onPrevious: () => playPrevious(),
         );

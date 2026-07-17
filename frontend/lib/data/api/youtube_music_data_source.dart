@@ -75,4 +75,61 @@ class YouTubeMusicDataSource {
       return null;
     }
   }
+
+  /// Fetch lyrics for a given videoId.
+  /// Returns raw API response: {"lyrics": "line1\nline2\n...", "source": "..."} or {"error": "..."}
+  Future<Map<String, dynamic>> getLyrics(String videoId) async {
+    try {
+      final result = await _get('/lyrics/$videoId');
+      return result is Map<String, dynamic> ? result : {};
+    } catch (e) {
+      print("Error fetching lyrics for $videoId: $e");
+      return {'error': 'Network error: $e'};
+    }
+  }
+
+  // ── v2 Endpoints (Deezer metadata + YouTube playback ID) ─────────────────
+
+  /// Search via Deezer with YouTube video ID matching.
+  /// [type]: tracks | albums | artists
+  Future<Map<String, dynamic>> searchV2(String query, String type, {int limit = 25}) async {
+    final res = await _get('/v2/search', params: {'q': query, 'type': type, 'limit': limit.toString()});
+    return res as Map<String, dynamic>;
+  }
+
+  /// Full Deezer artist profile with YouTube-matched top tracks.
+  Future<Map<String, dynamic>> getArtistV2(int deezerId) async {
+    final res = await _get('/v2/artist/$deezerId');
+    return res as Map<String, dynamic>;
+  }
+
+  /// Artist top tracks from Deezer with YouTube video IDs.
+  Future<Map<String, dynamic>> getArtistTopV2(int deezerId, {int limit = 50}) async {
+    final res = await _get('/v2/artist/$deezerId/top', params: {'limit': limit.toString()});
+    return res as Map<String, dynamic>;
+  }
+
+  /// Artist albums from Deezer.
+  Future<Map<String, dynamic>> getArtistAlbumsV2(int deezerId, {int limit = 100}) async {
+    final res = await _get('/v2/artist/$deezerId/albums', params: {'limit': limit.toString()});
+    return res as Map<String, dynamic>;
+  }
+
+  /// Full Deezer album with YouTube-matched tracks.
+  Future<Map<String, dynamic>> getAlbumV2(int deezerId) async {
+    final res = await _get('/v2/album/$deezerId');
+    return res as Map<String, dynamic>;
+  }
+
+  /// Single Deezer track with YouTube video ID.
+  Future<Map<String, dynamic>> getTrackV2(int deezerId) async {
+    final res = await _get('/v2/track/$deezerId');
+    return res as Map<String, dynamic>;
+  }
+
+  /// Deezer chart data (tracks, albums, artists).
+  Future<Map<String, dynamic>> getChartV2() async {
+    final res = await _get('/v2/chart');
+    return res as Map<String, dynamic>;
+  }
 }

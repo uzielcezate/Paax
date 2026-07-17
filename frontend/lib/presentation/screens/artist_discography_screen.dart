@@ -34,6 +34,8 @@ class ArtistDiscographyScreen extends StatefulWidget {
 
 class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
   int _selectedFilter = 0; // 0=All, 1=Albums, 2=Singles & EPs
+  final ScrollController _scrollController = ScrollController();
+  final ValueNotifier<double> _scrollOffset = ValueNotifier(0.0);
 
   static const _filterLabels = ['All', 'Albums', 'Singles & EPs'];
 
@@ -49,6 +51,16 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
     _allReleases = [...widget.albums, ...widget.singles]
       ..sort(_compareByYearDesc);
     _latestRelease = _allReleases.isNotEmpty ? _allReleases.first : null;
+    _scrollController.addListener(() {
+      _scrollOffset.value = _scrollController.offset;
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _scrollOffset.dispose();
+    super.dispose();
   }
 
   int _compareByYearDesc(SavedAlbum a, SavedAlbum b) {
@@ -75,15 +87,16 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
-    // Pill height (46) + spacing (6+12) + chips height (40) + spacing (12)
-    final fixedHeaderHeight = topPadding + 6 + 46 + 12 + 40 + 12;
+    // Header: status bar + 6 + title row (40) + 10 + chips (34) + 12
+    final fixedHeaderHeight = topPadding + 6 + 40 + 10 + 34 + 12;
 
     return Scaffold(
-      backgroundColor: widget.dominantColor,
+      backgroundColor: AppColors.background,
       body: Stack(
         children: [
           // ── Scrollable content ──────────────────────────────────
           CustomScrollView(
+            controller: _scrollController,
             slivers: [
               // Spacer for fixed header
               SliverToBoxAdapter(child: SizedBox(height: fixedHeaderHeight)),
@@ -93,58 +106,128 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
             ],
           ),
 
-          // ── Top fade gradient — dynamic color, 75% intensity ──
-          DynamicEdgeFade.dynamic(
-            key: ValueKey('fade_top_discography_${widget.artistName}'),
-            color: widget.dominantColor,
-          ),
-
           // Bottom fade — dissolves content behind mini player / nav
           DynamicEdgeFade.dynamicBottom(
             key: ValueKey('fade_bot_discography_${widget.artistName}'),
-            color: widget.dominantColor,
+            color: AppColors.background,
           ),
 
-          // ── Pinned floating controls ──────────────────────────
           Positioned(
-            top: topPadding + 6,
-            left: 12,
-            right: 12,
+            top: 0,
+            left: 0,
+            right: 0,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Pill
-                ScrolledTopPill(
-                  title: 'Discography',
-                  foregroundColor: widget.foregroundColor,
-                  onBack: () => Navigator.pop(context),
-                ),
-                const SizedBox(height: 12),
-                // Glass-style filter chips with real blur
-                Builder(builder: (context) {
-                  final isLightBg = DominantColorService.isLight(widget.dominantColor);
-                  final chipSelectedColor = isLightBg ? Colors.black : Colors.white;
-                  final chipSelectedTextColor = isLightBg ? Colors.white : Colors.black;
-                  return SizedBox(
-                  height: 40,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const ClampingScrollPhysics(),
-                    children: List.generate(_filterLabels.length, (i) {
-                      final selected = _selectedFilter == i;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: GlassChip(
-                          label: _filterLabels[i],
-                          selected: selected,
-                          selectedColor: chipSelectedColor,
-                          textColor: selected ? chipSelectedTextColor : widget.foregroundColor.withOpacity(0.8),
-                          onTap: () => setState(() => _selectedFilter = i),
+                // Title bar
+                Container(
+                  color: AppColors.background,
+                  padding: EdgeInsets.only(top: topPadding),
+                  child: SizedBox(
+                    height: 58,
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          left: 4,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: IconButton(
+                              icon: Icon(Icons.arrow_back_ios_new_rounded, color: widget.foregroundColor, size: 24),
+                              onPressed: () => Navigator.pop(context),
+                            ),
+                          ),
                         ),
-                      );
-                    }),
+                        Positioned.fill(
+                          child: Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 56),
+                              child: Text(
+                                'Discography',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: widget.foregroundColor,
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  );
-                }),
+                ),
+                // Filter chips row
+                Container(
+                  color: AppColors.background,
+                  padding: const EdgeInsets.only(left: 16, bottom: 12),
+                  child: Builder(builder: (context) {
+                    final isLightBg = DominantColorService.isLight(widget.dominantColor);
+                    final chipSelectedColor = isLightBg ? Colors.black : Colors.white;
+                    final chipSelectedTextColor = isLightBg ? Colors.white : Colors.black;
+                    return SizedBox(
+                      height: 34,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const ClampingScrollPhysics(),
+                        children: List.generate(_filterLabels.length, (i) {
+                          final selected = _selectedFilter == i;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: GestureDetector(
+                              onTap: () => setState(() => _selectedFilter = i),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: selected ? chipSelectedColor : AppColors.surface,
+                                  borderRadius: BorderRadius.circular(17),
+                                ),
+                                child: Text(
+                                  _filterLabels[i],
+                                  style: TextStyle(
+                                    color: selected ? chipSelectedTextColor : widget.foregroundColor.withOpacity(0.8),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ),
+                    );
+                  }),
+                ),
+                // Scroll-triggered fade tail below controls
+                ValueListenableBuilder<double>(
+                  valueListenable: _scrollOffset,
+                  builder: (_, offset, __) {
+                    final fadeOpacity = (offset / 8.0).clamp(0.0, 1.0);
+                    return IgnorePointer(
+                      child: Opacity(
+                        opacity: fadeOpacity,
+                        child: Container(
+                          height: 45,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                AppColors.background,
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ],
             ),
           ),

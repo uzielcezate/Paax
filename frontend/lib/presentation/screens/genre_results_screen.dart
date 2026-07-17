@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../widgets/error_state_widget.dart';
 import '../../domain/repositories/music_repository.dart';
 import '../../data/repositories/music_repository_impl.dart';
 import '../../domain/entities/track.dart';
@@ -9,6 +10,7 @@ import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
 import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
+
 import '../widgets/music_card.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/bottom_content_padding.dart';
@@ -52,17 +54,17 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
 
   // Dynamic color from genre gradient
   Color get _dominantColor => widget.gradientColors.first;
-  Color get _foregroundColor => DominantColorService.foregroundOn(widget.gradientColors.first);
+  Color get _foregroundColor => Colors.white;
 
   @override
   void initState() {
     super.initState();
     _prefetcher = ThumbnailPrefetcher(context);
+
     _scrollController = ScrollController();
     _scrollController.addListener(() {
       // Threshold: when collapsed enough that title should show
-      // Using 200 as a safe bet for "near top"
-      final showTitle = _scrollController.hasClients && _scrollController.offset > 200;
+      final showTitle = _scrollController.hasClients && _scrollController.offset > 120;
       if (showTitle != _showTitle) {
         setState(() => _showTitle = showTitle);
       }
@@ -98,11 +100,10 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       setState(() { _isLoading = true; _error = null; });
       
       // Use search-based approach to get songs, albums, artists for this genre
-      // This avoids playlist endpoints completely
       final results = await Future.wait([
         _repository.searchTracks('${widget.genreSlug} top songs'),
         _repository.searchAlbums('${widget.genreSlug} top albums'),
-        _repository.searchArtists('${widget.genreSlug} music'),  // Broader search for more results
+        _repository.searchArtists('${widget.genreSlug} music'),
       ]);
 
       setState(() {
@@ -132,163 +133,208 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
-          // Full-screen genre-colored background — one flat solid color
-          Positioned.fill(
-            child: Container(color: _dominantColor),
-          ),
           CustomScrollView(
-        controller: _scrollController,
-        slivers: [
-          _buildSliverAppBar(),
-          if (_isLoading)
-            SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator(color: _foregroundColor)),
-            )
-          else if (_error != null)
-            SliverFillRemaining(
-              child: Center(child: Text("Error: $_error", style: const TextStyle(color: Colors.white))),
-            )
-          else ...[
-            // === SPACE ===
-            const SliverToBoxAdapter(child: SizedBox(height: 20)),
-
-            // === TOP SONGS HEADER ===
-            if (_tracks.isNotEmpty)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text("Top Songs", style: TextStyle(color: _foregroundColor, fontSize: 20, fontWeight: FontWeight.bold)),
-                      TextButton.icon(
-                        onPressed: _showAddToPlaylistSheet,
-                        icon: Icon(Icons.playlist_add, color: _foregroundColor, size: 20),
-                        label: Text("Add all", style: TextStyle(color: _foregroundColor, fontSize: 14)),
+            controller: _scrollController,
+            slivers: [
+              _buildSliverAppBar(),
+              if (_isLoading)
+                const SliverFillRemaining(
+                  child: Center(child: CircularProgressIndicator(color: Colors.white)),
+                )
+              else if (_error != null)
+                SliverFillRemaining(
+                  child: ErrorStateWidget(
+                    rawError: _error,
+                    foregroundColor: _foregroundColor,
+                    onRetry: _fetchGenreContent,
+                  ),
+                )
+              else ...[
+                // === TOP SONGS HEADER ===
+                if (_tracks.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text("Top Songs", style: TextStyle(color: _foregroundColor, fontSize: 20, fontWeight: FontWeight.w800)),
+                          TextButton.icon(
+                            onPressed: _showAddToPlaylistSheet,
+                            icon: Icon(Icons.playlist_add, color: _foregroundColor, size: 20),
+                            label: Text("Add all", style: TextStyle(color: _foregroundColor, fontSize: 14)),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
 
-             // === TOP SONGS LIST (Lazy) ===
-             if (_tracks.isNotEmpty)
-                SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final track = _tracks[index];
-                      // If collapsed, only show first 5
-                      if (!_songsExpanded && index >= 5) return null;
-                      
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 4.0, left: 16, right: 16),
-                        child: TrackListTile(
-                          track: track,
-                          index: index + 1,
-                          showArtwork: true,
-                          foregroundColor: _foregroundColor,
-                          onTap: () => context.read<PlaybackController>().playQueue(_tracks, index: index),
-                        ),
-                      );
-                    },
-                    childCount: _songsExpanded ? _tracks.length : 5.clamp(0, _tracks.length),
+                // === TOP SONGS LIST (Lazy) ===
+                if (_tracks.isNotEmpty)
+                  SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final track = _tracks[index];
+                        // If collapsed, only show first 5
+                        if (!_songsExpanded && index >= 5) return null;
+                        
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 2.0),
+                          child: TrackListTile(
+                            track: track,
+                            index: index + 1,
+                            showArtwork: true,
+                            foregroundColor: _foregroundColor,
+                            allowSwipeActions: true,
+                            onTap: () => context.read<PlaybackController>().playQueue(_tracks, index: index),
+                          ),
+                        );
+                      },
+                      childCount: _songsExpanded ? _tracks.length : 5.clamp(0, _tracks.length),
+                    ),
                   ),
-                ),
-            
-            // === EXPAND BUTTON ===
-            if (_tracks.length > 5)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Center(
-                    child: GestureDetector(
-                      onTap: () => setState(() => _songsExpanded = !_songsExpanded),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: _foregroundColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: _foregroundColor.withOpacity(0.2), width: 0.5),
-                        ),
-                        child: Text(
-                          _songsExpanded ? "Show less" : "See all ${_tracks.length} songs",
-                          style: TextStyle(
-                            color: _foregroundColor,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
+              
+                // === EXPAND BUTTON ===
+                if (_tracks.length > 5)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                      child: Center(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _songsExpanded = !_songsExpanded),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _foregroundColor.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: _foregroundColor.withOpacity(0.2), width: 0.5),
+                            ),
+                            child: Text(
+                              _songsExpanded ? "Show less" : "See all ${_tracks.length} songs",
+                              style: TextStyle(
+                                color: _foregroundColor,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ),
 
-             const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                const SliverToBoxAdapter(child: SizedBox(height: 6)),
 
-             // === TOP ALBUMS ===
-             if (_albums.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                       _buildSectionHeader("Top Albums"),
-                       _buildAlbumsCarousel(),
-                       const SizedBox(height: 24),
-                    ],
+                // === TOP ALBUMS ===
+                if (_albums.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildSectionHeader("Top Albums"),
+                        _buildAlbumsCarousel(),
+                        const SizedBox(height: 4),
+                      ],
+                    ),
                   ),
-                ),
 
-             // === TOP ARTISTS ===
-             if (_artists.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                       _buildSectionHeader("Top Artists"),
-                       _buildArtistsCarousel(),
-                       const SizedBox(height: 24),
-                    ],
+                // === TOP ARTISTS ===
+                if (_artists.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildSectionHeader("Top Artists"),
+                        _buildArtistsCarousel(),
+                        const SizedBox(height: 4),
+                      ],
+                    ),
                   ),
-                ),
-                
-             const SliverToBoxAdapter(child: BottomContentPadding()),
-          ],
-        ],
-      ),
-
-          // Top fade gradient — matches genre color
-          DynamicEdgeFade.dynamic(
-            key: ValueKey('fade_top_genre_${widget.genreSlug}'),
-            color: _dominantColor,
+                  
+                const SliverToBoxAdapter(child: BottomContentPadding()),
+              ],
+            ],
           ),
 
-          // Bottom fade — dissolves content behind mini player / nav
+
+          // Bottom fade
           DynamicEdgeFade.dynamicBottom(
             key: ValueKey('fade_bot_genre_${widget.genreSlug}'),
-            color: _dominantColor,
+            color: AppColors.background,
           ),
 
-          // Floating controls
-          FloatingTopControls(
-            showScrolledPill: _showTitle,
-            topPadding: MediaQuery.of(context).padding.top,
-            defaultControls: Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.center,
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                GlassCircleButton(
-                  icon: Icons.arrow_back_ios_new,
-                  iconSize: 18,
-                  iconColor: _foregroundColor,
-                  onPressed: () => Navigator.pop(context),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  color: _showTitle ? AppColors.background : Colors.transparent,
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top,
+                  ),
+                  child: SizedBox(
+                    height: 58,
+                    child: Stack(
+                      children: [
+                        // Left: back button — fixed position
+                        Positioned(
+                          left: 4,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: IconButton(
+                              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 24),
+                              onPressed: () => Navigator.pop(context),
+                            ),
+                          ),
+                        ),
+                        // Center: title — absolute center
+                        Positioned.fill(
+                          child: Center(
+                            child: AnimatedOpacity(
+                              opacity: _showTitle ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 150),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 56),
+                                child: Text(
+                                  widget.genreSlug,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Soft bottom fade overlay
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  height: 45,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        _showTitle ? AppColors.background : Colors.transparent,
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
                 ),
               ],
-            ),
-            scrolledPill: ScrolledTopPill(
-              title: widget.genreSlug,
-              foregroundColor: _foregroundColor,
-              onBack: () => Navigator.pop(context),
             ),
           ),
         ],
@@ -297,8 +343,7 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
   }
 
   Widget _buildSliverAppBar() {
-    final expandedHeight = Responsive.value(context, mobile: 320.0, tablet: 380.0, desktop: 420.0); // Slightly taller to match Artist
-    final threshold = expandedHeight - kToolbarHeight - 50; // Trigger earlier
+    final expandedHeight = Responsive.value(context, mobile: 240.0, tablet: 260.0, desktop: 280.0);
 
     return SliverAppBar(
       pinned: true,
@@ -316,52 +361,37 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
         background: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: widget.gradientColors.length > 1
-                  ? widget.gradientColors
-                  : [widget.gradientColors.first, _dominantColor],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Color.lerp(_dominantColor, Colors.black, 0.82) ?? const Color(0xFF181818),
+                AppColors.background,
+              ],
             ),
           ),
           child: Stack(
             fit: StackFit.expand,
             children: [
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      _dominantColor.withOpacity(0.05),
-                      _dominantColor.withOpacity(0.4),
-                      _dominantColor.withOpacity(0.85),
-                      _dominantColor,
-                    ],
-                    stops: const [0.4, 0.65, 0.92, 1.0],
-                  ),
-                ),
-              ),
               Positioned(
-                bottom: 24,
-                left: Responsive.spacing(context),
-                right: Responsive.spacing(context),
+                bottom: 16,
+                left: 20,
+                right: 20,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.music_note_rounded, size: 80, color: _foregroundColor.withOpacity(0.9)),
+                    Icon(Icons.music_note_rounded, size: 64, color: _foregroundColor.withOpacity(0.85)),
                     const SizedBox(height: 8),
                     Text(
                       widget.genreSlug,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontFamily: 'Roboto',
-                        fontSize: Responsive.fontSize(context, 48, min: 36, max: 64),
+                        fontSize: 32,
                         fontWeight: FontWeight.w900,
+                        letterSpacing: -0.5,
                         color: _foregroundColor,
                         height: 1.1,
-                        shadows: [Shadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4))]
                       ),
                     ),
                   ],
@@ -376,76 +406,8 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
 
   Widget _buildSectionHeader(String title) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Text(title, style: TextStyle(color: _foregroundColor, fontSize: 20, fontWeight: FontWeight.bold)),
-    );
-  }
-
-  // === TOP SONGS SECTION (5 + expandable to 50) ===
-  Widget _buildSongsSection() {
-    final displayTracks = _songsExpanded ? _tracks : _tracks.take(5).toList();
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Header with "Add all to playlist" button
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text("Top Songs", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-              TextButton.icon(
-                onPressed: _showAddToPlaylistSheet,
-                icon: Icon(Icons.playlist_add, color: _foregroundColor, size: 20),
-                label: Text("Add all", style: TextStyle(color: _foregroundColor, fontSize: 14)),
-              ),
-            ],
-          ),
-        ),
-        
-        // Track list
-        ...displayTracks.asMap().entries.map((entry) {
-          final index = entry.key;
-          final track = entry.value;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 4.0, left: 16, right: 16),
-            child: TrackListTile(
-              track: track,
-              index: index + 1,
-              showArtwork: true,
-              onTap: () => context.read<PlaybackController>().playQueue(_tracks, index: _tracks.indexOf(track)),
-            ),
-          );
-        }),
-        
-        // See all / Collapse button
-        if (_tracks.length > 5)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Center(
-              child: GestureDetector(
-                onTap: () => setState(() => _songsExpanded = !_songsExpanded),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _foregroundColor.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: _foregroundColor.withOpacity(0.2), width: 0.5),
-                  ),
-                  child: Text(
-                    _songsExpanded ? "Show less" : "See all ${_tracks.length} songs",
-                    style: TextStyle(
-                      color: _foregroundColor,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Text(title, style: TextStyle(color: _foregroundColor, fontSize: 20, fontWeight: FontWeight.w800)),
     );
   }
 

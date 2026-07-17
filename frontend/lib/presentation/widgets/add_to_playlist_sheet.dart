@@ -13,15 +13,38 @@ class AddToPlaylistSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.55,
+      minChildSize: 0.3,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) => _AddToPlaylistContent(
+        tracks: tracks,
+        scrollController: scrollController,
+      ),
+    );
+  }
+}
+
+class _AddToPlaylistContent extends StatelessWidget {
+  final List<Track> tracks;
+  final ScrollController scrollController;
+
+  const _AddToPlaylistContent({
+    required this.tracks,
+    required this.scrollController,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     final library = context.watch<LibraryController>();
     final playlists = library.playlists;
-    // Pure black sheet — lightweight, performant
-    const sheetBg = Color(0xFF000000);
+    // Solid surface sheet — unified design
+    const sheetBg = AppColors.surface;
     const sheetFg = Colors.white;
+    final bottomSafe = MediaQuery.of(context).padding.bottom;
 
     return Container(
-      height: MediaQuery.of(context).size.height * 0.6,
-      padding: const EdgeInsets.symmetric(vertical: 24),
       decoration: BoxDecoration(
         color: sheetBg, 
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -30,11 +53,18 @@ class AddToPlaylistSheet extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 40, height: 4,
-            margin: const EdgeInsets.only(bottom: 20),
-            decoration: BoxDecoration(color: const Color(0xFF333333), borderRadius: BorderRadius.circular(2)),
+          // Drag handle
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFF333333),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
           ),
+          const SizedBox(height: 8),
           Text(
             "Add to Playlist",
             style: TextStyle(color: sheetFg, fontSize: 18, fontWeight: FontWeight.bold),
@@ -54,12 +84,12 @@ class AddToPlaylistSheet extends StatelessWidget {
           
           Expanded(
             child: ListView.builder(
-              shrinkWrap: true,
+              controller: scrollController,
               physics: const BouncingScrollPhysics(),
+              padding: EdgeInsets.only(bottom: bottomSafe + 24),
               itemCount: playlists.length,
               itemBuilder: (context, index) {
                 final pl = playlists[index];
-                // Only show check if adding a single track that is already in playlist
                 final bool isSingle = tracks.length == 1;
                 final alreadyAdded = isSingle && pl.tracks.any((t) => t.id == tracks.first.id);
                 return ListTile(

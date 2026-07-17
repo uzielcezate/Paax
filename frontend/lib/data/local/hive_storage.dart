@@ -256,5 +256,84 @@ class HiveStorage {
     await _settings.clear();
     await _recentlyPlayed.clear();
   }
+  // Hidden Tracks — stored as a list of track IDs in settings box
+  static const String _hiddenTracksKey = 'hidden_track_ids';
 
+  static Set<String> getHiddenTrackIds() {
+    final list = _settings.get(_hiddenTracksKey, defaultValue: <String>[]);
+    return Set<String>.from(list is List ? list.cast<String>() : <String>[]);
+  }
+
+  static Future<void> toggleHideTrack(String trackId) async {
+    final ids = getHiddenTrackIds();
+    if (ids.contains(trackId)) {
+      ids.remove(trackId);
+    } else {
+      ids.add(trackId);
+    }
+    await _settings.put(_hiddenTracksKey, ids.toList());
+  }
+
+  static bool isTrackHidden(String trackId) {
+    return getHiddenTrackIds().contains(trackId);
+  }
+
+  // Pinned Playlists — stored as Map<playlistId, pinnedAtMillis> in settings box
+  static const String _pinnedPlaylistsKey = 'pinned_playlist_map';
+  static const int maxPinnedPlaylists = 5;
+
+  /// Returns {playlistId: pinnedAtMillisecondsSinceEpoch}
+  static Map<String, int> getPinnedPlaylistMap() {
+    final raw = _settings.get(_pinnedPlaylistsKey);
+    if (raw is Map) {
+      return Map<String, int>.from(
+        raw.map((k, v) => MapEntry(k.toString(), v is int ? v : 0)),
+      );
+    }
+    return {};
+  }
+
+  static bool isPlaylistPinned(String playlistId) {
+    return getPinnedPlaylistMap().containsKey(playlistId);
+  }
+
+  static int pinnedCount() => getPinnedPlaylistMap().length;
+
+  /// Pin a playlist. Returns true if pinned, false if limit reached.
+  static Future<bool> pinPlaylist(String playlistId) async {
+    final map = getPinnedPlaylistMap();
+    if (map.containsKey(playlistId)) return true; // already pinned
+    if (map.length >= maxPinnedPlaylists) return false; // limit
+    map[playlistId] = DateTime.now().millisecondsSinceEpoch;
+    await _settings.put(_pinnedPlaylistsKey, map);
+    return true;
+  }
+
+  /// Unpin a playlist. Always succeeds.
+  static Future<void> unpinPlaylist(String playlistId) async {
+    final map = getPinnedPlaylistMap();
+    map.remove(playlistId);
+    await _settings.put(_pinnedPlaylistsKey, map);
+  }
+
+  /// Toggle pin state. Returns true if now pinned, false if unpinned, null if limit.
+  static Future<bool?> togglePinPlaylist(String playlistId) async {
+    if (isPlaylistPinned(playlistId)) {
+      await unpinPlaylist(playlistId);
+      return false;
+    } else {
+      final ok = await pinPlaylist(playlistId);
+      return ok ? true : null; // null = limit reached
+    }
+  }
+
+  /// Clean up pinned entries for playlists that no longer exist.
+  static Future<void> cleanPinnedPlaylists(Set<String> existingIds) async {
+    final map = getPinnedPlaylistMap();
+    final cleaned = Map<String, int>.from(map)
+      ..removeWhere((id, _) => !existingIds.contains(id));
+    if (cleaned.length != map.length) {
+      await _settings.put(_pinnedPlaylistsKey, cleaned);
+    }
+  }
 }

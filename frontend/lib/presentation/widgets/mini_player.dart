@@ -3,163 +3,164 @@ import 'package:provider/provider.dart';
 import '../../domain/entities/track.dart';
 import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
-import '../state/theme_state.dart';
-import '../screens/player_screen.dart';
+import '../screens/main_wrapper.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/image/lh3_url_builder.dart';
 import 'app_image.dart';
-import 'glass_surface.dart';
+import 'marquee_text.dart';
+import 'explicit_badge.dart';
 
-class MiniPlayer extends StatelessWidget {
+class MiniPlayer extends StatefulWidget {
   const MiniPlayer({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    // Select only the current track to avoid rebuilding on position change
-    final track = context.select<PlaybackController, Track?>((controller) => controller.currentTrack);
-    final fgColor = context.watch<ThemeState>().foregroundColor;
+  State<MiniPlayer> createState() => _MiniPlayerState();
+}
 
+class _MiniPlayerState extends State<MiniPlayer> {
+  final MarqueeController _marqueeSync = MarqueeController();
+
+  @override
+  void dispose() {
+    _marqueeSync.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final track = context.select<PlaybackController, Track?>((c) => c.currentTrack);
     if (track == null) return const SizedBox.shrink();
 
     return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) => const PlayerScreen(),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) {
-              const begin = Offset(0.0, 1.0);
-              const end = Offset.zero;
-              const curve = Curves.ease;
-              var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-              return SlideTransition(position: animation.drive(tween), child: child);
-            },
-          ),
-        );
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: GlassSurface(
-          height: 52,
-          borderRadius: BorderRadius.circular(26),
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          child: Stack(
-            children: [
-              // Progress Bar (Top Edge)
-              Positioned(
-                top: 0,
-                left: 16,
-                right: 16,
-                height: 2,
-                child: Builder(
-                  builder: (context) {
-                     final controller = context.read<PlaybackController>();
-                     return ValueListenableBuilder<Duration>(
-                       valueListenable: controller.positionNotifier,
-                       builder: (context, position, _) {
-                         int durationMs = controller.duration.inMilliseconds;
-                         if (durationMs <= 0) durationMs = 1;
-                         
-                         final progress = (position.inMilliseconds / durationMs).clamp(0.0, 1.0);
-                         
-                         return ClipRRect(
-                           borderRadius: BorderRadius.circular(1),
-                           child: LinearProgressIndicator(
-                             value: progress,
-                             backgroundColor: Colors.white10,
-                             valueColor: const AlwaysStoppedAnimation(AppColors.primaryEnd),
-                             minHeight: 2,
-                           ),
-                         );
-                       }
-                     );
-                  }
-                ),
-              ),
-
-              // Content Row
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
+      onTap: () => MainWrapper.shellKey.currentState?.openPlayer(),
+      child: Container(
+        // Full-width, edge-to-edge with small horizontal margin
+        margin: const EdgeInsets.symmetric(horizontal: 8),
+        height: 67,
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          children: [
+            // ── Content row ──
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: Row(
                   children: [
-                    // Artwork
-                    Hero(
-                      tag: "mini_player_art_${track.id}",
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(18),
-                        child: AppImage(
-                          url: track.artworkUrl,
-                          sizePx: Lh3UrlBuilder.miniPlayerSize,
-                          width: 36,
-                          height: 36,
-                          fit: BoxFit.cover,
-                          borderRadius: 18,
-                          forceLoad: true,
-                        ),
+                    // Cover art
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: AppImage(
+                        url: track.artworkUrl,
+                        sizePx: Lh3UrlBuilder.miniPlayerSize,
+                        width: 48,
+                        height: 48,
+                        fit: BoxFit.cover,
+                        borderRadius: 6,
+                        forceLoad: true,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    
+                    const SizedBox(width: 10),
+
                     // Title & Artist
                     Expanded(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            track.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: fgColor),
+                          MarqueeText(
+                            text: track.title,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5,
+                              color: Colors.white,
+                            ),
+                            controller: _marqueeSync,
+                            prefix: track.isExplicit
+                                ? const ExplicitBadge(foregroundColor: Colors.white, scale: 0.85)
+                                : null,
                           ),
-                          Text(
-                            track.displayArtist,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: fgColor.withValues(alpha: 0.55), fontSize: 12),
+                          MarqueeText(
+                            text: track.displayArtist,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w400,
+                            ),
+                            controller: _marqueeSync,
                           ),
                         ],
                       ),
                     ),
-                    
-                    // Like Button
+
+                    // Like button
                     Consumer<LibraryController>(
                       builder: (context, lib, _) => IconButton(
                         icon: Icon(
                           lib.isLiked(track) ? Icons.favorite : Icons.favorite_border,
-                          size: 22,
+                          size: 23,
                         ),
-                        color: lib.isLiked(track) ? AppColors.primaryEnd : fgColor.withValues(alpha: 0.7),
+                        color: lib.isLiked(track) ? Colors.white : Colors.white70,
                         onPressed: () => lib.toggleLike(track),
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                       ),
                     ),
-                    
-                    // Play/Pause Button
+
+                    // Play/Pause button
                     Selector<PlaybackController, bool>(
-                      selector: (_, controller) => controller.isPlaying,
-                      builder: (context, isPlaying, _) {
-                        return IconButton(
-                          icon: Icon(
-                            isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                            size: 26,
-                          ),
-                          color: fgColor,
-                          onPressed: () {
-                            context.read<PlaybackController>().togglePlayPause();
-                          },
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                        );
-                      }
+                      selector: (_, c) => c.isPlaying,
+                      builder: (context, isPlaying, _) => IconButton(
+                        icon: Icon(
+                          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          size: 30,
+                        ),
+                        color: Colors.white,
+                        onPressed: () => context.read<PlaybackController>().togglePlayPause(),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+                      ),
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
+            ),
+
+            // ── Progress bar — bottom edge, full width ──
+            SizedBox(
+              height: 2,
+              child: Builder(
+                builder: (context) {
+                  final controller = context.read<PlaybackController>();
+                  return ValueListenableBuilder<Duration>(
+                    valueListenable: controller.positionNotifier,
+                    builder: (context, position, _) {
+                      int durationMs = controller.duration.inMilliseconds;
+                      if (durationMs <= 0) durationMs = 1;
+                      final progress = (position.inMilliseconds / durationMs).clamp(0.0, 1.0);
+
+                      return ClipRRect(
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(8),
+                          bottomRight: Radius.circular(8),
+                        ),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          backgroundColor: Colors.white.withValues(alpha: 0.08),
+                          valueColor: const AlwaysStoppedAnimation(Colors.white70),
+                          minHeight: 2,
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -1,39 +1,149 @@
-import 'dart:ui';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'paax_glass_container.dart';
+import '../../core/theme/app_colors.dart';
 
-/// ─── Glass Design Tokens ────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// Paax Surface System — Phase 1 (Cinematic Black)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Simple dark surfaces without BackdropFilter.
+// All glass widgets now render as solid dark containers with subtle borders.
+// No blur, no heavy shaders, no refraction.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// ─── Design Tokens ──────────────────────────────────────────────────────────
+class BeatyGlassTokens {
+  BeatyGlassTokens._();
+
+  // Dimensions
+  static const double heightCompact = 38.0;
+  static const double heightRegular = 44.0;
+  static const double radius = 16.0;
+  static const double radiusPill = 24.0;
+
+  // Fill
+  static const double tintOpacity = 0.32;
+  static const double tintOpacityLight = 0.18;
+
+  // Border
+  static const double borderOpacity = 0.08;
+  static const double borderWidth = 0.5;
+
+  // Shadow
+  static const double shadowOpacity = 0.18;
+
+  // Spacing
+  static const double hPadding = 14.0;
+  static const double vPadding = 8.0;
+
+  // Inner highlight gradient strength
+  static const double highlightOpacity = 0.06;
+}
+
+/// Legacy alias — some consumers reference `GlassTokens`.
 class GlassTokens {
   GlassTokens._();
 
-  // Strong blur for true frosted-glass look
-  static const double blurSigma = 22.0;
+  static const double blurSigma = 0; // No blur
+  static Color fill = AppColors.surface;
+  static Color border = Colors.white.withOpacity(BeatyGlassTokens.borderOpacity);
+  static const double borderWidth = BeatyGlassTokens.borderWidth;
+  static Color fillLight = AppColors.elevatedSurface;
 
-  // Very subtle white tint — clear frosted glass over pure black
-  static Color fill = Colors.white.withOpacity(0.045);
-  // Thinner, more subtle bubble border
-  static Color border = Colors.white.withOpacity(0.08);
-  static const double borderWidth = 0.4;
-  static Color fillLight = Colors.white.withOpacity(0.025);
-
-  // Subtle floating shadow — creates iOS-style depth
   static List<BoxShadow> softShadow = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.35),
-      blurRadius: 20,
-      spreadRadius: -2,
-      offset: const Offset(0, 4),
+      color: Colors.black.withOpacity(0.10),
+      blurRadius: 12,
+      spreadRadius: 0,
+      offset: const Offset(0, 1),
     ),
     BoxShadow(
-      color: Colors.black.withOpacity(0.15),
-      blurRadius: 8,
-      offset: const Offset(0, 2),
+      color: Colors.black.withOpacity(0.05),
+      blurRadius: 6,
+      spreadRadius: -1,
+      offset: Offset.zero,
     ),
   ];
 }
 
-/// ─── GlassSurface ───────────────────────────────────────────────────────────
+/// ─── BlurCapability (disabled — always solid) ───────────────────────────────
+class BlurCapability {
+  static bool? _canBlur;
+  static bool forceSolidGlass = true; // Always solid
+
+  static bool canBlur(BuildContext context) => false;
+  static void reset() => _canBlur = null;
+}
+
+/// ─── BeatyGlassSurface ─────────────────────────────────────────────────────
+/// Solid dark surface container. No BackdropFilter.
+class BeatyGlassSurface extends StatelessWidget {
+  final Widget child;
+  final double? width;
+  final double? height;
+  final BorderRadius borderRadius;
+  final bool showBorder;
+  final bool showShadow;
+  final bool enableBlur; // Ignored — always solid
+  final EdgeInsetsGeometry? padding;
+  final Color? overrideFill;
+
+  const BeatyGlassSurface({
+    super.key,
+    required this.child,
+    this.width,
+    this.height,
+    this.borderRadius = const BorderRadius.all(Radius.circular(BeatyGlassTokens.radius)),
+    this.showBorder = true,
+    this.showShadow = true,
+    this.enableBlur = true,
+    this.padding,
+    this.overrideFill,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final br = borderRadius;
+
+    final border = showBorder
+        ? Border.all(
+            color: Colors.white.withOpacity(0.08),
+            width: 0.5,
+          )
+        : null;
+
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: br,
+        boxShadow: showShadow
+            ? [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.10),
+                  blurRadius: 10,
+                  spreadRadius: 0,
+                  offset: const Offset(0, 1),
+                ),
+              ]
+            : null,
+      ),
+      child: ClipRRect(
+        borderRadius: br,
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: overrideFill ?? AppColors.surface,
+            borderRadius: br,
+            border: border,
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// ─── GlassSurface (API-compatible wrapper) ──────────────────────────────────
 class GlassSurface extends StatelessWidget {
   final Widget child;
   final double? width;
@@ -60,52 +170,16 @@ class GlassSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // On mobile with blur enabled, use liquid glass
-    if (enableBlur && !kIsWeb) {
-      return PaaxGlassContainer(
-        width: width,
-        height: height,
-        borderRadius: borderRadius.resolve(TextDirection.ltr).topLeft.x,
-        showShadow: showShadow,
-        showBorder: showBorder,
-        padding: padding,
-        overrideFill: overrideFill,
-        child: child,
-      );
-    }
-
-    // Web fallback or blur disabled
-    final innerContainer = Container(
-      padding: padding,
-      decoration: BoxDecoration(
-        color: overrideFill ?? GlassTokens.fill,
-        borderRadius: borderRadius,
-        border: showBorder
-            ? Border.all(color: GlassTokens.border, width: GlassTokens.borderWidth)
-            : null,
-      ),
-      child: child,
-    );
-
-    return Container(
+    return BeatyGlassSurface(
       width: width,
       height: height,
-      decoration: BoxDecoration(
-        borderRadius: borderRadius,
-        boxShadow: showShadow ? GlassTokens.softShadow : null,
-      ),
-      child: ClipRRect(
-        borderRadius: borderRadius,
-        child: enableBlur
-            ? BackdropFilter(
-                filter: ImageFilter.blur(
-                  sigmaX: GlassTokens.blurSigma,
-                  sigmaY: GlassTokens.blurSigma,
-                ),
-                child: innerContainer,
-              )
-            : innerContainer,
-      ),
+      borderRadius: borderRadius,
+      showBorder: showBorder,
+      showShadow: showShadow,
+      enableBlur: enableBlur,
+      padding: padding,
+      overrideFill: overrideFill,
+      child: child,
     );
   }
 }
@@ -123,7 +197,7 @@ class GlassPill extends StatelessWidget {
     super.key,
     required this.child,
     this.width,
-    this.height = 56,
+    this.height = 48,
     this.showShadow = true,
     this.enableBlur = true,
     this.padding,
@@ -131,7 +205,7 @@ class GlassPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassSurface(
+    return BeatyGlassSurface(
       width: width,
       height: height,
       borderRadius: BorderRadius.circular(height / 2),
@@ -144,8 +218,6 @@ class GlassPill extends StatelessWidget {
 }
 
 /// ─── GlassChip ──────────────────────────────────────────────────────────────
-/// A filter chip with real BackdropFilter blur when unselected, and solid
-/// white fill when selected. Used by Search and Discography screens.
 class GlassChip extends StatelessWidget {
   final String label;
   final bool selected;
@@ -171,16 +243,16 @@ class GlassChip extends StatelessWidget {
       return GestureDetector(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(
-            color: selectedColor ?? Colors.white,
+            color: selectedColor ?? Colors.white.withOpacity(0.88),
             borderRadius: BorderRadius.circular(20),
           ),
           child: Text(
             label,
             style: TextStyle(
               color: textColor ?? Colors.black,
-              fontSize: 13,
+              fontSize: 12.5,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -188,21 +260,24 @@ class GlassChip extends StatelessWidget {
       );
     }
 
-    // Unselected — liquid glass on mobile, BackdropFilter on web
     return GestureDetector(
       onTap: onTap,
-      child: PaaxGlassContainer(
-        borderRadius: 20,
-        showShadow: false,
-        showBorder: true,
-        overrideFill: unselectedColor ?? const Color(0x0BFFFFFF),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: unselectedColor ?? AppColors.elevatedSurface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: Colors.white.withOpacity(0.08),
+            width: 0.5,
+          ),
+        ),
         child: Text(
           label,
           style: TextStyle(
-            color: textColor ?? Colors.white.withValues(alpha: 0.8),
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+            color: textColor ?? Colors.white.withOpacity(0.8),
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),
@@ -223,8 +298,8 @@ class GlassCircleButton extends StatelessWidget {
     super.key,
     required this.icon,
     required this.onPressed,
-    this.size = 46,
-    this.iconSize = 20,
+    this.size = 40,
+    this.iconSize = 18,
     this.iconColor = Colors.white,
     this.enableBlur = true,
   });
@@ -233,12 +308,24 @@ class GlassCircleButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onPressed,
-      child: GlassSurface(
+      child: Container(
         width: size,
         height: size,
-        borderRadius: BorderRadius.circular(size / 2),
-        showShadow: true,
-        enableBlur: enableBlur,
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withOpacity(0.08),
+            width: 0.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.10),
+              blurRadius: 8,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
         child: Center(
           child: Icon(icon, size: iconSize, color: iconColor),
         ),
@@ -248,8 +335,6 @@ class GlassCircleButton extends StatelessWidget {
 }
 
 /// ─── GlassMenuButton ────────────────────────────────────────────────────────
-/// The child widget (typically an OverflowMenu) is constrained and centered
-/// with padding so the icon never touches the circle edge.
 class GlassMenuButton extends StatelessWidget {
   final Widget child;
   final double size;
@@ -258,19 +343,30 @@ class GlassMenuButton extends StatelessWidget {
   const GlassMenuButton({
     super.key,
     required this.child,
-    this.size = 46,
+    this.size = 40,
     this.enableBlur = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GlassSurface(
+    return Container(
       width: size,
       height: size,
-      borderRadius: BorderRadius.circular(size / 2),
-      showShadow: true,
-      enableBlur: enableBlur,
-      padding: const EdgeInsets.all(1),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white.withOpacity(0.08),
+          width: 0.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.10),
+            blurRadius: 8,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
       child: Center(
         child: SizedBox(
           width: size - 2,
@@ -283,12 +379,6 @@ class GlassMenuButton extends StatelessWidget {
 }
 
 /// ─── ScrolledTopPill ────────────────────────────────────────────────────────
-/// Floating pill for the scrolled state: [back | title | trailing].
-/// Single BackdropFilter — no double blur.
-/// Height = 46px. Internal back button occupies left 42px (4px pill padding
-/// + 38px hit area) matching the exact left position of the default
-/// GlassCircleButton (which is also 38px wide, left-aligned in the same
-/// 46px-high Positioned container).
 class ScrolledTopPill extends StatelessWidget {
   final String title;
   final VoidCallback onBack;
@@ -306,7 +396,7 @@ class ScrolledTopPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GlassPill(
-      height: 46,
+      height: 40,
       showShadow: true,
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
@@ -315,10 +405,10 @@ class ScrolledTopPill extends StatelessWidget {
             onTap: onBack,
             behavior: HitTestBehavior.opaque,
             child: SizedBox(
-              width: 38,
-              height: 46,
+              width: 34,
+              height: 40,
               child: Center(
-                child: Icon(Icons.arrow_back_ios_new, size: 20, color: foregroundColor),
+                child: Icon(Icons.arrow_back_ios_new, size: 18, color: foregroundColor),
               ),
             ),
           ),
@@ -331,21 +421,21 @@ class ScrolledTopPill extends StatelessWidget {
               style: TextStyle(
                 color: foregroundColor,
                 fontWeight: FontWeight.w800,
-                fontSize: 16,
+                fontSize: 15,
               ),
             ),
           ),
           if (trailing != null)
             SizedBox(
-              width: 42,
-              height: 46,
+              width: 36,
+              height: 40,
               child: Center(child: IconTheme.merge(
                 data: IconThemeData(color: foregroundColor),
                 child: trailing!,
               )),
             )
           else
-            const SizedBox(width: 42),
+            const SizedBox(width: 36),
         ],
       ),
     );
@@ -353,14 +443,6 @@ class ScrolledTopPill extends StatelessWidget {
 }
 
 /// ─── FloatingTopControls ────────────────────────────────────────────────────
-/// Overlay widget that crossfades between separate circles (default)
-/// and a single scrolled pill. Prevents double-blur by only rendering
-/// one set of controls at a time.
-///
-/// Both states render inside a fixed 46px height container.
-/// The defaultControls are padded with 4px horizontal to match the
-/// ScrolledTopPill's internal padding — so circle icons sit at exactly
-/// the same x-position as the pill's back/trailing buttons.
 class FloatingTopControls extends StatelessWidget {
   final bool showScrolledPill;
   final Widget defaultControls;
@@ -377,13 +459,15 @@ class FloatingTopControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const pillRadius = BorderRadius.all(Radius.circular(20));
+
     return Positioned(
-      top: topPadding + 6,
+      top: topPadding + 4,
       left: 12,
       right: 12,
-      height: 46,
+      height: 40,
       child: AnimatedCrossFade(
-        duration: const Duration(milliseconds: 70),
+        duration: const Duration(milliseconds: 60),
         firstCurve: Curves.linear,
         secondCurve: Curves.linear,
         crossFadeState: showScrolledPill ? CrossFadeState.showSecond : CrossFadeState.showFirst,
@@ -397,7 +481,10 @@ class FloatingTopControls extends StatelessWidget {
                 bottom: 0,
                 left: 0,
                 right: 0,
-                child: bottomChild,
+                child: ClipRRect(
+                  borderRadius: pillRadius,
+                  child: bottomChild,
+                ),
               ),
               Positioned(
                 key: topKey,
@@ -405,17 +492,20 @@ class FloatingTopControls extends StatelessWidget {
                 bottom: 0,
                 left: 0,
                 right: 0,
-                child: topChild,
+                child: ClipRRect(
+                  borderRadius: pillRadius,
+                  child: topChild,
+                ),
               ),
             ],
           );
         },
         firstChild: SizedBox(
-          height: 46,
+          height: 40,
           child: defaultControls,
         ),
         secondChild: SizedBox(
-          height: 46,
+          height: 40,
           child: scrolledPill,
         ),
       ),
@@ -425,50 +515,35 @@ class FloatingTopControls extends StatelessWidget {
 
 /// ─── DynamicEdgeFade ────────────────────────────────────────────────────────
 /// Unified edge-fade overlay for ALL screens.
-///
-/// **Static screens** (Home, Search, Profile, Library):
-///   `DynamicEdgeFade.black()`  — classic black fade, full intensity.
-///
-/// **Dynamic detail screens** (Artist, Album, Playlist, Discography, Genre):
-///   `DynamicEdgeFade.dynamic(color: dominantColor, contentId: '...')`
-///   — uses the screen's dominant color at 75 % intensity / 75 % height.
-///
-/// Always wrap with a [ValueKey] based on the content (artistId, albumId, etc.)
-/// so Flutter discards the old widget when navigating between detail pages.
+/// Default color is now AppColors.background (#121212).
 class DynamicEdgeFade extends StatelessWidget {
   final Color color;
   final double height;
   final double maxOpacity;
   final bool fromTop;
 
-  // ── Factory: black fade for static screens ──
   const DynamicEdgeFade.black({
     super.key,
     this.height = 130,
     this.fromTop = true,
-  })  : color = const Color(0xFF000000),
+  })  : color = const Color(0xFF121212),
         maxOpacity = 0.95;
 
-  // ── Factory: dynamic color fade for detail screens ──
-  // 75 % height (130 → 97) and 75 % opacity (0.95 → 0.71)
   const DynamicEdgeFade.dynamic({
     super.key,
     required this.color,
-    this.height = 97,
-    this.maxOpacity = 0.71,
+    this.height = 130,
+    this.maxOpacity = 0.92,
     this.fromTop = true,
   });
 
-  // ── Factory: dynamic bottom fade — stronger to dissolve content ──
-  // behind mini player and bottom nav. Goes nearly opaque at the edge.
   const DynamicEdgeFade.dynamicBottom({
     super.key,
     required this.color,
-    this.height = 200,
+    this.height = 240,
     this.maxOpacity = 0.98,
   }) : fromTop = false;
 
-  // ── Fully custom ──
   const DynamicEdgeFade({
     super.key,
     required this.color,
@@ -482,28 +557,28 @@ class DynamicEdgeFade extends StatelessWidget {
     final begin = fromTop ? Alignment.topCenter : Alignment.bottomCenter;
     final end   = fromTop ? Alignment.bottomCenter : Alignment.topCenter;
 
-    // Bottom fades use a stronger 5-stop gradient that ramps hard
-    // in the lower portion to dissolve content behind mini player/nav.
     final List<Color> colors;
     final List<double> stops;
 
     if (!fromTop) {
       colors = [
         color.withOpacity(maxOpacity),
-        color.withOpacity(maxOpacity * 0.85),
-        color.withOpacity(maxOpacity * 0.45),
-        color.withOpacity(maxOpacity * 0.12),
+        color.withOpacity(maxOpacity * 0.90),
+        color.withOpacity(maxOpacity * 0.65),
+        color.withOpacity(maxOpacity * 0.30),
+        color.withOpacity(maxOpacity * 0.08),
         Colors.transparent,
       ];
-      stops = const [0.0, 0.25, 0.55, 0.80, 1.0];
+      stops = const [0.0, 0.20, 0.40, 0.65, 0.85, 1.0];
     } else {
       colors = [
         color.withOpacity(maxOpacity),
-        color.withOpacity(maxOpacity * 0.58),
-        color.withOpacity(maxOpacity * 0.21),
+        color.withOpacity(maxOpacity * 0.70),
+        color.withOpacity(maxOpacity * 0.35),
+        color.withOpacity(maxOpacity * 0.10),
         Colors.transparent,
       ];
-      stops = const [0.0, 0.3, 0.6, 1.0];
+      stops = const [0.0, 0.25, 0.50, 0.75, 1.0];
     }
 
     return Positioned(
@@ -529,12 +604,11 @@ class DynamicEdgeFade extends StatelessWidget {
 }
 
 /// ─── TopFadeGradient (deprecated — prefer DynamicEdgeFade) ──────────────────
-/// Kept for backward compatibility with Search and other inline usages.
 class TopFadeGradient extends StatelessWidget {
   final double height;
   final Color color;
 
-  const TopFadeGradient({super.key, this.height = 130, this.color = const Color(0xFF000000)});
+  const TopFadeGradient({super.key, this.height = 130, this.color = const Color(0xFF121212)});
 
   @override
   Widget build(BuildContext context) {
@@ -556,7 +630,7 @@ class EdgeGradient extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DynamicEdgeFade(
-      color: const Color(0xFF000000),
+      color: AppColors.background,
       height: height,
       fromTop: fromTop,
     );

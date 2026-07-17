@@ -29,6 +29,13 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Timer? _positionTimer;
   bool _isDisposed = false;
   bool _isReady = false;
+  String? _lastVideoId;
+
+  /// Whether the YouTube player inside the WebView is initialized.
+  bool get isReady => _isReady;
+
+  /// The last video ID that was loaded (for rehydration).
+  String? get lastVideoId => _lastVideoId;
 
   // The widget that will be placed in the tree — built once during initialize()
   late final InAppWebView _webViewWidget;
@@ -219,6 +226,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
   @override
   Future<void> load(String videoId) async {
     if (videoId.isEmpty || _isDisposed || _webViewController == null) return;
+    _lastVideoId = videoId;
     debugPrint('[MobileEngine] Loading: $videoId');
 
     await _webViewController!.evaluateJavascript(source: 'loadVideo("$videoId");');
@@ -228,8 +236,47 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   @override
   Future<void> play() async {
-    await _webViewController?.evaluateJavascript(
-        source: 'if(player)player.playVideo();');
+    if (_isDisposed || _webViewController == null) return;
+
+    // First, try a health check — ask the WebView if player is alive
+    try {
+      final result = await _webViewController!.evaluateJavascript(
+        source: '(function(){ return (player && player.getPlayerState) ? player.getPlayerState() : -99; })()',
+      );
+      final state = int.tryParse(result?.toString() ?? '') ?? -99;
+      debugPrint('[MobileEngine] play() healthcheck state=$state');
+
+      if (state == -99) {
+        // Player object is gone or WebView JS context is dead
+        // Try to reload the last video
+        debugPrint('[MobileEngine] Player not alive, attempting rehydration...');
+        if (_lastVideoId != null && _lastVideoId!.isNotEmpty) {
+          await _webViewController!.evaluateJavascript(
+            source: 'loadVideo("$_lastVideoId");',
+          );
+          return; // loadVideo auto-plays
+        }
+        return;
+      }
+
+      // State 2 = paused, -1 = unstarted, 5 = cued — all resumable
+      await _webViewController!.evaluateJavascript(
+        source: 'if(player)player.playVideo();',
+      );
+    } catch (e) {
+      debugPrint('[MobileEngine] play() error: $e, attempting reload...');
+      // JS evaluation failed entirely — WebView may be suspended
+      // Try reloading the video as a last resort
+      if (_lastVideoId != null && _lastVideoId!.isNotEmpty) {
+        try {
+          await _webViewController!.evaluateJavascript(
+            source: 'loadVideo("$_lastVideoId");',
+          );
+        } catch (e2) {
+          debugPrint('[MobileEngine] Rehydration also failed: $e2');
+        }
+      }
+    }
   }
 
   @override

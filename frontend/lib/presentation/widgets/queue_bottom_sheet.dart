@@ -13,22 +13,34 @@ void showQueueSheet(BuildContext context) {
     useRootNavigator: true,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => const _QueueSheetContent(),
+    builder: (_) => DraggableScrollableSheet(
+      initialChildSize: 0.65,
+      minChildSize: 0.0,
+      maxChildSize: 0.95,
+      snap: true,
+      snapSizes: const [0.0, 0.65, 0.95],
+      shouldCloseOnMinExtent: true,
+      expand: false,
+      builder: (context, scrollController) => _QueueSheetContent(
+        scrollController: scrollController,
+      ),
+    ),
   );
 }
 
 class _QueueSheetContent extends StatelessWidget {
-  const _QueueSheetContent();
+  final ScrollController scrollController;
+
+  const _QueueSheetContent({required this.scrollController});
 
   @override
   Widget build(BuildContext context) {
-    final height = MediaQuery.of(context).size.height * 0.85;
-    // Pure black sheet — lightweight, performant
-    const sheetBg = Color(0xFF000000);
+    // Solid surface sheet — unified design
+    const sheetBg = AppColors.surface;
     const sheetFg = Colors.white;
+    final bottomSafe = MediaQuery.of(context).padding.bottom;
 
     return Container(
-      height: height,
       decoration: BoxDecoration(
         color: sheetBg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -43,18 +55,8 @@ class _QueueSheetContent extends StatelessWidget {
 
           return Column(
             children: [
-              // ── Handle ──
-              Padding(
-                padding: const EdgeInsets.only(top: 12, bottom: 4),
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF333333),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
+              // ── Drag Handle ──
+              _buildDragHandle(),
 
               // ── Header ──
               Padding(
@@ -90,11 +92,25 @@ class _QueueSheetContent extends StatelessWidget {
               Expanded(
                 child: currentTrack == null
                     ? _buildEmptyState()
-                    : _buildQueue(context, playback, currentTrack, upcoming),
+                    : _buildQueue(context, playback, currentTrack, upcoming, scrollController, bottomSafe),
               ),
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildDragHandle() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 4),
+      child: Container(
+        width: 40,
+        height: 4,
+        decoration: BoxDecoration(
+          color: const Color(0xFF333333),
+          borderRadius: BorderRadius.circular(2),
+        ),
       ),
     );
   }
@@ -120,8 +136,12 @@ class _QueueSheetContent extends StatelessWidget {
     PlaybackController playback,
     Track currentTrack,
     List<Track> upcoming,
+    ScrollController scrollCtrl,
+    double bottomSafe,
   ) {
     return CustomScrollView(
+      controller: scrollCtrl,
+      physics: const ClampingScrollPhysics(),
       slivers: [
         // ── Now Playing ──
         SliverToBoxAdapter(
@@ -179,6 +199,11 @@ class _QueueSheetContent extends StatelessWidget {
               ),
             ),
           ),
+
+        // ── Bottom safe area padding ──
+        SliverToBoxAdapter(
+          child: SizedBox(height: bottomSafe + 24),
+        ),
       ],
     );
   }
@@ -294,9 +319,6 @@ class _UpcomingList extends StatelessWidget {
       buildDefaultDragHandles: false,
       itemCount: upcoming.length,
       onReorder: (oldIndex, newIndex) {
-        // ReorderableListView passes raw Flutter indices where newIndex
-        // includes the item being moved. reorderQueue() handles the
-        // adjustment internally — do NOT pre-decrement here.
         playback.reorderQueue(oldIndex, newIndex);
       },
       proxyDecorator: (child, index, animation) {

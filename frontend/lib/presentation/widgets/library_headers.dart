@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 
@@ -15,17 +14,14 @@ class LibraryChipTabs extends StatelessWidget implements PreferredSizeWidget {
   });
 
   @override
-  Size get preferredSize => const Size.fromHeight(72.0);
+  Size get preferredSize => const Size.fromHeight(56.0);
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 72.0,
-      color: AppColors.background,
-      alignment: Alignment.centerLeft,
-      padding: const EdgeInsets.only(bottom: 8), // Bottom spacing
+    return SizedBox(
+      height: 56.0,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         scrollDirection: Axis.horizontal,
         physics: const ClampingScrollPhysics(),
         primary: false,
@@ -35,21 +31,19 @@ class LibraryChipTabs extends StatelessWidget implements PreferredSizeWidget {
           final isSelected = selectedIndex == index;
           return GestureDetector(
             onTap: () => onTabSelected(index),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 100),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
-                color: isSelected ? Colors.white : Colors.white.withOpacity(0.05),
-                border: isSelected ? null : Border.all(color: Colors.white.withOpacity(0.1)),
-              ),
+            child: Container(
               alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.white : AppColors.surface,
+                borderRadius: BorderRadius.circular(18),
+              ),
               child: Text(
                 tabs[index],
                 style: TextStyle(
-                  color: isSelected ? Colors.black : Colors.white70,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                  fontSize: 14,
+                  color: isSelected ? const Color(0xFF121212) : Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
                 ),
               ),
             ),
@@ -74,74 +68,17 @@ class SearchSortHeaderDelegate extends SliverPersistentHeaderDelegate {
   });
 
   @override
-  double get minExtent => 72.0; // Keep overall delegate height fixed for sliver if needed, OR adjust if dynamic. 
-  // User reported "RenderFlex overflow", which usually happens INSIDE a fixed height widget when content is too big. 
-  // The SliverDelegate itself defines extent. If the content inside overflows 72, then we have a problem. 
-  // The user said: "Artists tab header area ... is causing a small overflow (~3.3 px)."
-  // The delegate maxExtent is 72. The content is padding(v8) + height(48) = 16+48=64. 
-  // If font scales, 48 might not be enough. 
+  double get minExtent => 64.0;
   
   @override
-  double get maxExtent => 72.0;
+  double get maxExtent => 64.0;
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Container(
-          color: Colors.white.withValues(alpha: 0.05),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center, // Ensure vertical centering
-        children: [
-          // Sort Button
-          GestureDetector(
-            onTap: onSortPressed,
-            child: Container(
-              constraints: const BoxConstraints(minHeight: 48), // Flexible height
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min, // Hug content
-                children: [
-                   Icon(Icons.sort_rounded, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.7), size: 20),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Search Field
-          Expanded(
-            child: Container(
-              constraints: const BoxConstraints(minHeight: 48), // Flexible height
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              alignment: Alignment.centerLeft, // Align text field
-              child: TextField(
-                onChanged: onSearchChanged,
-                style: TextStyle(color: foregroundColor ?? Colors.white),
-                decoration: InputDecoration(
-                  hintText: "Search...",
-                  hintStyle: TextStyle(color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
-                  prefixIcon: Icon(Icons.search, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(vertical: 12), // Keep vertical padding
-                  isDense: true, // Reduce internal height requirement
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-        ),
-      ),
+    return _SearchSortRow(
+      onSearchChanged: onSearchChanged,
+      onSortPressed: onSortPressed,
+      foregroundColor: foregroundColor,
     );
   }
 
@@ -167,61 +104,75 @@ class SearchSortHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Container(
-          color: Colors.white.withValues(alpha: 0.05),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-          // Sort Button
+    return _SearchSortRow(
+      onSearchChanged: onSearchChanged,
+      onSortPressed: onSortPressed,
+      foregroundColor: foregroundColor,
+    );
+  }
+}
+
+/// Shared layout for search bar + sort button using solid dark surface styling.
+class _SearchSortRow extends StatelessWidget {
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onSortPressed;
+  final Color? foregroundColor;
+
+  const _SearchSortRow({
+    required this.onSearchChanged,
+    required this.onSortPressed,
+    this.foregroundColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = foregroundColor ?? Colors.white;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Sort Button — solid dark surface
           GestureDetector(
             onTap: onSortPressed,
             child: Container(
-              constraints: const BoxConstraints(minHeight: 48),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Added vertical padding for safety
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
-              child: Row(
-                 mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.sort_rounded, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.7), size: 20),
-                ],
+              child: Center(
+                child: Icon(Icons.sort_rounded, color: fg.withValues(alpha: 0.7), size: 20),
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          // Search Field
+          const SizedBox(width: 10),
+          // Search Field — solid dark surface
           Expanded(
             child: Container(
-              constraints: const BoxConstraints(minHeight: 48),
+              height: 44,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(12),
               ),
-              alignment: Alignment.centerLeft,
-              child: TextField(
-                onChanged: onSearchChanged,
-                style: TextStyle(color: foregroundColor ?? Colors.white),
-                decoration: InputDecoration(
-                  hintText: "Search...",
-                  hintStyle: TextStyle(color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
-                  prefixIcon: Icon(Icons.search, color: (foregroundColor ?? Colors.white).withValues(alpha: 0.38)),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(vertical: 12),
-                  isDense: true,
+              child: Center(
+                child: TextField(
+                  onChanged: onSearchChanged,
+                  style: TextStyle(color: fg),
+                  decoration: InputDecoration(
+                    hintText: "Search...",
+                    hintStyle: TextStyle(color: fg.withValues(alpha: 0.38)),
+                    prefixIcon: Icon(Icons.search, color: fg.withValues(alpha: 0.38)),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    isDense: true,
+                  ),
                 ),
               ),
             ),
           ),
         ],
-      ),
-        ),
       ),
     );
   }

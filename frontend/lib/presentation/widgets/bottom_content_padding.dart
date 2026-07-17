@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/playback_controller.dart';
+import '../../core/utils/safe_insets.dart';
 
 class BottomContentPadding extends StatelessWidget {
   final bool isSliver;
@@ -11,11 +12,11 @@ class BottomContentPadding extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasTrack = context.select<PlaybackController, bool>((c) => c.currentTrack != null);
-    final bottomSafe = MediaQuery.of(context).padding.bottom;
+    final bottomSafe = SafeInsets.bottomInset(context);
 
     // Heights
-    final double navHeight = 80;
-    final double miniPlayerHeight = hasTrack ? 80 : 0;
+    final double navHeight = 90;
+    final double miniPlayerHeight = hasTrack ? 90 : 0;
     final double spacing = 24;
 
     final double totalHeight = navHeight + miniPlayerHeight + bottomSafe + spacing;
@@ -28,13 +29,8 @@ class BottomContentPadding extends StatelessWidget {
   }
 
   static double bottomHeight(BuildContext context) {
-    // Determine if mini-player is visible
-    // We can try to access the provider, or just default to a safe value that includes potential mini-player.
-    // To be 100% safe and avoid hiding content, we'll assume the max height (with mini-player).
-    // Or we can try to read the provider if possible.
-    // User requested simpler helper. Let's return a safe max value.
-    final safe = MediaQuery.of(context).padding.bottom;
-    // 80 (nav) + 80 (miniplayer) + 24 (spacing)
-    return 184 + safe; 
+    final safe = SafeInsets.bottomInset(context);
+    // 90 (nav) + 90 (miniplayer) + 24 (spacing)
+    return 204 + safe; 
   }
 }

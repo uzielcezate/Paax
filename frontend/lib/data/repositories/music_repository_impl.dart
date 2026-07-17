@@ -18,20 +18,26 @@ class MusicRepositoryImpl implements MusicRepository {
 
   @override
   Future<(List<SavedAlbum>, String?)> getArtistAlbumsPage(String id, String? params, String? token) async {
-    final result = await _dataSource.getArtistAlbumsPage(id, params, token);
-    final items = (result['items'] as List?)?.map((e) => _mapAlbum(e)).toList() ?? [];
-    final nextPageToken = result['nextPageToken'] as String?;
-    return (items, nextPageToken);
+    // v2: Deezer pagination uses offset/limit, no tokens.
+    // Return all albums from the v2 endpoint.
+    try {
+      final deezerId = int.parse(id);
+      final result = await _dataSource.getArtistAlbumsV2(deezerId);
+      final items = (result['data'] as List?)?.map((e) => _mapAlbumV2(e)).toList() ?? [];
+      return (items, null); // No pagination token for Deezer
+    } catch (e) {
+      debugPrint('[Repo] getArtistAlbumsPage v2 error: $e');
+      return (<SavedAlbum>[], null);
+    }
   }
 
   @override
   Future<List<Track>> searchTracks(String query) async {
-    final result = await _dataSource.search(query, 'songs');
-    return (result['data'] as List)
-        .where((e) => !_isOfficialMusicVideo(e))
+    final result = await _dataSource.searchV2(query, 'tracks');
+    return (result['data'] as List? ?? [])
         .map((e) {
-          try { return _mapTrack(e); }
-          catch (err) { debugPrint('[Repo] searchTracks skip bad item: $err'); return null; }
+          try { return _mapTrackV2(e as Map<String, dynamic>); }
+          catch (err) { debugPrint('[Repo] searchTracks v2 skip: $err'); return null; }
         })
         .whereType<Track>()
         .toList();
@@ -39,48 +45,76 @@ class MusicRepositoryImpl implements MusicRepository {
 
   @override
   Future<List<SavedAlbum>> searchAlbums(String query) async {
-    final result = await _dataSource.search(query, 'albums');
-    return (result['data'] as List)
-        .where((e) => !_isPlaylist(e))
-        .map((e) => _mapAlbum(e))
-        .where((a) => !isPlaceholderArtist(a.artistName))
+    final result = await _dataSource.searchV2(query, 'albums');
+    return (result['data'] as List? ?? [])
+        .map((e) {
+          try { return _mapAlbumV2(e as Map<String, dynamic>); }
+          catch (err) { debugPrint('[Repo] searchAlbums v2 skip: $err'); return null; }
+        })
+        .whereType<SavedAlbum>()
         .toList();
   }
 
   @override
   Future<List<Artist>> searchArtists(String query) async {
-    final result = await _dataSource.search(query, 'artists');
-    return (result['data'] as List)
-        .map((e) => _mapArtist(e))
-        .where((a) => !isPlaceholderArtist(a.name))
+    final result = await _dataSource.searchV2(query, 'artists');
+    return (result['data'] as List? ?? [])
+        .map((e) {
+          try { return _mapArtistV2(e as Map<String, dynamic>); }
+          catch (err) { debugPrint('[Repo] searchArtists v2 skip: $err'); return null; }
+        })
+        .whereType<Artist>()
         .toList();
   }
 
   @override
   Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> getCharts([String country = 'US']) async {
-    final result = await _dataSource.getCharts(country);
-    return _mapStructuredResponse(result);
+    final result = await _dataSource.getChartV2();
+    return _mapStructuredResponseV2(result);
   }
 
   @override
   Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> getGenreContent(String genre, String country) async {
-    final result = await _dataSource.getGenreContent(genre, country);
-    return _mapStructuredResponse(result);
+    // v2: Use Deezer search to simulate genre content
+    final trackResult = await _dataSource.searchV2('$genre top songs', 'tracks', limit: 10);
+    final albumResult = await _dataSource.searchV2('$genre albums', 'albums', limit: 10);
+    final artistResult = await _dataSource.searchV2('$genre artists', 'artists', limit: 10);
+
+    final tracks = (trackResult['data'] as List? ?? []).map((e) {
+      try { return _mapTrackV2(e as Map<String, dynamic>); }
+      catch (_) { return null; }
+    }).whereType<Track>().toList();
+
+    final albums = (albumResult['data'] as List? ?? []).map((e) {
+      try { return _mapAlbumV2(e as Map<String, dynamic>); }
+      catch (_) { return null; }
+    }).whereType<SavedAlbum>().toList();
+
+    final artists = (artistResult['data'] as List? ?? []).map((e) {
+      try { return _mapArtistV2(e as Map<String, dynamic>); }
+      catch (_) { return null; }
+    }).whereType<Artist>().toList();
+
+    return (tracks: tracks, albums: albums, artists: artists);
   }
 
   @override
   Future<({List<SavedAlbum> playlists, List<Track> tracks, List<Artist> artists})> getGenrePage(String slug) async {
-    final result = await _dataSource.getGenrePage(slug);
-    
-    // Explicitly return empty playlists as per requirements
-    final playlists = <SavedAlbum>[]; 
-    final tracks = (result['tracks'] as List?)?.map((e) => _mapTrack(e)).toList() ?? [];
-    // Filter out placeholder artists
-    final artists = (result['artists'] as List?)
-        ?.map((e) => _mapArtist(e))
-        .where((a) => !isPlaceholderArtist(a.name))
-        .toList() ?? [];
-    
+    // v2: Use Deezer search for genre content
+    final trackResult = await _dataSource.searchV2('$slug music', 'tracks', limit: 15);
+    final artistResult = await _dataSource.searchV2('$slug', 'artists', limit: 10);
+
+    final playlists = <SavedAlbum>[];
+    final tracks = (trackResult['data'] as List? ?? []).map((e) {
+      try { return _mapTrackV2(e as Map<String, dynamic>); }
+      catch (_) { return null; }
+    }).whereType<Track>().toList();
+
+    final artists = (artistResult['data'] as List? ?? []).map((e) {
+      try { return _mapArtistV2(e as Map<String, dynamic>); }
+      catch (_) { return null; }
+    }).whereType<Artist>().toList();
+
     return (playlists: playlists, tracks: tracks, artists: artists);
   }
 
@@ -107,81 +141,74 @@ class MusicRepositoryImpl implements MusicRepository {
       return (tracks: tracks, albums: albums, artists: artists);
   }
 
+  /// v2 structured response mapper for Deezer chart data.
+  ({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists}) _mapStructuredResponseV2(Map<String, dynamic> result) {
+    final tracks = (result['tracks'] as List? ?? [])
+        .map((e) { try { return _mapTrackV2(e as Map<String, dynamic>); } catch (err) { debugPrint('[Repo] v2 chart track skip: $err'); return null; } })
+        .whereType<Track>()
+        .toList();
+    final albums = (result['albums'] as List? ?? [])
+        .map((e) { try { return _mapAlbumV2(e as Map<String, dynamic>); } catch (err) { debugPrint('[Repo] v2 album skip: $err'); return null; } })
+        .whereType<SavedAlbum>()
+        .toList();
+    final artists = (result['artists'] as List? ?? [])
+        .map((e) { try { return _mapArtistV2(e as Map<String, dynamic>); } catch (err) { debugPrint('[Repo] v2 artist skip: $err'); return null; } })
+        .whereType<Artist>()
+        .toList();
+    return (tracks: tracks, albums: albums, artists: artists);
+  }
+
   @override
   Future<Artist> getArtist(String id) async {
     final stopwatch = Stopwatch()..start();
-    final e = await _dataSource.getArtist(id);
-
-    // ── 1. Map initial data from artist endpoint ──
-    var albums = _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x, defaultType: 'album'));
-    var singles = _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x, defaultType: 'single'));
-    final topTracks = _safeMapList<Track>(
-      e['songs']?['results'],
-      (x) => _mapTrack(x),
-      filter: (x) => !_isOfficialMusicVideo(x),
-    );
-
-    debugPrint('[Perf] getArtist($id) basic data mapped in ${stopwatch.elapsedMilliseconds}ms');
-
-    // ── 2. Enrich releases from top tracks' album references ──
     try {
-      final enriched = await _enrichArtistReleases(
-        existingAlbums: albums,
-        existingSingles: singles,
-        rawSongs: e['songs']?['results'] as List? ?? [],
+      final deezerId = int.parse(id);
+      final e = await _dataSource.getArtistV2(deezerId);
+
+      // Map top tracks
+      final topTracks = (e['topTracks'] as List? ?? []).map((t) {
+        try { return _mapTrackV2(t as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<Track>().toList();
+
+      // Map albums — backend pre-splits into albums and singles
+      final albums = (e['albums'] as List? ?? []).map((a) {
+        try { return _mapAlbumV2(a as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<SavedAlbum>().toList();
+
+      final singles = (e['singles'] as List? ?? []).map((a) {
+        try { return _mapAlbumV2(a as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<SavedAlbum>().toList();
+
+      // Map related artists
+      final relatedArtists = (e['relatedArtists'] as List? ?? []).map((a) {
+        try { return _mapArtistV2(a as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<Artist>().toList();
+
+      debugPrint('[Perf] getArtist($id) v2 completed in ${stopwatch.elapsedMilliseconds}ms');
+
+      return Artist(
+        id: id,
+        name: e['name']?.toString() ?? 'Unknown Artist',
+        picture: e['picture']?.toString() ?? '',
+        nbFans: e['nbFans'] as int? ?? 0,
+        albums: albums,
+        singles: singles,
+        topTracks: topTracks,
+        relatedArtists: relatedArtists,
       );
-      albums = enriched.albums;
-      singles = enriched.singles;
-    } catch (err) {
-      debugPrint('[Repo] Release enrichment failed (non-fatal): $err');
+    } catch (e) {
+      debugPrint('[Repo] getArtist v2 error: $e');
+      rethrow;
     }
-
-    debugPrint('[Perf] getArtist($id) total: ${stopwatch.elapsedMilliseconds}ms');
-
-    return Artist(
-      id: id,
-      name: e['name']?.toString() ?? 'Various Artists',
-      picture: _findHeroThumbnail(e['thumbnails']),
-      nbFans: 0,
-      albums: albums,
-      singles: singles,
-      topTracks: topTracks,
-      relatedArtists: _safeMapList<Artist>(e['related']?['results'], (x) => _mapArtist(x)),
-      albumsParams: e['albums']?['params']?.toString(),
-      singlesParams: e['singles']?['params']?.toString(),
-    );
   }
 
-  /// Returns basic artist data WITHOUT release enrichment.
-  /// UI can render this immediately while enrichment runs in background.
+  /// Returns basic artist data — same as full getArtist in v2 (single API call).
   @override
-  Future<Artist> getArtistBasic(String id) async {
-    final stopwatch = Stopwatch()..start();
-    final e = await _dataSource.getArtist(id);
-
-    final albums = _safeMapList<SavedAlbum>(e['albums']?['results'], (x) => _mapAlbum(x, defaultType: 'album'));
-    final singles = _safeMapList<SavedAlbum>(e['singles']?['results'], (x) => _mapAlbum(x, defaultType: 'single'));
-    final topTracks = _safeMapList<Track>(
-      e['songs']?['results'],
-      (x) => _mapTrack(x),
-      filter: (x) => !_isOfficialMusicVideo(x),
-    );
-
-    debugPrint('[Perf] getArtistBasic($id) completed in ${stopwatch.elapsedMilliseconds}ms');
-
-    return Artist(
-      id: id,
-      name: e['name']?.toString() ?? 'Various Artists',
-      picture: _findHeroThumbnail(e['thumbnails']),
-      nbFans: 0,
-      albums: albums,
-      singles: singles,
-      topTracks: topTracks,
-      relatedArtists: _safeMapList<Artist>(e['related']?['results'], (x) => _mapArtist(x)),
-      albumsParams: e['albums']?['params']?.toString(),
-      singlesParams: e['singles']?['params']?.toString(),
-    );
-  }
+  Future<Artist> getArtistBasic(String id) => getArtist(id);
 
   // ── Album Enrichment Pipeline ───────────────────────────────────────────
 
@@ -198,18 +225,15 @@ class MusicRepositoryImpl implements MusicRepository {
     return map;
   }
 
-  /// Public enrichment method — can be called from UI after basic profile loads.
+  /// Public enrichment method — no-op in v2 since Deezer provides complete metadata.
   @override
   Future<({List<SavedAlbum> albums, List<SavedAlbum> singles})> enrichArtistReleases({
     required List<SavedAlbum> existingAlbums,
     required List<SavedAlbum> existingSingles,
     required List<dynamic> rawSongs,
-  }) {
-    return _enrichArtistReleases(
-      existingAlbums: existingAlbums,
-      existingSingles: existingSingles,
-      rawSongs: rawSongs,
-    );
+  }) async {
+    // Deezer data already includes release dates and types — no enrichment needed.
+    return (albums: existingAlbums, singles: existingSingles);
   }
 
   /// Enriches artist releases by:
@@ -443,80 +467,144 @@ class MusicRepositoryImpl implements MusicRepository {
 
   @override
   Future<List<SavedAlbum>> getArtistAlbums(String id) async {
-    final result = await _dataSource.getArtistAlbums(id);
-    if (result is List) {
-       return result.map((e) => _mapAlbum(e)).toList();
+    try {
+      final deezerId = int.parse(id);
+      final result = await _dataSource.getArtistAlbumsV2(deezerId);
+      return (result['data'] as List? ?? [])
+          .map((e) {
+            try { return _mapAlbumV2(e as Map<String, dynamic>); }
+            catch (_) { return null; }
+          })
+          .whereType<SavedAlbum>()
+          .toList();
+    } catch (e) {
+      debugPrint('[Repo] getArtistAlbums v2 error: $e');
+      return [];
     }
-    // Fallback: check if getArtist has albums
-    final artistData = await _dataSource.getArtist(id);
-    if (artistData.containsKey('albums') && artistData['albums']['results'] != null) {
-       return (artistData['albums']['results'] as List).map((e) => _mapAlbum(e)).toList();
-    }
-    return [];
   }
 
   @override
   Future<List<SavedAlbum>> getArtistSingles(String id) async {
-     final artistData = await _dataSource.getArtist(id);
-     if (artistData.containsKey('singles') && artistData['singles']['results'] != null) {
-         return (artistData['singles']['results'] as List).map((e) => _mapAlbum(e)).toList();
-     }
-     return [];
+    try {
+      final deezerId = int.parse(id);
+      final result = await _dataSource.getArtistAlbumsV2(deezerId);
+      return (result['data'] as List? ?? [])
+          .map((e) {
+            try { return _mapAlbumV2(e as Map<String, dynamic>); }
+            catch (_) { return null; }
+          })
+          .whereType<SavedAlbum>()
+          .where((a) => a.releaseType == 'single')
+          .toList();
+    } catch (e) {
+      debugPrint('[Repo] getArtistSingles v2 error: $e');
+      return [];
+    }
   }
 
   @override
   Future<List<Track>> getArtistTopTracks(String id) async {
-      // The artist detail (getArtist) usually contains "songs" key with top songs
-      final artistData = await _dataSource.getArtist(id);
-      if (artistData.containsKey('songs') && artistData['songs']['results'] != null) {
-          return (artistData['songs']['results'] as List).map((e) => _mapTrack(e)).toList();
-      }
+    try {
+      final deezerId = int.parse(id);
+      final result = await _dataSource.getArtistTopV2(deezerId);
+      return (result['data'] as List? ?? [])
+          .map((e) {
+            try { return _mapTrackV2(e as Map<String, dynamic>); }
+            catch (_) { return null; }
+          })
+          .whereType<Track>()
+          .toList();
+    } catch (e) {
+      debugPrint('[Repo] getArtistTopTracks v2 error: $e');
       return [];
+    }
   }
 
   @override
   Future<List<Artist>> getRelatedArtists(String id) async {
-      final artistData = await _dataSource.getArtist(id);
-       if (artistData.containsKey('related') && artistData['related']['results'] != null) {
-          return (artistData['related']['results'] as List).map((e) => _mapArtist(e)).toList();
-      }
+    // v2: Related artists come from the full artist profile
+    try {
+      final artist = await getArtist(id);
+      return artist.relatedArtists ?? [];
+    } catch (e) {
+      debugPrint('[Repo] getRelatedArtists v2 error: $e');
       return [];
+    }
   }
 
   @override
   Future<SavedAlbum> getAlbum(String id) async {
-     final e = await _dataSource.getAlbum(id);
-     return _mapAlbumDetail(e, id);
+    try {
+      final deezerId = int.parse(id);
+      final e = await _dataSource.getAlbumV2(deezerId);
+
+      // Map tracks from the album detail response
+      final tracks = (e['tracks'] as List? ?? []).map((t) {
+        try { return _mapTrackV2(t as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<Track>().toList();
+
+      // Build artist info
+      final artistObj = e['artist'] as Map<String, dynamic>? ?? {};
+      final artistsList = <Map<String, String>>[];
+      if (e['artists'] is List) {
+        for (var a in (e['artists'] as List)) {
+          final name = a['name']?.toString() ?? '';
+          final aid = a['id']?.toString() ?? '';
+          if (name.isNotEmpty) artistsList.add({'name': name, 'id': aid});
+        }
+      }
+      if (artistsList.isEmpty && artistObj['name'] != null) {
+        artistsList.add({'name': artistObj['name'].toString(), 'id': artistObj['id']?.toString() ?? ''});
+      }
+
+      return SavedAlbum(
+        albumId: id,
+        title: e['title']?.toString() ?? 'Unknown Album',
+        artistName: artistsList.isNotEmpty
+            ? artistsList.map((a) => a['name']!).join(', ')
+            : artistObj['name']?.toString() ?? 'Unknown Artist',
+        artistId: artistObj['id']?.toString() ?? '',
+        artworkUrl: e['coverUrl']?.toString() ?? '',
+        tracks: tracks,
+        duration: e['duration'] as int? ?? tracks.fold<int>(0, (sum, t) => sum + t.duration),
+        trackCount: e['trackCount'] as int? ?? tracks.length,
+        releaseDate: e['releaseDate']?.toString(),
+        label: '',
+        artists: artistsList.isNotEmpty ? artistsList : null,
+        releaseType: e['type']?.toString() ?? 'album',
+      );
+    } catch (e) {
+      debugPrint('[Repo] getAlbum v2 error: $e');
+      rethrow;
+    }
   }
 
   @override
   Future<List<Track>> getAlbumTracks(String id) async {
-     final e = await _dataSource.getAlbum(id);
-     final tracks = e['tracks'] as List;
-     final albumParams = {
-         'albumId': id,
-         'albumTitle': e['title'],
-         'artworkUrl': _findThumbnail(e['thumbnails']),
-         'artistName': e['artists']?[0]?['name'] ?? 'Unknown',
-         'artistId': e['artists']?[0]?['id'] ?? '',
-     };
-     return tracks.map((t) => _mapAlbumTrack(t, albumParams)).toList();
+    try {
+      final deezerId = int.parse(id);
+      final e = await _dataSource.getAlbumV2(deezerId);
+      return (e['tracks'] as List? ?? []).map((t) {
+        try { return _mapTrackV2(t as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<Track>().toList();
+    } catch (e) {
+      debugPrint('[Repo] getAlbumTracks v2 error: $e');
+      return [];
+    }
   }
 
   @override
   Future<Track> getTrack(String id) async {
-      final e = await _dataSource.getSong(id);
-      final videoDetails = e['videoDetails'];
-      return Track(
-          id: videoDetails['videoId'],
-          title: videoDetails['title'],
-          artistName: videoDetails['author'],
-          artistId: videoDetails['channelId'], 
-          albumId: '', // often missing in getSong videoDetails unless specialized
-          albumTitle: '',
-          artworkUrl: _findThumbnail(videoDetails['thumbnail']['thumbnails']),
-          duration: int.tryParse(videoDetails['lengthSeconds'] ?? '0') ?? 0,
-      );
+    try {
+      final deezerId = int.parse(id);
+      final e = await _dataSource.getTrackV2(deezerId);
+      return _mapTrackV2(e);
+    } catch (e) {
+      debugPrint('[Repo] getTrack v2 error: $e');
+      rethrow;
+    }
   }
   
   @override
@@ -620,6 +708,7 @@ class MusicRepositoryImpl implements MusicRepository {
       duration: _parseDuration(e['duration'] ?? e['lengthSeconds']), 
       previewUrl: null, 
       artists: artistsList,
+      isExplicit: e['isExplicit'] == true,
     );
   }
   
@@ -682,10 +771,11 @@ class MusicRepositoryImpl implements MusicRepository {
           ? (int.tryParse(e['duration_seconds'].toString()) ?? 0)
           : _parseDuration(e['duration'] ?? e['lengthSeconds']),
        artists: artistsList,
+       isExplicit: e['isExplicit'] == true,
      );
   }
 
-  SavedAlbum _mapAlbum(Map<String, dynamic> e, {String defaultType = 'album'}) {
+  SavedAlbum _mapAlbum(Map<String, dynamic> e, {String defaultType = 'album', String? defaultArtistName}) {
     // Build structured artists list
     final List<Map<String, String>> albumArtists = [];
     if (e['artists'] != null && e['artists'] is List) {
@@ -700,7 +790,7 @@ class MusicRepositoryImpl implements MusicRepository {
 
     final displayName = albumArtists.isNotEmpty
         ? albumArtists.map((a) => a['name']!).join(', ')
-        : 'Various Artists';
+        : (defaultArtistName ?? 'Various Artists');
     final primaryId = albumArtists.isNotEmpty ? albumArtists.first['id']! : '';
 
     return SavedAlbum(
@@ -889,5 +979,101 @@ class MusicRepositoryImpl implements MusicRepository {
       }
     }
     return results;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // v2 Mappers — Deezer metadata + YouTube playback ID
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// Map a v2 track response (Deezer metadata + YouTube playback block)
+  /// into a [Track] entity.
+  ///
+  /// CRITICAL: `Track.id` = `playback.videoId` (YouTube video ID) to preserve
+  /// the [PlaybackEngine.load(videoId)] contract.
+  Track _mapTrackV2(Map<String, dynamic> e) {
+    // ── Playback block ────────────────────────────────────────────────────
+    final playback = e['playback'] as Map<String, dynamic>? ?? {};
+    final videoId = playback['videoId']?.toString() ?? '';
+
+    // ── Artist info ───────────────────────────────────────────────────────
+    final artistObj = e['artist'] as Map<String, dynamic>? ?? {};
+    final artistsList = <Map<String, String>>[];
+    if (e['artists'] is List) {
+      for (var a in (e['artists'] as List)) {
+        final name = a['name']?.toString() ?? '';
+        final id = a['id']?.toString() ?? '';
+        if (name.isNotEmpty) {
+          artistsList.add({'name': name, 'id': id});
+        }
+      }
+    }
+    if (artistsList.isEmpty && artistObj['name'] != null) {
+      artistsList.add({
+        'name': artistObj['name'].toString(),
+        'id': artistObj['id']?.toString() ?? '',
+      });
+    }
+
+    final artistName = artistsList.isNotEmpty
+        ? artistsList.map((a) => a['name']!).join(', ')
+        : 'Unknown Artist';
+    final artistId = artistsList.isNotEmpty
+        ? artistsList.first['id']!
+        : artistObj['id']?.toString() ?? '';
+
+    // ── Album info ────────────────────────────────────────────────────────
+    final albumObj = e['album'] as Map<String, dynamic>? ?? {};
+
+    return Track(
+      id: videoId,  // YouTube video ID for playback
+      title: e['title']?.toString() ?? 'Unknown',
+      artistName: artistName,
+      artistId: artistId,
+      albumId: albumObj['id']?.toString() ?? '',
+      albumTitle: albumObj['title']?.toString() ?? '',
+      artworkUrl: albumObj['coverUrl']?.toString() ?? '',
+      duration: e['duration'] as int? ?? 0,
+      artists: artistsList,
+      isExplicit: e['explicit'] == true,
+    );
+  }
+
+  /// Map a v2 album response into a [SavedAlbum] entity.
+  SavedAlbum _mapAlbumV2(Map<String, dynamic> e) {
+    final artistObj = e['artist'] as Map<String, dynamic>? ?? {};
+    final artistsList = <Map<String, String>>[];
+    if (e['artists'] is List) {
+      for (var a in (e['artists'] as List)) {
+        final name = a['name']?.toString() ?? '';
+        final id = a['id']?.toString() ?? '';
+        if (name.isNotEmpty) {
+          artistsList.add({'name': name, 'id': id});
+        }
+      }
+    }
+
+    return SavedAlbum(
+      albumId: e['id']?.toString() ?? '',
+      title: e['title']?.toString() ?? 'Unknown Album',
+      artistName: artistsList.isNotEmpty
+          ? artistsList.map((a) => a['name']!).join(', ')
+          : artistObj['name']?.toString() ?? 'Unknown Artist',
+      artistId: artistObj['id']?.toString() ?? '',
+      artworkUrl: e['coverUrl']?.toString() ?? '',
+      artists: artistsList.isNotEmpty ? artistsList : null,
+      releaseDate: e['releaseDate']?.toString(),
+      releaseType: e['type']?.toString() ?? 'album',
+      trackCount: e['trackCount'] as int?,
+    );
+  }
+
+  /// Map a v2 artist response into an [Artist] entity.
+  Artist _mapArtistV2(Map<String, dynamic> e) {
+    return Artist(
+      id: e['id']?.toString() ?? '',
+      name: e['name']?.toString() ?? 'Unknown Artist',
+      picture: e['picture']?.toString() ?? '',
+      nbFans: e['nbFans'] as int? ?? 0,
+    );
   }
 }

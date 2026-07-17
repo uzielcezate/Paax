@@ -2,7 +2,6 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:provider/provider.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/track.dart';
 import '../../core/theme/app_colors.dart';
@@ -11,14 +10,14 @@ import '../state/playback_controller.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/bottom_content_padding.dart';
-import 'package:share_plus/share_plus.dart';
 import '../widgets/playlist_cover.dart';
 import '../widgets/add_to_playlist_sheet.dart';
 import '../widgets/library_headers.dart';
 import '../widgets/overflow_menu.dart';
 import '../widgets/sort_bottom_sheet.dart';
-import '../widgets/dynamic_background.dart';
 import '../../core/utils/dominant_color_service.dart';
+import '../widgets/app_image.dart';
+import '../../core/image/lh3_url_builder.dart';
 
 class PlaylistDetailScreen extends StatefulWidget {
   final Playlist playlist;
@@ -34,15 +33,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   
   // Search & Sort State
   String _searchQuery = "";
-  String _currentSort = "Recently added";
-  final List<String> _sortOptions = ["Recently added", "Title", "Artist", "Album"];
+  String _currentSort = "Custom";
+  final List<String> _sortOptions = ["Custom", "Recently added", "Title", "Artist", "Album", "Oldest added"];
 
-  /// Edit Order mode — shows drag handles and remove icons.
+  /// Edit Order mode â€” shows drag handles and remove icons.
   bool _isEditMode = false;
 
-  // Dynamic background state
+  // Accent color from artwork
   Color _dominantColor = DominantColorService.fallback;
-  Color _foregroundColor = Colors.white;
 
   @override
   void initState() {
@@ -85,19 +83,21 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     // 2. Sort
     switch (_currentSort) {
       case "Title":
-        filtered.sort((a, b) => a.title.compareTo(b.title));
+        filtered.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
         break;
       case "Artist":
-        filtered.sort((a, b) => a.artistName.compareTo(b.artistName));
+        filtered.sort((a, b) => a.artistName.toLowerCase().compareTo(b.artistName.toLowerCase()));
         break;
       case "Album":
-        filtered.sort((a, b) => a.albumTitle.compareTo(b.albumTitle));
+        filtered.sort((a, b) => a.albumTitle.toLowerCase().compareTo(b.albumTitle.toLowerCase()));
         break;
       case "Recently added":
+        filtered = filtered.reversed.toList();
+        break;
+      case "Oldest added":
+        break;
+      case "Custom":
       default:
-        // Default is newest first (reverse of original list usually)
-        // Assuming 'tracks' is ordered by added date (oldest first or as provided)
-        filtered = filtered.reversed.toList(); 
         break;
     }
     
@@ -135,19 +135,15 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     // Watch library to get updates (e.g. track removed)
     final library = context.watch<LibraryController>();
     // Re-fetch playlist from library to ensure we have latest state
-    // If deleted, pop.
     Playlist? currentPlaylist;
     try {
       currentPlaylist = library.playlists.firstWhere((p) => p.id == widget.playlist.id);
     } catch (_) {
-      // Playlist was deleted — navigate back on the next frame instead of
-      // rendering a blank SizedBox that leaves a dead route on the stack.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && Navigator.canPop(context)) {
           Navigator.pop(context);
         }
       });
-      // Return a neutral scaffold while the pop is pending (never actually shown)
       return const Scaffold(backgroundColor: Colors.transparent);
     }
 
@@ -166,408 +162,541 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
-          // Dynamic ambient background from playlist first track artwork
-          DynamicBackground(
-            imageUrl: tracks.isNotEmpty ? tracks.first.artworkUrl : null,
-            excludeBlack: true,
-            onColorExtracted: (color) {
-              if (!mounted) return;
-              setState(() {
-                _dominantColor = color;
-                _foregroundColor = DominantColorService.foregroundOn(color);
-              });
-            },
-          ),
-
+          // ── Scrollable Content ──
           CustomScrollView(
             controller: _scrollController,
             slivers: [
-              SliverAppBar(
-                expandedHeight: 320,
-                pinned: true,
-                backgroundColor: Colors.transparent,
-                forceMaterialTransparency: true,
-                elevation: 0,
-                automaticallyImplyLeading: false,
-                leadingWidth: 0,
-                leading: const SizedBox.shrink(),
-                titleSpacing: 0,
-                title: null,
-                flexibleSpace: FlexibleSpaceBar(
-                  collapseMode: CollapseMode.pin,
-                  background: ClipRect(
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        FittedBox(
-                          fit: BoxFit.cover,
-                          child: SizedBox(
-                            width: MediaQuery.of(context).size.width,
-                            height: MediaQuery.of(context).size.width,
-                            child: Hero(
-                              tag: "playlist_${currentPlaylist.id}",
-                              child: PlaylistCover(
-                                playlist: currentPlaylist, 
-                                size: MediaQuery.of(context).size.width,
-                                borderRadius: 0, 
+              // 1. Scrollable Header (Blur Background + Cover + Metadata + Buttons)
+              if (!_isEditMode)
+                SliverToBoxAdapter(
+                  child: Stack(
+                    children: [
+                      // Solid black base for the entire header to prevent any transparency
+                      Positioned.fill(
+                        child: Container(color: AppColors.background),
+                      ),
+                      // 1:1 Atmospheric Clipped Blurred Background
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: MediaQuery.of(context).size.width,
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              ImageFiltered(
+                                imageFilter: ImageFilter.blur(sigmaX: 45, sigmaY: 45, tileMode: TileMode.decal),
+                                child: Transform.scale(
+                                  scale: 1.2,
+                                  child: AppImage(
+                                    url: currentPlaylist.uniqueArtworkUrls.isNotEmpty ? currentPlaylist.uniqueArtworkUrls.first : '',
+                                    fit: BoxFit.cover,
+                                    sizePx: Lh3UrlBuilder.headerSize,
+                                  ),
+                                ),
                               ),
-                            ),
+                              // Fade directly to black at the bottom of the 1:1 area
+                              Container(
+                                decoration: const BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Colors.transparent,
+                                      Color(0x99121212),
+                                      AppColors.background,
+                                    ],
+                                    stops: [0.0, 0.6, 1.0],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.transparent,
-                                _dominantColor.withOpacity(0.1),
-                                _dominantColor.withOpacity(0.7),
-                                _dominantColor,
-                              ],
-                              stops: const [0.4, 0.65, 0.92, 1.0]
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-          
-          // Header Info & Actions
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-              child: Column(
-                children: [
-                   Text(
-                     currentPlaylist.name,
-                     textAlign: TextAlign.center,
-                     style: TextStyle(
-                       fontSize: 28, 
-                       fontWeight: FontWeight.w800, 
-                       height: 1.2,
-                       color: _foregroundColor
-                     ),
-                     maxLines: 2,
-                     overflow: TextOverflow.ellipsis,
-                   ),
-                   const SizedBox(height: 12),
-                   Row(
-                     mainAxisAlignment: MainAxisAlignment.center,
-                     children: [
-                       Text(
-                         "${tracks.length} tracks • ${_formatTotalDuration(totalDuration)}",
-                         style: TextStyle(color: _foregroundColor.withOpacity(0.5), fontSize: 13, fontWeight: FontWeight.w500),
-                       ),
-                     ],
-                   ),
-                   const SizedBox(height: 24),
-                   
-                   // ACTIONS ROW — hidden in edit mode
-                   if (!_isEditMode)
-                   Row(
-                     mainAxisAlignment: MainAxisAlignment.center,
-                     children: [
-                       // Play Button
-                       Consumer<PlaybackController>(
-                          builder: (context, playback, _) {
-                            final isPlaying = playback.isPlaying;
-                            final currentId = playback.currentTrack?.id;
-                            final isContext = currentId != null && tracks.any((t) => t.id == currentId);
-                            
-                            return _buildActionButton(
-                              icon: (isPlaying && isContext) ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                              label: (isPlaying && isContext) ? "Pause" : "Play",
-                              onTap: () {
-                                 if (tracks.isEmpty) return;
-                                 if (isContext) {
-                                    playback.togglePlayPause();
-                                 } else {
-                                    // Play sorted list or original?
-                                    // Usually play what you see.
-                                    playback.playQueue(displayTracks);
-                                 }
-                              }, 
-                              primary: true,
-                            );
-                          }
-                       ),
-                       const SizedBox(width: 24),
-                       
-                       // Add To Button
-                       _buildActionButton(
-                         icon: Icons.playlist_add_rounded, 
-                         label: "Add to",
-                         onTap: () {
-                            showModalBottomSheet(
-                               context: context,
-                               useRootNavigator: true,
-                               isScrollControlled: true,
-                               backgroundColor: Colors.transparent,
-                               builder: (context) => AddToPlaylistSheet(tracks: tracks), 
-                            );
-                         }
-                       ),
-                     ],
-                   ),
-                   if (!_isEditMode) const SizedBox(height: 16),
-                ],
-              ),
-            ),
-          ),
-          
-          // Search & Sort Controls — hidden in edit mode
-          if (tracks.isNotEmpty && !_isEditMode)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: SearchSortHeader(
-                  currentSort: _currentSort,
-                  foregroundColor: _foregroundColor,
-                  onSearchChanged: (val) {
-                    setState(() => _searchQuery = val);
-                  },
-                  onSortPressed: _showSortMenu,
-                ),
-              ),
-            ),
+                      ),
 
-          if (tracks.isEmpty)
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.all(32.0),
-                child: Center(child: Text("This playlist is empty. Add some songs!", style: TextStyle(color: Colors.grey))),
-              ),
-            )
-          else if (displayTracks.isEmpty)
-             const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.all(32.0),
-                child: Center(child: Text("No tracks found.", style: TextStyle(color: Colors.grey))),
-              ),
-            )
-          else if (_isEditMode)
-            // ── Edit Mode: ReorderableListView with drag handles + remove icons ──
-            SliverToBoxAdapter(
-              child: ReorderableListView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                buildDefaultDragHandles: false,
-                onReorder: (oldIndex, newIndex) {
-                  library.reorderPlaylistTrack(currentPlaylist!, oldIndex, newIndex);
-                },
-                itemCount: displayTracks.length,
-                proxyDecorator: (child, index, animation) {
-                  return Material(
-                    color: Colors.transparent,
-                    elevation: 4,
-                    shadowColor: Colors.black54,
-                    child: child,
-                  );
-                },
-                itemBuilder: (context, index) {
-                  final track = displayTracks[index];
-                  return Container(
-                    key: ValueKey('edit_${track.id}_$index'),
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    child: Row(
-                      children: [
-                        // Remove button
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline_rounded,
-                            color: Colors.redAccent, size: 22),
-                          onPressed: () {
-                            library.removeFromPlaylist(currentPlaylist!, track);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Removed "${track.title}" from playlist'),
-                                duration: const Duration(seconds: 2),
-                              ),
+                      // Foreground Rigid Layout
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Builder(
+                          builder: (context) {
+                            final double screenWidth = MediaQuery.of(context).size.width;
+                            final double topSafeArea = MediaQuery.of(context).padding.top;
+                            final double coverSize = screenWidth * 0.54;
+                            const double textBlockHeight = 84; 
+                            final double targetButtonY = screenWidth + 16;
+                            final double currentY = topSafeArea + 16 + coverSize + textBlockHeight + 16; // 16 is bottom gap
+                            final double gap = targetButtonY - currentY;
+                            final double dynamicGap = gap > 0 ? gap : 0;
+                            final bool isLongTitle = currentPlaylist!.name.length > 25;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                // Top slot: Cover aligns visually between top icons
+                                SizedBox(height: topSafeArea + 16),
+
+                                // Square Foreground Cover Art (Smaller 54% Width)
+                                Center(
+                                  child: Hero(
+                                    tag: "playlist_${currentPlaylist!.id}",
+                                    child: Container(
+                                      width: coverSize,
+                                      height: coverSize,
+                                      constraints: const BoxConstraints(maxWidth: 240, maxHeight: 240),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(12),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(alpha: 0.5),
+                                            blurRadius: 20,
+                                            offset: const Offset(0, 10),
+                                          ),
+                                        ],
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: PlaylistCover(
+                                          playlist: currentPlaylist!,
+                                          size: 240,
+                                          borderRadius: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                // Dynamic spacer to enforce exact Y alignment for the buttons
+                                SizedBox(height: dynamicGap),
+
+                                // Fixed Text Block (Title, Artist, Metadata)
+                                SizedBox(
+                                  height: textBlockHeight,
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      // Playlist Title
+                                      Text(
+                                        currentPlaylist!.name,
+                                        textAlign: TextAlign.center,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: isLongTitle ? 16 : 20,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                          letterSpacing: -0.5,
+                                          height: 1.2,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+
+                                      // Creator & Metadata: iamleizu • songs • duration
+                                      Text(
+                                        "iamleizu • ${tracks.length} ${tracks.length == 1 ? 'song' : 'songs'} • ${_formatTotalDuration(totalDuration)}",
+                                        textAlign: TextAlign.center,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                // Action Buttons Row
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    // Shuffle
+                                    _buildActionButton(
+                                      icon: Icons.shuffle_rounded,
+                                      onTap: () {
+                                        if (tracks.isNotEmpty) {
+                                          final shuffled = List<Track>.from(tracks)..shuffle();
+                                          context.read<PlaybackController>().playQueue(shuffled);
+                                        }
+                                      },
+                                    ),
+                                    // Pin Playlist
+                                    Consumer<LibraryController>(
+                                      builder: (context, lib, _) {
+                                        final isPinned = lib.isPlaylistPinned(currentPlaylist!.id);
+                                        return _buildActionButton(
+                                          icon: isPinned
+                                              ? Icons.push_pin_rounded
+                                              : Icons.push_pin_outlined,
+                                          onTap: () async {
+                                            final result = await lib.togglePinPlaylist(currentPlaylist!.id);
+                                            if (result == null && mounted) {
+                                              ScaffoldMessenger.of(context).clearSnackBars();
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('You can pin up to 5 playlists'),
+                                                  duration: Duration(seconds: 2),
+                                                  behavior: SnackBarBehavior.floating,
+                                                ),
+                                              );
+                                            }
+                                          },
+                                        );
+                                      },
+                                    ),
+                                    // Play / Pause (Large Center Button)
+                                    Consumer<PlaybackController>(
+                                      builder: (context, playback, _) {
+                                        final isPlaying = playback.isPlaying;
+                                        final currentId = playback.currentTrack?.id;
+                                        final isContext = currentId != null && tracks.any((t) => t.id == currentId);
+
+                                        return _buildActionButton(
+                                          icon: (isPlaying && isContext)
+                                              ? Icons.pause_rounded
+                                              : Icons.play_arrow_rounded,
+                                          size: 58,
+                                          iconSize: 28,
+                                          primary: true,
+                                          onTap: () {
+                                            if (tracks.isEmpty) return;
+                                            if (isContext) {
+                                              playback.togglePlayPause();
+                                            } else {
+                                              playback.playQueue(displayTracks);
+                                            }
+                                          },
+                                        );
+                                      },
+                                    ),
+                                    // Edit Order
+                                    _buildActionButton(
+                                      icon: Icons.swap_vert_rounded,
+                                      onTap: tracks.isNotEmpty ? _enterEditMode : () {},
+                                    ),
+                                    // Download
+                                    _buildActionButton(
+                                      icon: Icons.download_rounded,
+                                      onTap: () {
+                                        // TODO: Implement download functionality
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
                             );
                           },
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                         ),
-                        // Track info
-                        Expanded(
-                          child: TrackListTile(
-                            track: track,
-                            index: index + 1,
-                            showArtwork: true,
-                            hideActions: true,
-                            foregroundColor: _foregroundColor,
-                            onTap: () {},
+                      ),
+                    ],
+                  ),
+                ),
+
+              // Search & Sort Controls (hidden in edit mode)
+              if (tracks.isNotEmpty && !_isEditMode)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: SearchSortHeader(
+                      currentSort: _currentSort,
+                      foregroundColor: Colors.white,
+                      onSearchChanged: (val) {
+                        setState(() => _searchQuery = val);
+                      },
+                      onSortPressed: _showSortMenu,
+                    ),
+                  ),
+                ),
+
+              // Track List or Empty States
+              if (tracks.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(32.0),
+                    child: Center(
+                      child: Text(
+                        "This playlist is empty. Add some songs!",
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                  ),
+                )
+              else if (displayTracks.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(32.0),
+                    child: Center(
+                      child: Text(
+                        "No tracks found.",
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                  ),
+                )
+              else if (_isEditMode)
+                // ── Edit Mode: ReorderableListView with drag handles + remove icons ──
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 8),
+                    child: ReorderableListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      buildDefaultDragHandles: false,
+                      onReorder: (oldIndex, newIndex) {
+                        library.reorderPlaylistTrack(currentPlaylist!, oldIndex, newIndex);
+                      },
+                      itemCount: displayTracks.length,
+                      proxyDecorator: (child, index, animation) {
+                        return Material(
+                          color: Colors.transparent,
+                          elevation: 4,
+                          shadowColor: Colors.black54,
+                          child: child,
+                        );
+                      },
+                      itemBuilder: (context, index) {
+                        final track = displayTracks[index];
+                        return Container(
+                          key: ValueKey('edit_${track.id}_$index'),
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          child: Row(
+                            children: [
+                              // Remove button
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.remove_circle_outline_rounded,
+                                  color: Colors.redAccent,
+                                  size: 22,
+                                ),
+                                onPressed: () {
+                                  library.removeFromPlaylist(currentPlaylist!, track);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Removed "${track.title}" from playlist'),
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                                },
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                              ),
+                              // Track info
+                              Expanded(
+                                child: TrackListTile(
+                                  track: track,
+                                  index: index + 1,
+                                  showArtwork: true,
+                                  hideActions: true,
+                                  foregroundColor: Colors.white,
+                                  onTap: () {},
+                                ),
+                              ),
+                              // Drag handle
+                              ReorderableDragStartListener(
+                                index: index,
+                                child: const Padding(
+                                  padding: EdgeInsets.only(right: 8),
+                                  child: Icon(
+                                    Icons.drag_handle_rounded,
+                                    color: Colors.white38,
+                                    size: 24,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                )
+              else
+                // ── Normal Mode: Clean list ──
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      final track = displayTracks[index];
+                      return TrackListTile(
+                        track: track,
+                        index: index + 1,
+                        showArtwork: true,
+                        foregroundColor: Colors.white,
+                        allowSwipeActions: true,
+                        isPlaylistContext: true,
+                        onRemoveFromPlaylist: () {
+                          library.removeFromPlaylist(currentPlaylist!, track);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Removed "${track.title}" from playlist'),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        onTap: () {
+                          context.read<PlaybackController>().playQueue(displayTracks, index: index);
+                        },
+                      );
+                    },
+                    childCount: displayTracks.length,
+                  ),
+                ),
+
+              const SliverToBoxAdapter(child: BottomContentPadding()),
+            ],
+          ),
+
+          // ── 3. Edge Fades for Cinematic Transitions ──
+          DynamicEdgeFade.dynamicBottom(
+            key: ValueKey('fade_bot_playlist_${widget.playlist.id}'),
+            color: AppColors.background,
+            height: 120,
+          ),
+
+          // ── 4. Clean local top navigation bar ──
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  color: (_showTitle || _isEditMode) ? AppColors.background : Colors.transparent,
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top,
+                  ),
+                  child: SizedBox(
+                    height: 58,
+                    child: Stack(
+                      children: [
+                        // Left: back button — fixed position
+                        Positioned(
+                          left: 4,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: IconButton(
+                              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 24),
+                              onPressed: () {
+                                if (_isEditMode) {
+                                  _exitEditMode();
+                                } else {
+                                  Navigator.pop(context);
+                                }
+                              },
+                            ),
                           ),
                         ),
-                        // Drag handle
-                        ReorderableDragStartListener(
-                          index: index,
-                          child: const Padding(
-                            padding: EdgeInsets.only(right: 8),
-                            child: Icon(Icons.drag_handle_rounded,
-                              color: Colors.white38, size: 24),
+                        // Center: title — absolute center, independent of icons
+                        Positioned.fill(
+                          child: Center(
+                            child: AnimatedOpacity(
+                              opacity: (_showTitle || _isEditMode) ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 150),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 56),
+                                child: Text(
+                                  _isEditMode ? 'Edit Order' : currentPlaylist.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        // Right: menu or check button — fixed position
+                        Positioned(
+                          right: 4,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: _isEditMode
+                                ? IconButton(
+                                    icon: const Icon(Icons.check_rounded, color: Colors.white, size: 26),
+                                    onPressed: _exitEditMode,
+                                  )
+                                : SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: Center(
+                                      child: OverflowMenu(
+                                        type: MenuType.playlist,
+                                        playlist: currentPlaylist,
+                                        iconColor: Colors.white,
+                                        onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
+                                        onDelete: () => _confirmDelete(context, library, currentPlaylist!),
+                                        onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                                      ),
+                                    ),
+                                  ),
                           ),
                         ),
                       ],
                     ),
-                  );
-                },
-              ),
-            )
-          else
-            // ── Normal Mode: clean list, no drag handles ──
-            SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final track = displayTracks[index];
-                  return Dismissible(
-                    key: ValueKey('dismiss_${track.id}'),
-                    direction: DismissDirection.endToStart,
-                    background: Container(
-                      color: Colors.red,
-                      alignment: Alignment.centerRight,
-                      padding: const EdgeInsets.only(right: 20),
-                      child: const Icon(Icons.delete, color: Colors.white),
-                    ),
-                    onDismissed: (_) {
-                       library.removeFromPlaylist(currentPlaylist!, track);
-                       ScaffoldMessenger.of(context).showSnackBar(
-                         SnackBar(
-                           content: Text('Removed "${track.title}" from playlist'),
-                           duration: const Duration(seconds: 2),
-                         ),
-                       );
-                    },
-                    child: TrackListTile(
-                      track: track,
-                      index: index + 1,
-                      showArtwork: true,
-                      foregroundColor: _foregroundColor,
-                      onTap: () {
-                         context.read<PlaybackController>().playQueue(displayTracks, index: index);
-                      },
-                    ),
-                  );
-                },
-                childCount: displayTracks.length,
-              ),
-            ),
-            
-          const SliverToBoxAdapter(child: BottomContentPadding()),
-        ],
-      ),
-
-      // Top fade gradient — matches dominant background color
-      DynamicEdgeFade.dynamic(
-        key: ValueKey('fade_top_playlist_${widget.playlist.id}'),
-        color: _dominantColor,
-      ),
-
-      // Bottom fade — dissolves content behind mini player / nav
-      DynamicEdgeFade.dynamicBottom(
-        key: ValueKey('fade_bot_playlist_${widget.playlist.id}'),
-        color: _dominantColor,
-      ),
-
-      // Floating controls
-      FloatingTopControls(
-        showScrolledPill: _showTitle,
-        topPadding: MediaQuery.of(context).padding.top,
-        defaultControls: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            if (!_isEditMode)
-              GlassCircleButton(
-                icon: Icons.arrow_back_ios_new,
-                iconSize: 18,
-                iconColor: _foregroundColor,
-                onPressed: () => Navigator.pop(context),
-              )
-            else
-              const SizedBox(width: 38),
-            if (_isEditMode)
-              GestureDetector(
-                onTap: _exitEditMode,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.07),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white.withOpacity(0.14), width: 0.5),
                   ),
-                  child: Text('Done', style: TextStyle(color: _foregroundColor, fontWeight: FontWeight.bold, fontSize: 15)),
                 ),
-              )
-            else
-              GlassMenuButton(
-                child: OverflowMenu(
-                  type: MenuType.playlist,
-                  playlist: currentPlaylist,
-                  iconColor: _foregroundColor,
-                  onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
-                  onDelete: () => _confirmDelete(context, library, currentPlaylist!),
-                  onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                // Soft bottom fade overlay
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  height: 45,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        (_showTitle || _isEditMode) ? AppColors.background : Colors.transparent,
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-          ],
-        ),
-        scrolledPill: ScrolledTopPill(
-          title: _isEditMode ? 'Edit Order' : currentPlaylist.name,
-          foregroundColor: _foregroundColor,
-          onBack: () {
-            if (_isEditMode) {
-              _exitEditMode();
-            } else {
-              Navigator.pop(context);
-            }
-          },
-          trailing: _isEditMode
-              ? GestureDetector(
-                  onTap: _exitEditMode,
-                  child: Text('Done', style: TextStyle(color: _foregroundColor, fontWeight: FontWeight.bold, fontSize: 14)),
-                )
-              : OverflowMenu(
-                  type: MenuType.playlist,
-                  playlist: currentPlaylist,
-                  iconColor: _foregroundColor,
-                  onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
-                  onDelete: () => _confirmDelete(context, library, currentPlaylist!),
-                  onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
-                ),
-        ),
-      ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildActionButton({required IconData icon, required String label, required VoidCallback onTap, bool primary = false, Color color = Colors.white}) {
-    return Column(
-      children: [
-        GestureDetector(
-          onTap: onTap,
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: primary ? ImageFilter.blur() : ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: Container(
-                width: 56, height: 56,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: primary ? _foregroundColor : _foregroundColor.withOpacity(0.12),
-                  border: primary ? null : Border.all(color: _foregroundColor.withOpacity(0.15), width: 0.5),
-                ),
-                child: Icon(icon, color: primary ? _dominantColor : _foregroundColor, size: 26),
-              ),
-            ),
+  /// High-contrast solid circular action button.
+  Widget _buildActionButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    double size = 46,
+    double iconSize = 22,
+    bool primary = false,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: primary ? Colors.white : Colors.white.withValues(alpha: 0.08),
+          border: primary ? null : Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1),
+        ),
+        child: Center(
+          child: Icon(
+            icon,
+            color: primary ? const Color(0xFF121212) : Colors.white,
+            size: iconSize,
           ),
         ),
-        const SizedBox(height: 8),
-        Text(label, style: TextStyle(color: _foregroundColor.withOpacity(0.7), fontSize: 12)),
-      ],
+      ),
     );
   }
 
@@ -614,9 +743,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   }
 
   void _confirmDelete(BuildContext context, LibraryController library, Playlist playlist) {
-    // Capture the detail screen's Navigator BEFORE opening the dialog.
-    // The dialog gets its own BuildContext; using that context for Navigator
-    // after the dialog is disposed causes errors or pops the wrong route.
     final screenNavigator = Navigator.of(context);
 
     showDialog(
@@ -632,14 +758,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           ),
           TextButton(
             onPressed: () async {
-              // Close dialog first so it's off the stack before we do async work.
               Navigator.of(dialogContext).pop();
-
-              // Await so state is correct before navigation.
               await library.deletePlaylist(playlist);
-
-              // Pop the detail screen.  popUntil is safe even if the screen
-              // was already popped by the build() fallback above.
               if (screenNavigator.canPop()) {
                 screenNavigator.pop();
               }

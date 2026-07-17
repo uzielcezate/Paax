@@ -11,9 +11,10 @@ import '../../domain/entities/single_track_album_detail.dart';
 import '../../core/utils/string_utils.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
-import '../state/theme_state.dart';
+
 import '../screens/artist_detail_screen.dart';
 import '../screens/album_detail_screen.dart';
+import 'playlist_cover.dart';
 import '../screens/home_screen.dart'; // Import MainWrapper if needed, but it's a circular dep maybe.
 import '../screens/main_wrapper.dart'; // To access MainWrapper.shellKey
 import 'package:share_plus/share_plus.dart';
@@ -83,7 +84,7 @@ class OverflowMenu extends StatelessWidget {
     return GestureDetector(
       onTap: () => _showMenu(context),
       behavior: HitTestBehavior.opaque,
-      child: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white, size: 22),
+      child: Icon(Icons.more_vert_rounded, color: iconColor ?? Colors.white, size: 26),
     );
   }
 }
@@ -131,21 +132,31 @@ class _MenuContent extends StatelessWidget {
     }
     // ... rest of build logic using effectiveTrack instead of track
     
-    // Pure black sheet — lightweight, no dynamic color
-    const sheetBg = Color(0xFF000000);
+    // Pure surface sheet — lightweight, no dynamic color
+    const sheetBg = AppColors.surface;
     const sheetFg = Colors.white;
 
     return Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: sheetBg, 
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         border: const Border(top: BorderSide(color: Color(0xFF1A1A1A), width: 1)),
       ),
-      padding: const EdgeInsets.symmetric(vertical: 24),
       child: SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Drag handle
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF333333),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
             _buildHeader(context, effectiveTrack, sheetFg),
             const Divider(color: Color(0xFF1A1A1A), height: 32),
             ..._buildActions(context, effectiveTrack, sheetFg),
@@ -192,19 +203,27 @@ class _MenuContent extends StatelessWidget {
       subtitle = "Playlist • ${playlist!.trackIds.length} tracks";
     }
 
+    // For playlists, use PlaylistCover widget; for others, use imageUrl
+    Widget? leadingWidget;
+    if (type == MenuType.playlist && playlist != null) {
+      leadingWidget = PlaylistCover(playlist: playlist!, size: 48, borderRadius: 4);
+    } else if (imageUrl != null) {
+      leadingWidget = ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.network(imageUrl, width: 48, height: 48, fit: BoxFit.cover,
+          errorBuilder: (_,__,___) => Container(color: Colors.grey, width: 48, height: 48, child: const Icon(Icons.music_note)),
+        ),
+      );
+    } else {
+      leadingWidget = Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(4)),
+        child: const Icon(Icons.music_note, color: Colors.white54),
+      );
+    }
+
     return ListTile(
-      leading: imageUrl != null 
-          ? ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Image.network(imageUrl, width: 48, height: 48, fit: BoxFit.cover,
-                errorBuilder: (_,__,___) => Container(color: Colors.grey, width: 48, height: 48, child: const Icon(Icons.music_note)),
-              ),
-            )
-          : Container(
-              width: 48, height: 48, 
-              decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(4)),
-              child: const Icon(Icons.music_note, color: Colors.white54),
-            ),
+      leading: leadingWidget,
       title: Text(title, style: TextStyle(color: sheetFg, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(subtitle, style: const TextStyle(color: Color(0xFF888888), fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
     );
@@ -228,7 +247,7 @@ class _MenuContent extends StatelessWidget {
       _actionItem(context, 
         icon: isLiked ? Icons.favorite : Icons.favorite_border,
         label: isLiked ? "Unlike" : "Like",
-        color: isLiked ? AppColors.primaryEnd : sheetFg,
+        color: sheetFg,
         onTap: () {
           lib.toggleLike(effectiveTrack);
           Navigator.pop(context); 
@@ -327,6 +346,29 @@ class _MenuContent extends StatelessWidget {
          Navigator.pop(context);
          Share.share('Check out "${effectiveTrack.title}" by ${effectiveTrack.artistName} on Beaty! https://music.youtube.com/watch?v=${effectiveTrack.id}');
       }),
+      // Hide / Unhide track
+      Builder(
+        builder: (ctx) {
+          final lib = ctx.read<LibraryController>();
+          final hidden = lib.isHidden(effectiveTrack.id);
+          return _actionItem(ctx,
+            icon: hidden ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+            label: hidden ? "Unhide track" : "Hide track",
+            color: sheetFg,
+            onTap: () {
+              lib.toggleHideTrack(effectiveTrack.id);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(parentContext).showSnackBar(
+                SnackBar(
+                  content: Text(hidden ? 'Track unhidden' : 'Track hidden'),
+                  duration: const Duration(seconds: 2),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            },
+          );
+        },
+      ),
       // Remove from Playlist (only shown when inside a playlist)
       if (playlistContext != null)
         _actionItem(context, icon: Icons.playlist_remove, label: "Remove from Playlist",
@@ -390,6 +432,7 @@ class _MenuContent extends StatelessWidget {
          final route = MaterialPageRoute(builder: (_) => ArtistDetailScreen(
             artistId: artistId!,
             artistName: artistName,
+            pictureUrl: album?.artworkUrl ?? singleDetail?.artworkUrl,
          ));
          
          if (MainWrapper.shellKey.currentState != null) {
@@ -439,6 +482,31 @@ class _MenuContent extends StatelessWidget {
          // Play playlist logic
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Play playlist not implemented")));
       }),
+      // Pin / Unpin playlist
+      Builder(
+        builder: (ctx) {
+          final lib = ctx.read<LibraryController>();
+          final isPinned = lib.isPlaylistPinned(playlist!.id);
+          return _actionItem(ctx,
+            icon: isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+            label: isPinned ? "Unpin playlist" : "Pin playlist",
+            color: sheetFg,
+            onTap: () async {
+              final result = await lib.togglePinPlaylist(playlist!.id);
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (result == null) {
+                ScaffoldMessenger.of(parentContext).showSnackBar(
+                  const SnackBar(
+                    content: Text('You can pin up to 5 playlists'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+          );
+        },
+      ),
       if (onEditOrder != null)
         _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", color: sheetFg, onTap: () {
            Navigator.pop(context);
@@ -474,6 +542,7 @@ class _MenuContent extends StatelessWidget {
       builder: (_) => ArtistDetailScreen(
         artistId: artistId,
         artistName: artistName,
+        pictureUrl: sourceTrack?.artworkUrl,
         sourceTrack: sourceTrack,
       ),
     );
@@ -495,7 +564,7 @@ class _MenuContent extends StatelessWidget {
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
       builder: (sheetCtx) {
-         const sBg = Color(0xFF000000);
+         const sBg = AppColors.surface;
          const sFg = Colors.white;
          return Container(
            decoration: const BoxDecoration(
@@ -503,11 +572,22 @@ class _MenuContent extends StatelessWidget {
              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
              border: Border(top: BorderSide(color: Color(0xFF1A1A1A), width: 1)),
            ),
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: SafeArea(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Drag handle
+                Padding(
+                  padding: const EdgeInsets.only(top: 12, bottom: 4),
+                  child: Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF333333),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                   child: Text(

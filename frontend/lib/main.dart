@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'core/theme/app_theme.dart';
 import 'core/config/api_config.dart';
@@ -20,6 +21,17 @@ import 'core/playback/paax_audio_handler.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await HiveStorage.init();
+
+  // ── Edge-to-edge rendering ──
+  // Ensures consistent layout across all Android OEMs (Oppo, Xiaomi, etc.)
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
 
   // Initialize Foreground Service for background audio (mobile only)
   if (!kIsWeb) {
