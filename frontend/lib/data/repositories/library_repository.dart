@@ -343,12 +343,37 @@ class LibraryRepository {
       // Pending ops + resolver-independent state belonged to the previous user.
       await _syncState.clearPending();
     }
+    // A pre-existing local library with NO recorded owner (lastUserId == null)
+    // predates cloud sync and cannot be safely attributed to this account — it
+    // may be a different user's data left on this device before Phase 3.2A.
+    // Uploading it would be a cross-account write, so we keep it LOCAL-ONLY
+    // (never discarded) and suppress the one-time bulk migration for it. New
+    // in-session actions still sync normally; a later real account switch clears
+    // the local boxes. Only genuinely unattributable data is affected.
+    final unattributedLocal = !switchedAccount &&
+        lastUserId == null &&
+        _hasLocalLibrary();
+
     await _syncState.setLastUserId(userId);
 
     // Order matters: push local removals/adds first so hydrate sees the truth.
     await flushPending();
     await hydrateFromCloud();
-    await migrateLocalToCloud();
+    if (unattributedLocal) {
+      _log('first sync with a pre-existing, unowned local library — keeping it '
+          'local-only (no bulk upload) to avoid a cross-account write.');
+      await _syncState.setMigrated(userId);
+    } else {
+      await migrateLocalToCloud();
+    }
+  }
+
+  /// True when any cloud-syncable local library box currently holds data.
+  bool _hasLocalLibrary() {
+    return HiveStorage.getLikedTracks().isNotEmpty ||
+        HiveStorage.getFollowedArtists().isNotEmpty ||
+        HiveStorage.getSavedAlbums().isNotEmpty ||
+        HiveStorage.getHiddenTrackIds().isNotEmpty;
   }
 
   // ── One-time local → cloud migration (per user) ───────────────────

@@ -37,8 +37,19 @@ class LibraryController extends ChangeNotifier {
   Future<void> onUserSession(String? userId) async {
     if (_repo == null) return;
     if (_sessionUidSet && userId == _sessionUid) return; // same identity — skip
+    final isAccountSwitch = _sessionUidSet && _sessionUid != null && userId != _sessionUid;
     _sessionUid = userId;
     _sessionUidSet = true;
+    // On a real account switch the repo clears the local boxes and rehydrates;
+    // drop the previous account's in-memory lists IMMEDIATELY so its data is
+    // never shown to the new user during the async sync window.
+    if (isAccountSwitch) {
+      _likedTracks = [];
+      _savedAlbums = [];
+      _followedArtists = [];
+      _hiddenTrackIds = {};
+      notifyListeners();
+    }
     try {
       await _repo.onUserSession(userId);
     } catch (_) {
