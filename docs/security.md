@@ -113,6 +113,12 @@ Deployed 2026-07-16 ([decisions.md](decisions.md) ADR-009; full reference: [back
 - **Counters never client-written** — library sync writes only relation rows (`user_liked_tracks`/`user_saved_albums`/`user_followed_artists`/`user_hidden_tracks`); `platform_likes_count`/`platform_followers_count` are maintained solely by the `bump_*` triggers.
 - **Idempotent, RLS-scoped CRUD** — inserts ignore Postgres `23505`; all writes are scoped to `auth.uid()`. paax-api was not modified, so no new server attack surface.
 
+### Phase 3.2B controls (followed genres, personalized Home)
+
+- **`user_followed_genres` own-row RLS** — `SELECT`/`INSERT`/`DELETE` scoped to `auth.uid()`, PK `(user_id, genre_id)`; the client **never writes** the `platform`-style counter — `private.bump_genre_followers` maintains it (same counters-are-trigger-only rule as artists). Genre follows ride the existing offline-first pipeline (idempotent inserts ignoring `23505`). **No migration** was needed (the genres tables pre-existed) and **paax-api was not modified**, so no new server attack surface.
+- **Home reads only public catalog + the user's own relation rows** — `HomeRepository` queries the publicly-readable catalog tables (`genres`/`albums`/`artists`/`album_genres`), and the personalization inputs are the caller's own `user_followed_artists`/`user_followed_genres` rows under RLS. Nothing on Home reads another user's data.
+- **Per-user Home cache prevents cross-account content bleed** — `HomeController`'s offline `SharedPreferences` cache is keyed per user, and `onUserSession(uid)` resets in-memory sections on account switch, so a persistent Home tab never shows a previous user's personalized content.
+
 ---
 
 ## Data Privacy

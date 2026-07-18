@@ -43,6 +43,29 @@ void main() {
       expect(await s.getPendingOps(), hasLength(2));
     });
 
+    test('genreFollow ops round-trip through the journal (Phase 3.2.4)',
+        () async {
+      final s = LibrarySyncState();
+      await s.enqueue(PendingOp(
+          op: SyncOpType.add,
+          kind: SyncOpKind.genreFollow,
+          deezerId: '132',
+          ts: 1));
+      final ops = await s.getPendingOps();
+      expect(ops, hasLength(1));
+      expect(ops.first.kind, SyncOpKind.genreFollow);
+      expect(ops.first.deezerId, '132');
+      // add then remove of the same genre collapses (last write wins).
+      await s.enqueue(PendingOp(
+          op: SyncOpType.remove,
+          kind: SyncOpKind.genreFollow,
+          deezerId: '132',
+          ts: 2));
+      final after = await s.getPendingOps();
+      expect(after, hasLength(1));
+      expect(after.first.op, SyncOpType.remove);
+    });
+
     test('replaceAll and clearPending work', () async {
       final s = LibrarySyncState();
       await s.enqueue(PendingOp(

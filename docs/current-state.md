@@ -7,9 +7,9 @@
 
 ## Project Status
 
-**Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (no CI, debug signing, streaming not consolidated). **Real Supabase auth landed in Phase 3.1**; **Phase 3.2A** (branch `feat/phase-3.2a-onboarding-profile-library`) added real artist onboarding, a real Supabase-backed profile + avatar upload, and offline-first cloud library sync.
+**Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (no CI, debug signing, streaming not consolidated). **Real Supabase auth landed in Phase 3.1**; **Phase 3.2A** added real artist onboarding, a real Supabase-backed profile + avatar upload, and offline-first cloud library sync; **Phase 3.2B** (branch `feat/phase-3.2b-genres-home`) added **followed genres** (same offline-first pipeline) and a **personalized Home** rebuilt from real Supabase catalog sections.
 **Last Updated**: 2026-07-17
-**Updated By**: Phase 3.2A onboarding + profile + cloud library sync (AI agent)
+**Updated By**: Phase 3.2B followed genres + personalized Home (AI agent)
 
 > For the at-a-glance health dashboard (build/tests/deploys/bug counts, milestone progress), see [PROJECT_STATUS.md](PROJECT_STATUS.md). This doc and that one should always agree.
 
@@ -19,7 +19,9 @@
 
 - **Hybrid v2 metadata pipeline** — Deezer metadata + YouTube-matched playback IDs via `paax-api` `/v2/*`. See [architecture.md](architecture.md), [api.md](api.md).
 - **Playback** — YouTube IFrame playback on mobile (`flutter_inappwebview`, background audio) and web (`youtube_player_iframe`), with OS media notification via `audio_service`/`PaaxAudioHandler`. See [features/player.md](features/player.md).
-- **Library (offline-first, cloud-synced)** — liked tracks, playlists (create/rename/delete/reorder/pin, cap 5), saved albums, followed artists, recently played, hidden tracks. Hive is the fast local cache; **liked/saved-albums/followed-artists/hidden-tracks now sync to Supabase** (durable, cross-device, multi-account isolated) as of Phase 3.2A. Playlists remain Hive-only. See [features/library.md](features/library.md), [decisions.md](decisions.md) ADR-011.
+- **Library (offline-first, cloud-synced)** — liked tracks, playlists (create/rename/delete/reorder/pin, cap 5), saved albums, followed artists, followed genres, recently played, hidden tracks. Hive is the fast local cache; **liked/saved-albums/followed-artists/hidden-tracks (Phase 3.2A) + followed-genres (Phase 3.2B) now sync to Supabase** (durable, cross-device, multi-account isolated). Playlists remain Hive-only. See [features/library.md](features/library.md), [decisions.md](decisions.md) ADR-011/ADR-012.
+- **Followed genres (Phase 3.2B)** — a Follow/Following pill on the existing `GenreResultsScreen` (Search genre grid → results) follows catalog genres through the same offline-first pipeline as artists (`user_followed_genres`, resolve by Deezer genre id, pending-ops journal, clear-on-account-switch). The pill is hidden when no catalog genre matches the display slug or the genre has no Deezer id. See [features/library.md](features/library.md), [decisions.md](decisions.md) ADR-012.
+- **Personalized Home (Phase 3.2B)** — the existing home layout now renders deterministic **real Supabase catalog** sections (Your artists, Your genres, New from your artists, Popular from your artists, Recommended for you, Trending, Recently added), each hidden when empty, backed by `HomeRepository`/`HomeController` with a per-user offline cache and pull-to-refresh. No fake data, no "Continue Listening" placeholder. See [features/home.md](features/home.md).
 - **Artist onboarding (Phase 3.2A)** — real 5-artist minimum selection (popular from the `artists` table + `/v2/find` search with lazy Deezer→UUID resolve), completed via the `complete_artist_onboarding` RPC, local selection persistence, bypass prevention. See [features/onboarding.md](features/onboarding.md).
 - **Real profile + avatar (Phase 3.2A)** — profile screen renders the real Supabase `profiles` row (name, `@username`, email, location, real subscription tier, joined date) + live library stats; `EditProfileScreen` edits whitelisted fields; `AvatarService` uploads to the `user-avatars` Storage bucket (resize 512px/JPEG q85). See [features/profile.md](features/profile.md).
 - **Search** — debounced (400 ms) parallel track/album/artist search; genre browse grid. See [features/search.md](features/search.md).
@@ -55,7 +57,8 @@ Full list: [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 | Task | Owner | Target | Notes |
 |------|-------|--------|-------|
-| Frontend Phase 3.2B (following expansion + personalized Home) | — | not started | Phase 3.2A **done** (onboarding, real profile+avatar, cloud library sync). Next: expand following surfaces + a personalized Home feed. Still deferred: playlists cloud migration, qualified-play listening history, followed genres, offline downloads. |
+| Playlists cloud migration | — | not started | Phase 3.2A + 3.2B **done** (onboarding, profile+avatar, cloud library sync, followed genres, personalized Home). Playlists remain Hive-only. |
+| Advanced recommendations / listening history | — | not started | "Recommended for you" today = albums in followed genres (no play-history engine); qualified-play history still deferred. |
 | "Liquid glass" UI polish (Phase 5) | uzielcezate | ongoing | Latest commits tune shadows/edges/nav bar |
 | Branding Beaty → Paax | uzielcezate | ongoing | `applicationId`, `frontend/README.md`, root `README.md` still say Beaty |
 | Streaming consolidation (IFrame vs Worker vs IPv6 proxy) | uzielcezate | TBD | Pick one server fallback, delete the rest (ADR-006) |
@@ -68,6 +71,7 @@ See [tasks/in-progress.md](tasks/in-progress.md).
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-07-17 | Phase 3.2B — followed genres (offline-first, `user_followed_genres`, no migration; Follow pill on `GenreResultsScreen`) + personalized Home rebuilt from real Supabase catalog sections (`HomeRepository`/`HomeController`, per-user cache) | AI agent |
 | 2026-07-17 | Phase 3.2A — real artist onboarding (5-artist min + RPC), real Supabase profile + avatar upload, offline-first cloud library sync (`user_hidden_tracks` + `complete_artist_onboarding` RPC), Phase 3.1 password-reuse error fix | AI agent |
 | 2026-07-17 | Phase 3.1 — Flutter wired to real Supabase Auth (verification, recovery, profile, deep links, routing state machine); demo stub + old onboarding removed; live integration test added | AI agent |
 | 2026-07-16 | Supabase Phase 1 deployed — schema (34 tables) + RLS + storage + billing foundation (ADR-009); not yet integrated | AI agent |
@@ -96,7 +100,7 @@ Full history: [CHANGELOG.md](CHANGELOG.md), [release-notes.md](release-notes.md)
 
 1. **Consolidate streaming** — choose a single server fallback and remove dead code (ADR-006).
 2. **Production hardening** — real signing config + Paax `applicationId`; fix Deezer `verify=False`; gate/remove unauthenticated write endpoints.
-3. **Phase 3.2B** — following expansion + personalized Home; then playlists cloud migration and qualified-play listening history. (Auth, onboarding, real profile, and cloud library sync are done — ADR-009/ADR-011.)
+3. **Playlists cloud migration**, then qualified-play listening history and advanced recommendations. (Auth, onboarding, real profile, cloud library sync, followed genres, and personalized Home are done — ADR-009/ADR-011/ADR-012.)
 4. **Automated tests + CI** — start with the pure units in [testing.md](testing.md).
 5. **Finish Beaty → Paax rebrand.**
 

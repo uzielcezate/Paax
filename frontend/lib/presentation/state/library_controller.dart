@@ -5,6 +5,7 @@ import '../../domain/entities/track.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
+import '../../domain/entities/genre.dart';
 
 class LibraryController extends ChangeNotifier {
   List<Track> _likedTracks = [];
@@ -47,6 +48,7 @@ class LibraryController extends ChangeNotifier {
       _likedTracks = [];
       _savedAlbums = [];
       _followedArtists = [];
+      _followedGenres = [];
       _hiddenTrackIds = {};
       notifyListeners();
     }
@@ -61,11 +63,15 @@ class LibraryController extends ChangeNotifier {
   List<Artist> _followedArtists = [];
   List<Artist> get followedArtists => _followedArtists;
 
+  List<Genre> _followedGenres = [];
+  List<Genre> get followedGenres => _followedGenres;
+
   void _loadData() {
     _likedTracks = HiveStorage.getLikedTracks();
     _playlists = HiveStorage.getPlaylists();
     _savedAlbums = HiveStorage.getSavedAlbums();
     _followedArtists = HiveStorage.getFollowedArtists();
+    _followedGenres = HiveStorage.getFollowedGenres();
     _hiddenTrackIds = HiveStorage.getHiddenTrackIds();
     _pinnedPlaylistMap = HiveStorage.getPinnedPlaylistMap();
     // Clean up stale pinned entries for deleted playlists
@@ -84,7 +90,19 @@ class LibraryController extends ChangeNotifier {
   bool isArtistFollowed(String id) {
     return HiveStorage.isArtistFollowed(id);
   }
-  
+
+  Future<void> toggleFollowGenre(Genre genre) async {
+    await HiveStorage.toggleFollowGenre(genre);
+    _loadData();
+    // Fire-and-forget cloud sync with the post-toggle state.
+    _repo?.pushFollowGenre(genre,
+        nowFollowed: HiveStorage.isGenreFollowed(genre.id));
+  }
+
+  bool isGenreFollowed(String deezerId) {
+    return HiveStorage.isGenreFollowed(deezerId);
+  }
+
   Future<void> toggleLike(Track track) async {
     print("LibraryController: Toggling like for ${track.title} (ID: ${track.id})");
     // Ensure we work with ID

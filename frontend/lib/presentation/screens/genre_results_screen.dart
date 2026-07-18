@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/theme/app_colors.dart';
 import '../widgets/error_state_widget.dart';
 import '../../domain/repositories/music_repository.dart';
@@ -8,6 +9,7 @@ import '../../data/repositories/music_repository_impl.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
+import '../../domain/entities/genre.dart';
 import '../state/playback_controller.dart';
 import '../state/library_controller.dart';
 
@@ -52,6 +54,16 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
   bool _showTitle = false;
   ThumbnailPrefetcher? _prefetcher;
 
+  // Phase 3.2.4 — followable genre resolved from the Supabase catalog by slug.
+  // Null until resolved (or when the slug has no matching catalog genre, in
+  // which case the Follow control stays hidden).
+  String? _genreDeezerId;
+  String? _genreUuid;
+  String? _genreName;
+  String? _genreImage;
+  bool get _canFollow =>
+      _genreDeezerId != null && _genreDeezerId!.isNotEmpty;
+
   // Dynamic color from genre gradient
   Color get _dominantColor => widget.gradientColors.first;
   Color get _foregroundColor => Colors.white;
@@ -86,6 +98,46 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
       }
     });
     _fetchGenreContent();
+    _resolveGenre();
+  }
+
+  /// Best-effort match of the display slug to a Supabase catalog genre so the
+  /// user can follow it. If nothing matches (or it has no Deezer id) the Follow
+  /// control simply stays hidden. Never throws.
+  Future<void> _resolveGenre() async {
+    try {
+      const cols = 'id, deezer_id, name, image_cached_url, image_original_url';
+      final client = Supabase.instance.client;
+      // Prefer an EXACT (case-insensitive) name match so we never bind the
+      // Follow control to a different genre that merely contains the slug as a
+      // substring. Fall back to a deterministic (name-ordered) substring match.
+      Map<String, dynamic>? row = await client
+          .from('genres')
+          .select(cols)
+          .ilike('name', widget.genreSlug)
+          .limit(1)
+          .maybeSingle();
+      row ??= await client
+          .from('genres')
+          .select(cols)
+          .ilike('name', '%${widget.genreSlug}%')
+          .order('name')
+          .limit(1)
+          .maybeSingle();
+      if (!mounted || row == null) return;
+      final r = row; // final + non-null so promotion holds inside setState
+      final deezerId = r['deezer_id']?.toString();
+      final cached = r['image_cached_url']?.toString();
+      final original = r['image_original_url']?.toString();
+      setState(() {
+        _genreUuid = r['id']?.toString();
+        _genreDeezerId = (deezerId != null && deezerId.isNotEmpty) ? deezerId : null;
+        _genreName = r['name']?.toString() ?? widget.genreSlug;
+        _genreImage = (cached != null && cached.isNotEmpty) ? cached : original;
+      });
+    } catch (_) {
+      // Non-fatal — the Follow control stays hidden if resolution fails.
+    }
   }
 
   @override
@@ -394,6 +446,10 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
                         height: 1.1,
                       ),
                     ),
+                    if (_canFollow) ...[
+                      const SizedBox(height: 12),
+                      _buildFollowButton(),
+                    ],
                   ],
                 ),
               ),
@@ -401,6 +457,54 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  /// Follow / Following pill for the resolved catalog genre. Uses the existing
+  /// LibraryController.toggleFollowGenre; the followed state syncs to Supabase +
+  /// Hive via the offline-first library pipeline.
+  Widget _buildFollowButton() {
+    return Consumer<LibraryController>(
+      builder: (context, library, _) {
+        final following = library.isGenreFollowed(_genreDeezerId ?? '');
+        return GestureDetector(
+          onTap: () {
+            library.toggleFollowGenre(Genre(
+              id: _genreDeezerId!,
+              name: _genreName ?? widget.genreSlug,
+              imageUrl: _genreImage,
+              slug: widget.genreSlug,
+              supabaseId: _genreUuid,
+            ));
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+            decoration: BoxDecoration(
+              color: following
+                  ? _foregroundColor.withOpacity(0.14)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: _foregroundColor.withOpacity(0.55), width: 1.2),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(following ? Icons.check_rounded : Icons.add_rounded,
+                    color: _foregroundColor, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  following ? "Following" : "Follow",
+                  style: TextStyle(
+                    color: _foregroundColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

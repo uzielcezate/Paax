@@ -2,24 +2,28 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/responsive.dart';
-import '../state/auth_controller.dart'; 
-import '../../data/repositories/music_repository_impl.dart';
-import '../../domain/repositories/music_repository.dart';
+import '../state/auth_controller.dart';
+import '../state/home_controller.dart';
+import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
-import '../../data/local/hive_storage.dart';
-import '../../domain/entities/track.dart';
-import '../../domain/entities/saved_album.dart'; 
+import '../../data/repositories/home_repository.dart';
+import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
-import '../../domain/entities/single_track_album_detail.dart';
+import '../../domain/entities/genre.dart';
 import '../widgets/section_header.dart';
 import '../widgets/music_card.dart';
-import '../widgets/thumbnail.dart';
+import '../widgets/error_state_widget.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
+import 'genre_results_screen.dart';
 import 'profile_screen.dart';
 import '../widgets/bottom_content_padding.dart';
-import '../../core/utils/thumbnail_prefetcher.dart';
 
+/// Home — a personalized feed backed by REAL Supabase catalog data
+/// (Phase 3.2.5). The screen layout, header, edge fades, horizontal card rails
+/// and navigation are the pre-existing Paax ones; only the DATA behind the
+/// sections changed from the old YouTube-derived charts to personalized,
+/// deterministic catalog sections. Empty personalized sections are hidden.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -28,91 +32,42 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final MusicRepository _repository = MusicRepositoryImpl();
-  
-  // Structured Sections data
-  // Using Records: ({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _globalCharts;
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _usCharts;
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _mxCharts;
-  
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _popContent;
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _rockContent;
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _latinContent;
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _hipHopContent;
-  late Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> _indieContent;
-
-  // Personalization
-  List<Track> _forYouTracks = [];
-  String _forYouTitle = "For You";
-  bool _personalizationLoaded = false;
+  late ScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
-    _prefetcher = ThumbnailPrefetcher(context);
-    // Prefetching logic logic for Home is implied by lazy loading, 
-    // but we can add explicit prefetch on scroll if we map the sections.
-    // For now, lazy loading + throttled cache is the biggest win.
-    
-    _initFutures();
-    _loadPersonalizedSection();
+    // Ensure a load happens once the tree is ready. The auth-driven proxy
+    // usually triggers the first load already, so only load if it hasn't — this
+    // avoids a duplicate fetch while still covering the cold-start case.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final home = context.read<HomeController>();
+      if (!home.hasLoadedOnce && !home.isLoading) home.load();
+    });
   }
-  
+
   @override
   void dispose() {
     _scrollController.dispose();
-    _prefetcher?.dispose();
     super.dispose();
   }
-  
-  void _initFutures() {
-    // Charts
-    _globalCharts = _repository.getCharts('ZZ');
-    _usCharts = _repository.getCharts('US');
-    _mxCharts = _repository.getCharts('MX');
-    
-    // Genres
-    _popContent = _repository.getGenreContent('Pop', 'US');
-    _rockContent = _repository.getGenreContent('Rock', 'US');
-    _latinContent = _repository.getGenreContent('Latin', 'US');
-    _hipHopContent = _repository.getGenreContent('Hip-Hop', 'US');
-    _indieContent = _repository.getGenreContent('Indie', 'US');
-  }
 
-  Future<void> _loadPersonalizedSection() async {
-     try {
-       final recentSearches = HiveStorage.getRecentSearches();
-       if (recentSearches.isNotEmpty) {
-          final lastQuery = recentSearches.first;
-          final results = await _repository.searchTracks(lastQuery);
-          if (results.isNotEmpty) {
-             if (mounted) {
-               setState(() {
-                 _forYouTracks = results;
-                 _forYouTitle = "Based on \"$lastQuery\"";
-                 _personalizationLoaded = true;
-               });
-             }
-             return;
-          }
-       }
-       
-       // Fallback to search if no personal history
-       final trending = await _repository.searchTracks('Top Hits');
-       if (mounted) {
-         setState(() {
-           _forYouTracks = trending.take(10).toList();
-           _forYouTitle = "Trending Now";
-           _personalizationLoaded = true;
-         });
-       }
-     } catch (e) {
-       print("Personalization error: $e");
-       if (mounted) setState(() => _personalizationLoaded = true);
-     }
-  }
+  /// Maps catalog [HomeAlbum]s into the existing [SavedAlbum] card model used by
+  /// [_buildAlbumRow]. Albums without a Deezer id are dropped, because
+  /// AlbumDetailScreen is keyed by the Deezer id — a card that can't open its
+  /// detail should not be shown. AlbumDetailScreen re-resolves the artist from
+  /// its own metadata fetch, so artistName can be empty here.
+  List<SavedAlbum> _asSavedAlbums(List<HomeAlbum> albums) => albums
+      .where((a) => a.deezerId != null && a.deezerId!.isNotEmpty)
+      .map((a) => SavedAlbum(
+            albumId: a.deezerId!,
+            title: a.title,
+            artistName: '',
+            artworkUrl: a.artworkUrl ?? '',
+          ))
+      .toList();
 
   @override
   Widget build(BuildContext context) {
@@ -123,46 +78,91 @@ class _HomeScreenState extends State<HomeScreen> {
         : (profile?.greetingName.trim().isNotEmpty ?? false)
             ? profile!.greetingName
             : 'there';
-    
+
     final hour = DateTime.now().hour;
     String greeting = "Good morning";
     if (hour >= 12) greeting = "Good afternoon";
     if (hour >= 18) greeting = "Good evening";
-    
+
+    final home = context.watch<HomeController>();
+    final library = context.watch<LibraryController>();
+
+    final followedArtists = library.followedArtists;
+    final followedGenres = library.followedGenres;
+
+    // Personalized + global album sections (real catalog data). Each renders
+    // only when it has content, so a new user sees only what actually exists.
+    final newFromArtists = _asSavedAlbums(home.newFromArtists);
+    final popularFromArtists = _asSavedAlbums(home.popularFromArtists);
+    final recommended = _asSavedAlbums(home.recommended);
+    final trending = _asSavedAlbums(home.trending);
+    final recentlyAdded = _asSavedAlbums(home.recentlyAdded);
+
+    final sections = <Widget>[
+      if (followedArtists.isNotEmpty)
+        _buildArtistRow(context, "Your artists", followedArtists),
+      if (followedGenres.isNotEmpty)
+        _buildGenreRow(context, "Your genres", followedGenres),
+      if (newFromArtists.isNotEmpty)
+        _buildAlbumRow(context, "New from your artists", newFromArtists),
+      if (popularFromArtists.isNotEmpty)
+        _buildAlbumRow(context, "Popular from your artists", popularFromArtists),
+      if (recommended.isNotEmpty)
+        _buildAlbumRow(context, "Recommended for you", recommended),
+      if (trending.isNotEmpty)
+        _buildAlbumRow(context, "Trending", trending),
+      if (recentlyAdded.isNotEmpty)
+        _buildAlbumRow(context, "Recently added", recentlyAdded),
+    ];
+
+    final showFirstLoad = home.isLoading && sections.isEmpty;
+    final showError = home.error != null && sections.isEmpty && !home.isLoading;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
-          CustomScrollView(
-            controller: _scrollController,
-            slivers: [
-               SliverToBoxAdapter(child: SizedBox(height: MediaQuery.of(context).padding.top)),
-               SliverToBoxAdapter(child: _buildHeader(context, greeting, userName)),
-               
-               if (_personalizationLoaded && _forYouTracks.isNotEmpty)
-                  SliverToBoxAdapter(child: _buildTrackRow(context, _forYouTitle, _forYouTracks)),
-               
-               // Lazy build the rest of the sections
-               SliverList(
-                 delegate: SliverChildBuilderDelegate(
-                   (context, index) {
-                      switch (index) {
-                        case 0: return _buildCategorySection("Global Top Charts", _globalCharts);
-                        case 1: return _buildCategorySection("US Top Charts", _usCharts);
-                        case 2: return _buildCategorySection("Mexico Top Charts", _mxCharts);
-                        case 3: return _buildCategorySection("Pop Essentials", _popContent);
-                        case 4: return _buildCategorySection("Rock Classics & New", _rockContent);
-                        case 5: return _buildCategorySection("Latin & Reggaeton", _latinContent);
-                        case 6: return _buildCategorySection("Hip-Hop & Rap", _hipHopContent);
-                        case 7: return _buildCategorySection("Indie & Alternative", _indieContent);
-                        case 8: return const BottomContentPadding();
-                        default: return null;
-                      }
-                   },
-                   childCount: 9,
-                 ),
-               ),
-            ],
+          RefreshIndicator(
+            onRefresh: () => context.read<HomeController>().refresh(),
+            color: Colors.white,
+            backgroundColor: AppColors.surface,
+            child: CustomScrollView(
+              controller: _scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                    child: SizedBox(height: MediaQuery.of(context).padding.top)),
+                SliverToBoxAdapter(
+                    child: _buildHeader(context, greeting, userName)),
+                if (showFirstLoad)
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 80),
+                      child: Center(
+                          child: CircularProgressIndicator(color: Colors.white)),
+                    ),
+                  )
+                else if (showError)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 40),
+                      child: ErrorStateWidget(
+                        rawError: home.error,
+                        onRetry: () => context.read<HomeController>().retry(),
+                      ),
+                    ),
+                  )
+                else ...[
+                  SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) => sections[index],
+                      childCount: sections.length,
+                    ),
+                  ),
+                  const SliverToBoxAdapter(child: BottomContentPadding()),
+                ],
+              ],
+            ),
           ),
           // ── Top edge fade ──
           Positioned(
@@ -195,7 +195,8 @@ class _HomeScreenState extends State<HomeScreen> {
             bottom: 0,
             child: IgnorePointer(
               child: Container(
-                height: context.read<PlaybackController>().currentTrack != null ? 240 : 160,
+                height:
+                    context.read<PlaybackController>().currentTrack != null ? 240 : 160,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
@@ -216,134 +217,55 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-  
-  late ScrollController _scrollController;
-  ThumbnailPrefetcher? _prefetcher;
 
   Widget _buildHeader(BuildContext context, String greeting, String userName) {
-      return Padding(
-         padding: const EdgeInsets.all(20.0),
-         child:Row(
-           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-           children: [
-             Column(
-               crossAxisAlignment: CrossAxisAlignment.start,
-               children: [
-                 Text(
-                   "$greeting,",
-                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                     color: AppColors.textSecondary,
-                     fontWeight: FontWeight.w400,
-                     fontSize: 20
-                   ),
-                 ),
-                 Text(
-                   userName,
-                   style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                     color: AppColors.textPrimary,
-                     fontWeight: FontWeight.w800,
-                     fontSize: 28
-                   ),
-                 ),
-               ],
-             ),
-             GestureDetector(
-               onTap: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
-               },
-               child: CircleAvatar(
-                  backgroundColor: AppColors.surfaceLight,
-                  child: const Icon(Icons.person, color: Colors.white),
-               ),
-             )
-           ],
-         ),
-       );
-  }
-
-  Widget _buildCategorySection(String title, Future<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})> future) {
-      return FutureBuilder<({List<Track> tracks, List<SavedAlbum> albums, List<Artist> artists})>(
-        future: future,
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const SizedBox.shrink();
-          
-          final data = snapshot.data!;
-          // If all empty, show nothing
-          if (data.tracks.isEmpty && data.albums.isEmpty && data.artists.isEmpty) return const SizedBox.shrink();
-
-          return Column(
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-               // We can layout them as separate rows
-               if (data.tracks.isNotEmpty) _buildTrackRow(context, "$title - Top Songs", data.tracks),
-               if (data.albums.isNotEmpty) _buildAlbumRow(context, "$title - Top Albums", data.albums),
-               if (data.artists.isNotEmpty) _buildArtistRow(context, "$title - Top Artists", data.artists),
-               const SizedBox(height: 20), // Spacing between categories
+              Text(
+                "$greeting,",
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w400,
+                    fontSize: 20),
+              ),
+              Text(
+                userName,
+                style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 28),
+              ),
             ],
-          );
-        },
-      );
-  }
-
-  Widget _buildTrackRow(BuildContext context, String title, List<Track> tracks) {
-    if (tracks.isEmpty) return const SizedBox.shrink();
-    
-    // Calculate responsive dimensions
-    final cardWidth = Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
-    // Height = AspectRatio(1) + Title + Subtitle + Spacing + buffer
-    final cardHeight = cardWidth + 64; 
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SectionHeader(title: title),
-        SizedBox(
-          height: cardHeight,
-          child: ListView.builder(
-            padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
-            scrollDirection: Axis.horizontal,
-            physics: const ClampingScrollPhysics(),
-            primary: false,
-            itemCount: tracks.length,
-            itemBuilder: (context, index) {
-              final track = tracks[index];
-              return MusicCard(
-                width: cardWidth,
-                title: track.title,
-                subtitle: track.displayArtist,
-                imageUrl: track.artworkUrl,
-                onTap: () {
-                   // Play single track or album context
-                   if (track.albumId.isNotEmpty && track.albumId != '0') {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(
-                        album: SavedAlbum(
-                           albumId: track.albumId, 
-                           title: track.albumTitle, 
-                           artistName: track.artistName, 
-                           artworkUrl: track.artworkUrl
-                        )
-                      )));
-                   } else {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(
-                        singleDetail: SingleTrackAlbumDetail.fromTrack(track)
-                      )));
-                   }
-                },
-              );
-            },
           ),
-        ),
-      ],
+          GestureDetector(
+            onTap: () {
+              Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()));
+            },
+            child: CircleAvatar(
+              backgroundColor: AppColors.surfaceLight,
+              child: const Icon(Icons.person, color: Colors.white),
+            ),
+          )
+        ],
+      ),
     );
   }
 
-  Widget _buildAlbumRow(BuildContext context, String title, List<SavedAlbum> albums) {
-    if (albums.isEmpty) return const SizedBox.shrink();
-    
-    // Calculate responsive dimensions
-    final cardWidth = Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
-    final cardHeight = cardWidth + 64; 
+  // ── Reusable horizontal rails (unchanged Paax visuals) ──────────────────
 
+  Widget _buildAlbumRow(
+      BuildContext context, String title, List<SavedAlbum> albums) {
+    if (albums.isEmpty) return const SizedBox.shrink();
+    final cardWidth =
+        Responsive.value(context, mobile: 140.0, tablet: 160.0, desktop: 200.0);
+    final cardHeight = cardWidth + 64;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -351,7 +273,8 @@ class _HomeScreenState extends State<HomeScreen> {
         SizedBox(
           height: cardHeight,
           child: ListView.builder(
-            padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
+            padding:
+                EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
             scrollDirection: Axis.horizontal,
             physics: const ClampingScrollPhysics(),
             primary: false,
@@ -364,24 +287,26 @@ class _HomeScreenState extends State<HomeScreen> {
                 subtitle: album.artistName,
                 imageUrl: album.artworkUrl,
                 onTap: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)));
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => AlbumDetailScreen(album: album)));
                 },
               );
             },
           ),
         ),
+        const SizedBox(height: 20),
       ],
     );
   }
-  
-  Widget _buildArtistRow(BuildContext context, String title, List<Artist> artists) {
+
+  Widget _buildArtistRow(
+      BuildContext context, String title, List<Artist> artists) {
     if (artists.isEmpty) return const SizedBox.shrink();
-
-    // Calculate responsive dimensions
-    final cardWidth = Responsive.value(context, mobile: 100.0, tablet: 120.0, desktop: 140.0);
-    // Circle needs slightly less height for text
-    final cardHeight = cardWidth + 50; 
-
+    final cardWidth =
+        Responsive.value(context, mobile: 100.0, tablet: 120.0, desktop: 140.0);
+    final cardHeight = cardWidth + 50;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -389,7 +314,8 @@ class _HomeScreenState extends State<HomeScreen> {
         SizedBox(
           height: cardHeight,
           child: ListView.builder(
-            padding: EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
+            padding:
+                EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
             scrollDirection: Axis.horizontal,
             physics: const ClampingScrollPhysics(),
             primary: false,
@@ -403,17 +329,81 @@ class _HomeScreenState extends State<HomeScreen> {
                 imageUrl: artist.picture,
                 isCircle: true,
                 onTap: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
-                    artistId: artist.id,
-                    artistName: artist.name,
-                    pictureUrl: artist.picture,
-                  )));
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => ArtistDetailScreen(
+                                artistId: artist.id,
+                                artistName: artist.name,
+                                pictureUrl: artist.picture,
+                              )));
                 },
               );
             },
           ),
         ),
+        const SizedBox(height: 20),
       ],
     );
+  }
+
+  /// Followed-genres rail — reuses the existing circular [MusicCard] and opens
+  /// the existing [GenreResultsScreen] (no new screen).
+  Widget _buildGenreRow(
+      BuildContext context, String title, List<Genre> genres) {
+    if (genres.isEmpty) return const SizedBox.shrink();
+    final cardWidth =
+        Responsive.value(context, mobile: 100.0, tablet: 120.0, desktop: 140.0);
+    final cardHeight = cardWidth + 50;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(title: title),
+        SizedBox(
+          height: cardHeight,
+          child: ListView.builder(
+            padding:
+                EdgeInsets.symmetric(horizontal: Responsive.spacing(context)),
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            primary: false,
+            itemCount: genres.length,
+            itemBuilder: (context, index) {
+              final genre = genres[index];
+              return MusicCard(
+                width: cardWidth,
+                title: genre.name,
+                subtitle: "Genre",
+                imageUrl: genre.imageUrl ?? '',
+                isCircle: true,
+                onTap: () {
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => GenreResultsScreen(
+                                genreSlug: genre.name,
+                                gradientColors: _genreGradient(genre.name),
+                              )));
+                },
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  /// Deterministic dark gradient for a genre tile / header (no external data).
+  List<Color> _genreGradient(String name) {
+    const palettes = <List<Color>>[
+      [Color(0xFF3A1C71), Color(0xFF181818)],
+      [Color(0xFF1D4350), Color(0xFF181818)],
+      [Color(0xFF4B1248), Color(0xFF181818)],
+      [Color(0xFF16222A), Color(0xFF181818)],
+      [Color(0xFF41295A), Color(0xFF181818)],
+      [Color(0xFF334D50), Color(0xFF181818)],
+    ];
+    return palettes[name.hashCode.abs() % palettes.length];
   }
 }

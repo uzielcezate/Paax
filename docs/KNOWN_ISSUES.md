@@ -66,6 +66,10 @@
 | ISSUE-024 | Onboarding search UUID only for cataloged/lazily-resolved artists | Low | Onboarding | 🟡 | Popular grid + lazy `/v2/artists/deezer` resolve |
 | ISSUE-025 | Hydrate can duplicate a local liked/hidden row if preferred videoId differs | Low | Library / Sync | 🟡 | Low likelihood; no deezer-id dedup fallback |
 | ISSUE-026 | "Clear Data" wipes Hive but not cloud/sync bookkeeping | Low | Library / Sync | 🟡 | Same user re-hydrates from cloud on next login |
+| ISSUE-027 | Genre Follow pill only appears for genres matching a catalog name | Low | Genres / Home | 🟡 | Hardcoded Search grid slugs vs. catalog names; fuzzy match |
+| ISSUE-028 | "Recommended for you" often empty (sparse genre catalog) | Low | Home / Genres | 🟡 | Section hidden when empty; fills as `album_genres` grows |
+| ISSUE-029 | Home does not auto-refresh on cross-tab follow changes | Low | Home | 🟡 | Refreshes on next open or pull-to-refresh |
+| ISSUE-030 | Home section breadth bounded by current catalog size | Low | Home / Catalog | 🟡 | Grows as the Supabase catalog is ingested |
 
 ---
 
@@ -323,6 +327,48 @@
 
 ---
 
+## 🟡 Phase 3.2B followed-genres + personalized-Home limitations
+
+### ISSUE-027 — Genre Follow pill only appears for genres whose name matches a catalog row
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Genres / Home · **First Observed**: 2026-07-17
+
+**Description**: The Search genre grid uses **hardcoded display slugs** that do not always match catalog `genres.name`. `GenreResultsScreen` resolves the slug to a catalog genre by exact case-insensitive name match, then a deterministic substring fallback; when neither matches (or the genre has no Deezer id), the Follow pill is **hidden**, so some genres show no way to follow.
+
+**Workaround**: Genres whose display name matches (or substring-matches) a catalog row show the pill and follow normally. A future cleanup would source the Search grid from the catalog itself. See [AI_NOTES.md](AI_NOTES.md), [features/library.md](features/library.md).
+
+---
+
+### ISSUE-028 — "Recommended for you" is often empty (sparse genre catalog)
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Home / Genres · **First Observed**: 2026-07-17
+
+**Description**: The personalized Home *Recommended for you* section lists albums in the user's followed genres via `album_genres` links. The genre catalog and `album_genres` links are **sparse today**, so the section frequently resolves empty.
+
+**Workaround**: Empty sections are **hidden** (no fake data). The section fills in as the Supabase catalog's genre links grow. See [features/home.md](features/home.md).
+
+---
+
+### ISSUE-029 — Home does not auto-refresh when follows change on another tab
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Home · **First Observed**: 2026-07-17
+
+**Description**: Following/unfollowing an artist or genre on another tab does not live-update the Home sections. `HomeController` refreshes on next open or on **pull-to-refresh**, not reactively.
+
+**Workaround**: Pull-to-refresh (or re-open the tab) to pick up the new follows.
+
+---
+
+### ISSUE-030 — Home section breadth bounded by current catalog size
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Home / Catalog · **First Observed**: 2026-07-17
+
+**Description**: Trending / Recently added / genre-recommendation breadth is limited by how much of the catalog has been ingested into Supabase. Small catalog = thin rails.
+
+**Workaround**: Sections grow as the catalog is ingested; no action needed. See [backend/phase2-catalog.md](backend/phase2-catalog.md).
+
+---
+
 ## ✅ Resolved Issues
 
 *(None resolved yet — this log was seeded on 2026-07-16.)*
@@ -360,6 +406,11 @@ reliably carry an artist) — tracked in TECH_DEBT.
 > **Note (Phase 3.2A)**: ISSUE-022–026 above are the documented cloud-library-sync
 > limitations, not bugs — they follow directly from the offline-first design
 > ([decisions.md](decisions.md) ADR-011).
+>
+> **Note (Phase 3.2B)**: ISSUE-027–030 are the documented followed-genres +
+> personalized-Home limitations, not bugs — they follow from reusing the offline-first
+> pipeline for genres and building Home from deterministic client-side catalog queries
+> over a still-sparse catalog ([decisions.md](decisions.md) ADR-012).
 
 ---
 

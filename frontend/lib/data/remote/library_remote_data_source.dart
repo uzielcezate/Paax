@@ -28,12 +28,14 @@ class LibraryRemoteDataSource {
   static const String _likedTable = 'user_liked_tracks';
   static const String _savedTable = 'user_saved_albums';
   static const String _followedTable = 'user_followed_artists';
+  static const String _followedGenresTable = 'user_followed_genres';
   static const String _hiddenTable = 'user_hidden_tracks';
 
   // Catalog tables.
   static const String _artistsTable = 'artists';
   static const String _albumsTable = 'albums';
   static const String _tracksTable = 'tracks';
+  static const String _genresTable = 'genres';
 
   String? get _uid => _client.auth.currentUser?.id;
 
@@ -50,6 +52,9 @@ class LibraryRemoteDataSource {
 
   Future<Set<String>> fetchFollowedArtistIds() =>
       _fetchIds(_followedTable, 'artist_id');
+
+  Future<Set<String>> fetchFollowedGenreIds() =>
+      _fetchIds(_followedGenresTable, 'genre_id');
 
   Future<Set<String>> fetchHiddenTrackIds() =>
       _fetchIds(_hiddenTable, 'track_id');
@@ -82,6 +87,11 @@ class LibraryRemoteDataSource {
       _insert(_followedTable, 'artist_id', artistUuid);
   Future<void> unfollowArtist(String artistUuid) =>
       _delete(_followedTable, 'artist_id', artistUuid);
+
+  Future<void> followGenre(String genreUuid) =>
+      _insert(_followedGenresTable, 'genre_id', genreUuid);
+  Future<void> unfollowGenre(String genreUuid) =>
+      _delete(_followedGenresTable, 'genre_id', genreUuid);
 
   Future<void> hideTrack(String trackUuid) =>
       _insert(_hiddenTable, 'track_id', trackUuid);
@@ -136,6 +146,15 @@ class LibraryRemoteDataSource {
       _fetchCatalog(
         _tracksTable,
         'id, deezer_id, title, preferred_youtube_video_id, duration_seconds',
+        uuids,
+      );
+
+  Future<List<Map<String, dynamic>>> fetchCatalogGenres(
+    Iterable<String> uuids,
+  ) =>
+      _fetchCatalog(
+        _genresTable,
+        'id, deezer_id, name, slug, image_original_url, image_cached_url',
         uuids,
       );
 

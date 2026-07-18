@@ -9,6 +9,7 @@ import 'core/config/supabase_config.dart';
 import 'data/local/hive_storage.dart';
 import 'data/repositories/library_repository.dart';
 import 'presentation/state/auth_controller.dart';
+import 'presentation/state/home_controller.dart';
 import 'presentation/state/library_controller.dart';
 import 'presentation/state/playback_controller.dart';
 import 'presentation/state/search_controller.dart' as app_search;
@@ -118,6 +119,20 @@ class PaaxApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),
         ChangeNotifierProvider(create: (_) => PlaybackController()),
         ChangeNotifierProvider(create: (_) => ThemeState()),
+        // Phase 3.2.5: personalized Home feed (real Supabase catalog sections).
+        // Driven by the auth session so a persistent Home tab drops the previous
+        // user's personalized content on an account switch (idempotent per id).
+        ChangeNotifierProxyProvider<AuthController, HomeController>(
+          create: (_) => HomeController(),
+          update: (_, auth, home) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            // ignore: discarded_futures
+            home!.onUserSession(uid);
+            return home;
+          },
+        ),
       ],
       child: MaterialApp(
         title: 'Paax',

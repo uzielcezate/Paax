@@ -334,4 +334,29 @@ Executes part of ADR-009 Phase 3 · preserves ADR-001/ADR-004 (playback unchange
 
 ---
 
+### ADR-012 — Followed genres reuse the library-sync pipeline; personalized Home from client-side catalog queries
+
+**Date**: 2026-07-17 · **Status**: ACCEPTED (Phase 3.2B) · **Author**: AI agent (directed by uzielcezate) · **Deciders**: maintainer
+
+#### Context
+Phase 3.2A landed offline-first cloud library sync (ADR-011). Phase 3.2B (= Phase 3.2.4 Followed Genres + Phase 3.2.5 Personalized Home) had to add genre following and turn the generic / YouTube-derived Home into a personalized feed. Scope was **clarified mid-phase to connect the existing UI to real data** — no Home redesign, no new visual system, no new standalone screens, and state stays **Provider + ChangeNotifier** (not Riverpod). The genres tables (`public.genres`, `public.user_followed_genres`, `private.bump_genre_followers`) **already existed**, so **no migration** was needed, and **paax-api was not modified** (no Railway redeploy).
+
+#### Decision
+- **Followed genres reuse the ADR-011 offline-first pipeline verbatim** — Hive is the fast local cache, Supabase the durable authority. A new `Genre` entity (Hive typeId 5) and `followed_genres` box; `CatalogResolver.resolveGenre(s)` maps `genres.deezer_id` → uuid; `LibraryRemoteDataSource` gains idempotent `followGenre`/`unfollowGenre`/`fetchFollowedGenreIds`/`fetchCatalogGenres` (counters stay trigger-only); `LibraryRepository` gains `pushFollowGenre` + genre cases in the exhaustive resolve/apply/hydrate/migrate paths; `SyncOpKind.genreFollow` journals unresolved follows. The UI is a **Follow pill added to the existing `GenreResultsScreen`** (resolve display slug → catalog genre by exact case-insensitive name then substring fallback; pill hidden when unmatched or no Deezer id). No new browse/detail screen.
+- **Personalized Home is built from client-side deterministic catalog queries** — a new `HomeRepository` (batched public-catalog Supabase reads → typed `HomeAlbum`) + `HomeController` (parallel section loads; followed artist/genre UUIDs resolved once and shared to avoid N+1; stale-request cancellation via a monotonic token; per-user `SharedPreferences` offline cache; debounced pull-to-refresh). **No RPC, no edge function, no backend change.** Wired via `ChangeNotifierProxyProvider<AuthController, HomeController>` → `onUserSession(uid)` so the persistent Home tab drops the prior user's sections on account switch. The existing layout/widgets are reused; sections hide when empty; albums without a Deezer id are hidden.
+
+#### Rejected alternatives
+- **A server-side Home-feed RPC / edge function** — rejected; deterministic client-side catalog queries are sufficient and keep paax-api untouched this phase.
+- **New standalone Genre Browse/Detail screens + genre chip widget + new Home skeleton widget** (the exploratory agents' work) — **discarded** as out-of-scope per the clarification; only their data/controller/repository logic was kept.
+- **A separate sync mechanism for genres** — rejected; reusing the artist pipeline is simpler and proven.
+
+#### Consequences
+- **Positive**: durable cross-device followed genres; real personalized Home; zero new backend surface; consistent, battle-tested sync path; no migration/redeploy risk.
+- **Negative**: the Search genre grid still uses hardcoded display slugs that don't always match catalog names, so the Follow pill only appears for matched genres; sparse genre/`album_genres` data leaves "Recommended for you" often empty; Home does not auto-refresh on cross-tab follow changes (next open / pull-to-refresh); Home breadth is bounded by current catalog size. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md), [AI_NOTES.md](AI_NOTES.md).
+
+#### Related
+Extends ADR-011 · preserves ADR-001/ADR-003/ADR-004 (playback + Provider unchanged; paax-api not modified). Full reference: [features/home.md](features/home.md), [features/library.md](features/library.md).
+
+---
+
 *Last updated: 2026-07-17*

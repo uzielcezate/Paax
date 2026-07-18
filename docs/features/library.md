@@ -55,6 +55,7 @@ Hive is the fast local cache; **Supabase is the durable cross-device authority**
 | `user_liked_tracks` | `liked_tracks` | Liked tracks |
 | `user_saved_albums` | `saved_albums` | Saved albums |
 | `user_followed_artists` | `followed_artists` | Followed artists (also written by onboarding — see [onboarding](onboarding.md)) |
+| `user_followed_genres` | `followed_genres` | Followed genres (**Phase 3.2B** — same offline-first pipeline, no migration; see below) |
 | `user_hidden_tracks` | `settings` → `hidden_track_ids` | Hidden tracks (new table — see below) |
 
 `LibraryRemoteDataSource` does RLS-safe CRUD scoped to `auth.uid()`, with **idempotent inserts** (ignores Postgres `23505`). It **never writes the trigger-maintained counters** (`bump_*` triggers maintain `platform_likes_count`/`platform_followers_count`).
@@ -73,12 +74,20 @@ Local entities carry Deezer ids; cloud rows need Supabase catalog UUIDs. `Catalo
 ### Multi-account isolation
 
 `onUserSession(uid)`:
-- On a **real account switch** (recorded `lastUserId` != new `uid`): clears the local library boxes via `HiveStorage.clearLibraryBoxes` (`liked_tracks`/`saved_albums`/`followed_artists`/`recently_played` + the `hidden_track_ids` setting; **playlists and `user_profile` are preserved**) **and** clears the pending journal; the controller also drops the previous account's in-memory lists immediately.
+- On a **real account switch** (recorded `lastUserId` != new `uid`): clears the local library boxes via `HiveStorage.clearLibraryBoxes` (`liked_tracks`/`saved_albums`/`followed_artists`/`followed_genres`/`recently_played` + the `hidden_track_ids` setting; **playlists and `user_profile` are preserved**) **and** clears the pending journal; the controller also drops the previous account's in-memory lists immediately.
 - On **first sync with no recorded owner** (`lastUserId == null`, the pre-3.2A upgrade path): a pre-existing local library is **kept LOCAL-ONLY and NOT bulk-uploaded**, preventing a cross-account cloud write.
 
 ### Hidden tracks
 
 New table `public.user_hidden_tracks(user_id, track_id, reason?, created_at)`, PK `(user_id, track_id)`, own-row RLS (`SELECT`/`INSERT`/`DELETE`), FK index. **Hidden = excluded from automatic playback + future recommendation inputs; the catalog track is NOT deleted.** The local hidden set stores `videoId`s; cloud sync recovers the Deezer id **best-effort** from a locally-known `Track` (liked / recently-played), so a hidden track with no locally-known `Track` stays local-only.
+
+### Followed genres (Phase 3.2B)
+
+Followed genres reuse the **existing** Supabase objects (no migration): `public.genres`, `public.user_followed_genres` (own-row RLS `SELECT`/`INSERT`/`DELETE`, PK `(user_id, genre_id)`) and the `private.bump_genre_followers` counter trigger. They ride the **same offline-first pipeline as artists**:
+
+- New `Genre` entity (Hive **typeId 5**): `id` = Deezer genre id (String), `name`, `imageUrl`, `slug`, and `supabaseId` (the Supabase `genres.id` uuid, populated on hydrate for UI). New `followed_genres` Hive box (cleared in `clearLibraryBoxes`/`clearAll`).
+- Resolution: `CatalogResolver.resolveGenre`/`resolveGenres` map `genres.deezer_id` → uuid. Remote CRUD via `LibraryRemoteDataSource.fetchFollowedGenreIds`/`followGenre`/`unfollowGenre`/`fetchCatalogGenres` (idempotent; never writes the `bump_genre_followers` counter). `LibraryRepository.pushFollowGenre` + genre cases in the exhaustive `_resolveForKind`/`_applyRemote` switches, hydrate (respects pending removals, populates `supabaseId`)/migrate blocks, and `_hasLocalLibrary`; `SyncOpKind.genreFollow`. `HiveStorage.getFollowedGenres`/`toggleFollowGenre`/`isGenreFollowed`; `LibraryController.followedGenres`/`toggleFollowGenre`/`isGenreFollowed` (reset on account switch).
+- **UI**: a Follow/Following pill on the **existing** `GenreResultsScreen` (Search genre grid → results — no new browse/detail screen). It resolves the display slug to a catalog genre (exact case-insensitive name match, then a deterministic substring fallback) and is **hidden** when no catalog genre matches or the genre has no Deezer id. Unresolved follows (signed out / offline) queue in the pending-ops journal. See [decisions](../decisions.md) ADR-012, [home](home.md), [KNOWN_ISSUES.md](../KNOWN_ISSUES.md).
 
 ### Migrations
 
@@ -87,7 +96,6 @@ New table `public.user_hidden_tracks(user_id, track_id, reason?, created_at)`, P
 ### Deferred (still on-device / not yet synced)
 
 - **Playlists cloud migration** — playlists remain Hive-only for now.
-- **Followed genres** — no client feature exists.
 - **Listening history** (qualified-play) — needs backend `private.record_qualified_play` + playback event hooks.
 - **Offline audio downloads / local-device music scanning** — deferred. The YouTube IFrame playback engine is unchanged.
 
@@ -114,7 +122,8 @@ See the [UI states rule](../../.claude/rules/ui.md). Reads render from the local
 - Cloud sync: `frontend/lib/data/repositories/library_repository.dart`, `frontend/lib/data/remote/library_remote_data_source.dart`, `frontend/lib/data/remote/catalog_resolver.dart`, `frontend/lib/data/local/library_sync_state.dart`
 - Local store: `frontend/lib/data/local/hive_storage.dart` (`clearLibraryBoxes`) — see [database](../database.md), [storage](../backend/storage.md)
 - Headers/widgets: `library_headers.dart` (`LibraryChipTabs`, `SearchSortHeader`), `add_to_playlist_sheet.dart`, `sort_bottom_sheet.dart` — see [widgets](../frontend/widgets.md)
-- Related features: [onboarding](onboarding.md), [playlist](playlist.md), [albums](albums.md), [artists](artists.md), [profile](profile.md)
+- Genre follow UI: `frontend/lib/presentation/screens/genre_results_screen.dart` (Follow/Following pill)
+- Related features: [onboarding](onboarding.md), [playlist](playlist.md), [albums](albums.md), [artists](artists.md), [profile](profile.md), [home](home.md)
 
 ---
 
