@@ -107,7 +107,7 @@ class SearchController extends ChangeNotifier {
       _artistResults = cached.artists;
       _isLoading = false;
       _error = null;
-      notifyListeners();
+      _notify();
       final gen = _gen;
       _debounceTimer =
           Timer(_debounce, () => _fetch(newQuery, normalized, gen, revalidate: true));
@@ -118,7 +118,7 @@ class SearchController extends ChangeNotifier {
     // after the debounce.
     _isLoading = true;
     _error = null;
-    notifyListeners();
+    _notify();
     final gen = _gen;
     _debounceTimer =
         Timer(_debounce, () => _fetch(newQuery, normalized, gen, revalidate: false));
@@ -130,7 +130,7 @@ class SearchController extends ChangeNotifier {
     _artistResults = [];
     _isLoading = false;
     _error = null;
-    notifyListeners();
+    _notify();
   }
 
   /// Runs the three category searches in parallel. Each category paints as soon
@@ -159,8 +159,12 @@ class SearchController extends ChangeNotifier {
       final res = _SearchResults(
           tracks ?? const [], albums ?? const [], artists ?? const []);
       final anySuccess = tracks != null || albums != null || artists != null;
-      // Cache whatever succeeded (avoid caching a total failure).
-      if (anySuccess) _put(normalized, res);
+      // Only cache a COMPLETE result set — never cache a partial/empty result
+      // caused by one category failing (it would later paint that category empty
+      // with no way to retry). Partial failures are still shown live, just not
+      // cached, so the next visit re-fetches.
+      final allSuccess = tracks != null && albums != null && artists != null;
+      if (allSuccess) _put(normalized, res);
       _inFlight.remove(normalized);
 
       if (gen == _gen) {
@@ -169,20 +173,20 @@ class SearchController extends ChangeNotifier {
         if (!revalidate && !anySuccess) {
           _error = "Couldn't load results";
         }
-        notifyListeners();
+        _notify();
       } else if (anySuccess &&
-          !revalidate &&
           _normalize(_query) == normalized &&
           !_inFlight.contains(normalized)) {
         // Stale by generation, but it matches the CURRENT query and no fresher
-        // fetch is running for it (it was coalesced) — apply it so the UI is not
-        // stuck loading.
+        // fetch is running for it (it was coalesced) — apply it so the UI is
+        // never stuck loading (covers a coalesced miss whose owner was a
+        // background revalidate).
         _trackResults = res.tracks;
         _albumResults = res.albums;
         _artistResults = res.artists;
         _isLoading = false;
         _error = null;
-        notifyListeners();
+        _notify();
       }
     }
 
@@ -195,7 +199,7 @@ class SearchController extends ChangeNotifier {
         if (gen == _gen) {
           _trackResults = r;
           clearLoadingOnFirst();
-          notifyListeners();
+          _notify();
         }
       } catch (_) {/* category failed — stays null */} finally {
         onSettled();
@@ -209,7 +213,7 @@ class SearchController extends ChangeNotifier {
         if (gen == _gen) {
           _albumResults = r;
           clearLoadingOnFirst();
-          notifyListeners();
+          _notify();
         }
       } catch (_) {} finally {
         onSettled();
@@ -223,7 +227,7 @@ class SearchController extends ChangeNotifier {
         if (gen == _gen) {
           _artistResults = r;
           clearLoadingOnFirst();
-          notifyListeners();
+          _notify();
         }
       } catch (_) {} finally {
         onSettled();
@@ -249,15 +253,25 @@ class SearchController extends ChangeNotifier {
   void retry() {
     final normalized = _normalize(_query);
     if (normalized.length < _minQueryLength) return;
+    _debounceTimer?.cancel(); // drop any pending stale-generation fetch
     _gen++;
     _isLoading = true;
     _error = null;
-    notifyListeners();
+    _notify();
     _fetch(_query, normalized, _gen, revalidate: false);
   }
 
+  /// Guarded notify: in-flight category futures can resolve after the controller
+  /// is disposed (e.g. the user leaves Search mid-search); never notify then.
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  bool _disposed = false;
+
   @override
   void dispose() {
+    _disposed = true;
     _debounceTimer?.cancel();
     super.dispose();
   }
