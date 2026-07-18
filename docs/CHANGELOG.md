@@ -28,6 +28,69 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 3.2B — Followed genres + personalized Home (real data) (2026-07-17)
+
+> Branch `feat/phase-3.2b-genres-home`. Phase 3.2.4 (Followed Genres) +
+> Phase 3.2.5 (Personalized Home). Scope was clarified mid-phase to **connect the
+> existing UI to real data** — no Home redesign, no new visual system, no new
+> standalone screens; existing screens/widgets/navigation are reused and state stays
+> **Provider + ChangeNotifier**. **No migration** (the genres tables already existed),
+> **no paax-api change**, no Railway redeploy; the YouTube IFrame playback engine is
+> unchanged. See [decisions.md](decisions.md) ADR-012, [features/home.md](features/home.md),
+> [features/library.md](features/library.md).
+
+- **Added** — **Followed genres (offline-first)**, mirroring the Phase 3.2A
+  artist-follow pipeline over the **existing** Supabase objects (no migration):
+  `public.genres`, `public.user_followed_genres` (own-row RLS, PK `(user_id,genre_id)`)
+  and the `private.bump_genre_followers` counter trigger. New `Genre` entity (Hive
+  **typeId 5**: Deezer genre id + name/imageUrl/slug + `supabaseId` catalog uuid) and a
+  `followed_genres` Hive box. Sync additions: `CatalogResolver.resolveGenre(s)`
+  (`genres.deezer_id` → uuid); `LibraryRemoteDataSource.fetchFollowedGenreIds`/
+  `followGenre`/`unfollowGenre`/`fetchCatalogGenres` (idempotent, counters never
+  client-written); `LibraryRepository.pushFollowGenre` + genre cases in the exhaustive
+  `_resolveForKind`/`_applyRemote` switches, hydrate/migrate blocks, and
+  `_hasLocalLibrary`; `SyncOpKind.genreFollow`; `HiveStorage.getFollowedGenres`/
+  `toggleFollowGenre`/`isGenreFollowed` (box cleared in `clearLibraryBoxes`/`clearAll`);
+  `LibraryController.followedGenres`/`toggleFollowGenre`/`isGenreFollowed` (reset on
+  account switch).
+- **Added** — A **Follow / Following pill on the existing `GenreResultsScreen`**
+  (`frontend/lib/presentation/screens/genre_results_screen.dart`, current button style).
+  It resolves the display slug to a catalog genre (exact case-insensitive name match,
+  then a deterministic substring fallback) and is **hidden** when no catalog genre
+  matches or the genre has no Deezer id. Following persists to Supabase + Hive via the
+  offline-first pipeline; unresolved follows (signed out / offline) queue in the
+  pending-ops journal. **No** standalone genre browse/detail screen was added — the
+  existing Search genre grid → `GenreResultsScreen` is reused.
+- **Added** — **Personalized Home real-data sections** via a new `HomeRepository`
+  (`frontend/lib/data/repositories/home_repository.dart`, batched public-catalog queries
+  → typed `HomeAlbum`) and `HomeController`
+  (`frontend/lib/presentation/state/home_controller.dart`): parallel section loads,
+  followed artist/genre UUIDs resolved **once** (shared by new + popular, no N+1),
+  stale-request cancellation via a monotonic token, per-user offline
+  `SharedPreferences` cache, debounced pull-to-refresh, retry/error/offline states.
+  Wired in `main.dart` via `ChangeNotifierProxyProvider<AuthController, HomeController>`
+  calling `onUserSession(uid)` so the persistent Home tab drops the previous user's
+  sections on account switch (no cross-account bleed).
+- **Changed** — **Home data source** replaced: the old generic / YouTube-derived chart
+  + genre-text-search sections are gone; Home now renders deterministic **real Supabase
+  catalog** sections (each **hidden when empty**, no fake data, no "Continue Listening"
+  placeholder): *Your artists*, *Your genres* (tap → existing `GenreResultsScreen`),
+  *New from your artists*, *Popular from your artists*, *Recommended for you* (albums in
+  followed genres), *Trending*, *Recently added*. The **existing** `home_screen` layout
+  (header, top/bottom edge fades, horizontal `MusicCard` rails, `SectionHeader`,
+  navigation) is preserved; album cards reuse the existing `SavedAlbum` →
+  `AlbumDetailScreen` path (albums without a Deezer id are hidden).
+- **Notes** — No database migration (genres tables pre-existed), no paax-api change,
+  no Railway redeploy. Discarded as out-of-scope per the clarification: the exploratory
+  standalone Genre Browse/Detail screens, a genre chip widget, and a new Home skeleton
+  widget — only their data/controller/repository logic was kept.
+- **Tests** — `flutter analyze` = 0 errors; `flutter test test/unit/` = **13/13**
+  (adds a `genreFollow` journal round-trip); live disposable-account DB verification
+  (genre-follow idempotency, `bump_genre_followers` 0→1→restore, cross-user isolation —
+  account B sees 0) via `supabase/tests/phase3_2b_followed_genres_test.sql`; debug +
+  release APK build (`applicationId com.paax.music`; release still debug-signed —
+  pre-existing).
+
 ### Phase 3.2A — Onboarding, real profile + avatar, cloud library sync (2026-07-17)
 
 > Branch `feat/phase-3.2a-onboarding-profile-library`. Three features + one Phase 3.1

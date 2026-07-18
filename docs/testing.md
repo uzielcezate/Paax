@@ -9,7 +9,7 @@
 
 Paax has **minimal automated test coverage** (growing since Phase 3.1/3.2A). There is:
 
-- **A small Flutter test suite** — `frontend/test/unit/` has **12 passing** unit tests (`auth_errors_test`, `library_sync_state_test`) plus the Phase 3.1 live anon-contract test `frontend/test/live/auth_live_test.dart` (4/4). Coverage is otherwise still sparse.
+- **A small Flutter test suite** — `frontend/test/unit/` has **13 passing** unit tests (`auth_errors_test`, `library_sync_state_test` — the latter now including a `genreFollow` journal round-trip) plus the Phase 3.1 live anon-contract test `frontend/test/live/auth_live_test.dart` (4/4). Coverage is otherwise still sparse.
 - **No backend test suite** — `backend/` contains standalone **probe scripts** (`test_*.py`, `verify_*.py`, `debug_*.py`, `explore_genres.py`) that hit live APIs or dump `ytmusicapi` structures. They are **exploratory tooling, not assertions**, and are gitignored.
 - **No CI** — no GitHub Actions; nothing runs tests on push/PR.
 
@@ -150,6 +150,23 @@ no-placeholder-without-context, partial downgrade, ingest idempotency). Run:
   complements (does not replace) the checked-in SQL/unit tests.
 - **Build** — debug + release APK build verified (`applicationId com.paax.music`;
   release still debug-signed — pre-existing).
+
+---
+
+## Frontend + DB tests (Phase 3.2B)
+
+- **Flutter unit** — `flutter test test/unit/` = **13/13** (12 from 3.2A + a new
+  `genreFollow` pending-ops journal round-trip in `library_sync_state_test`).
+  `flutter analyze` = **0 errors**.
+- **SQL tests** — `supabase/tests/phase3_2b_followed_genres_test.sql` exercises
+  `user_followed_genres` RLS/PK, genre-follow idempotency, and the
+  `bump_genre_followers` counter.
+- **Live disposable-account verification** — validated against throwaway Supabase
+  accounts (deleted afterward): genre-follow idempotency, `bump_genre_followers`
+  0→1→restore, and cross-user isolation (account B sees 0 of account A's followed
+  genres). Complements (does not replace) the checked-in SQL/unit tests.
+- **Build** — debug + release APK build verified (`applicationId com.paax.music`;
+  release still debug-signed — pre-existing). **No migration, no backend change/redeploy.**
 
 ---
 
