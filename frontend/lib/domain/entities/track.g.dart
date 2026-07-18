@@ -29,14 +29,15 @@ class TrackAdapter extends TypeAdapter<Track> {
       artists: (fields[9] as List?)
           ?.map((dynamic e) => (e as Map).cast<String, String>())
           ?.toList(),
-      isExplicit: fields[10] as bool? ?? false,
+      isExplicit: fields[10] as bool,
+      deezerTrackId: fields[11] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Track obj) {
     writer
-      ..writeByte(11)
+      ..writeByte(12)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -58,7 +59,9 @@ class TrackAdapter extends TypeAdapter<Track> {
       ..writeByte(9)
       ..write(obj.artists)
       ..writeByte(10)
-      ..write(obj.isExplicit);
+      ..write(obj.isExplicit)
+      ..writeByte(11)
+      ..write(obj.deezerTrackId);
   }
 
   @override

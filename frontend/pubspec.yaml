@@ -62,6 +62,11 @@ dependencies:
   app_links: ^6.3.2          # native deep-link capture for auth callbacks
   shared_preferences: ^2.3.2 # versioned pending-registration payload (non-sensitive)
 
+  # ── Phase 3.2A: profile avatar processing (pure Dart; resize + re-encode) ────
+  image: ^4.2.0              # decode/resize/encode avatar before Storage upload
+  image_picker: ^1.1.2      # pick an avatar image from gallery/camera
+  http: ^1.2.0              # normalized /v2 onboarding search/resolve calls
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

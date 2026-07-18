@@ -13,6 +13,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/auth/auth_errors.dart';
 import '../../core/auth/validators.dart';
+import '../../data/local/onboarding_selection_store.dart';
 import '../../data/local/pending_registration.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/profile_repository.dart';
@@ -314,6 +315,11 @@ class AuthController extends ChangeNotifier {
     _profile = null;
     _recovery = false;
     _pendingVerificationEmail = null;
+    // Drop any in-progress onboarding artist selection so it cannot bleed into a
+    // different account signing in next on this device (Phase 3.2A isolation).
+    try {
+      await OnboardingSelectionStore().clear();
+    } catch (_) {/* best-effort */}
     // Pending registration is email-scoped and intentionally NOT cleared here,
     // so a genuine re-login with the same email still completes; a different
     // account can never receive it (email match is enforced).

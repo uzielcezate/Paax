@@ -7,9 +7,9 @@
 
 ## Overview
 
-The profile is a **single-user, non-social** screen (`presentation/screens/profile_screen.dart`). It shows who is signed in, a few listening stats derived on the fly from Hive data, a recently-played rail, and account/data actions. There is **no social layer** in Paax — no other users, no followers, no public profiles, no profile URLs — because there are no other users to relate to yet; social surfaces remain future work.
+The profile is a **single-user, non-social** screen (`presentation/screens/profile_screen.dart`). It shows who is signed in (from the real Supabase `profiles` row), live library stats, a recently-played rail, and account/data actions. There is **no social layer** in Paax — no other users, no followers, no public profiles, no profile URLs — because there are no other users to relate to yet; social surfaces remain future work.
 
-> **Identity is now server-backed (Phase 3.1, 2026-07-17)**: as of the real Supabase auth landing (see [authentication](authentication.md)), the signed-in identity is the RLS-protected **`public.profiles` row** (1:1 with `auth.users`, auto-created by the `on_auth_user_created` trigger), surfaced in the app through `ProfileController` / `AuthController` (see [`../frontend/state-management.md`](../frontend/state-management.md)) rather than a local demo stub. The `profiles` row also carries username, avatar URL, a privacy flag, and a trigger-guarded role/subscription-tier cache, plus a safe `public_profiles` projection for future social surfaces (see [`../backend/database-schema.md`](../backend/database-schema.md)). The music **library** still lives on-device in Hive; cloud library sync is Phase 3.2+.
+> **Real profile rendering (Phase 3.2A, 2026-07-17)**: `profile_screen` renders the real Supabase **`public.profiles`** row via `AuthController.profile` (1:1 with `auth.users`, auto-created by the `on_auth_user_created` trigger; see [authentication](authentication.md)) — display name, `@username`, email (from `auth.currentUser`), city/state/country, the **real `subscription_tier`** (the hardcoded PRO pill is gone), and joined date (`auth.currentUser.createdAt`). It also shows **live stats from `LibraryController`** (liked / playlists / followed artists / saved albums). While `profile == null` it shows a **skeleton** (no "Unknown User" placeholder). New in 3.2A: `EditProfileScreen`, `ProfileController`, and `AvatarService` (real avatar upload). See [`../frontend/state-management.md`](../frontend/state-management.md), [`../backend/database-schema.md`](../backend/database-schema.md).
 
 Profile is the fourth tab in the [main shell](../frontend/navigation.md).
 
@@ -21,22 +21,25 @@ The authoritative identity is now the server-side **`public.profiles`** row (RLS
 
 | Field | Editable by User | Visible to Others | Description |
 |-------|-----------------|-------------------|-------------|
-| Display Name | Via account settings | N/A (no "others") | `display_name` on the `profiles` row (set during registration); writable columns are whitelisted client-side. |
-| Username / Handle | On registration | — | `username` on the `profiles` row (unique, validated); no public profile URLs yet. |
-| Avatar / Profile Photo | No | N/A | No uploaded photo; the UI renders an initials/placeholder avatar (see [Avatar Management](#avatar-management)). The `profiles` row has an `avatar_url` column, currently unused by upload. |
+| Display Name | Yes (Edit Profile) | N/A (no "others") | `display_name` on the `profiles` row; writable columns are whitelisted client-side. |
+| Username / Handle | Yes (Edit Profile, debounced availability) | — | `username` on the `profiles` row (unique, validated); no public profile URLs yet. |
+| Avatar / Profile Photo | Yes (upload) | N/A | Real upload via `AvatarService` to the `user-avatars` Storage bucket; initials fallback when none (see [Avatar Management](#avatar-management)). Persisted as `avatar_url` on the `profiles` row. |
 | Bio | — | — | Not implemented. |
-| Email | No (from Supabase Auth) | Private | The authenticated email from `auth.users`. |
+| Email | No (from Supabase Auth) | Private | The authenticated email from `auth.currentUser`. |
 | Follower / Following Count | — | — | Not implemented (no social graph). |
-| Joined Date | — | — | `created_at` on the `profiles` row (not surfaced in the UI). |
-| Premium / PRO | — | — | A **cosmetic** "PRO" pill only — see [Premium PRO pill](#premium-pro-pill). The trigger-guarded `subscription_tier` cache is not wired to it. |
+| Joined Date | No | — | Derived from `auth.currentUser.createdAt`; surfaced in the header. |
+| Subscription tier | No (server-managed) | — | The **real** `subscription_tier` from the `profiles` row is displayed. The old hardcoded "PRO" pill is **removed**. |
 
-### Stats (derived, not stored)
+### Stats (live from the library)
 
-The profile header shows summary stats computed at render time from Hive, not stored on `UserProfile`:
+The profile header shows summary stats computed at render time from `LibraryController` (the offline-first Hive cache):
 
-- **Liked count** — number of tracks in the `liked_tracks` box (via `LibraryController`).
+- **Liked count** — number of tracks in the `liked_tracks` box.
 - **Playlists count** — number of `Playlist` objects in the `playlists` box.
-- **Minutes listened** — summed from the durations of tracks in the `recently_played` box. (The `UserProfile.minutesListened` field exists as a persisted accumulator, but the visible "minutes" stat is fundamentally driven by recently-played durations.)
+- **Followed artists** — number in the `followed_artists` box.
+- **Saved albums** — number in the `saved_albums` box.
+
+A residual Hive `UserProfile.minutesListened` accumulator still exists (typeId 3) but the header stats are the four library counts above.
 
 ---
 
@@ -46,11 +49,14 @@ The profile header shows summary stats computed at render time from Hive, not st
 
 `profile_screen.dart` shows:
 
-- Avatar + display name + email.
-- The three derived stats (liked / playlists / minutes).
+- Avatar (real upload or initials fallback) + display name + `@username` + email + city/state/country + subscription tier + joined date.
+- The four live library stats (liked / playlists / followed artists / saved albums).
 - A **recently played** horizontal rail sourced from the `recently_played` Hive box (most-recent-first). Tapping an item plays it / opens its context.
+- An **Edit Profile** entry → `EditProfileScreen`.
 - Account/data actions: **Clear data** and **Logout**.
 - A **Settings** menu entry that is currently a **no-op** (see [settings](settings.md)).
+
+While `profile == null` the screen renders a **skeleton** (never a "Unknown User" fallback).
 
 ### Other User's Profile Screen
 
@@ -60,25 +66,26 @@ The profile header shows summary stats computed at render time from Hive, not st
 
 ## Edit Profile Flow
 
-**No general in-app "Edit Profile" form yet.** Identity fields (`username`, `display_name`, birth date, country) are collected during the registration wizard — or the Complete-Profile fallback — and written to the RLS-safe columns of the `profiles` row (see [authentication](authentication.md)). There is not yet a post-signup edit screen; the template's edit flow is still aspirational:
+`EditProfileScreen` (Phase 3.2A) edits **only whitelisted, non-privileged fields** via `ProfileRepository.updateOwn`:
 
-1. Intended: user opens an edit screen from their profile.
-2. Intended: fields pre-filled from the current `Profile`.
-3. Intended: validate and save the whitelisted columns back to `public.profiles` via `ProfileRepository`.
+`first_name`, `last_name`, `display_name`, `username`, `birth_date`, `gender_identity`, `country_code`, `state_region`, `city`, `avatar_url`.
+
+**Excluded** (never writable by the client): `app_role`, `subscription_*`, `onboarding_completed`, and the trigger-maintained counters. Username edits run a **debounced availability** check. A new **`ProfileController`** orchestrates the update plus avatar handling (provided inline via Provider; no `main.dart` change was required).
 
 ---
 
 ## Avatar Management
 
-- **Upload**: Not supported — there is no gallery/camera picker.
-- **Accepted formats / Max size / Processing**: N/A (no upload path, so nothing to validate or resize).
-- **Default avatar**: An initials/placeholder avatar rendered from the display name. This is the only avatar state.
+`AvatarService` (`frontend/lib/core/media/avatar_service.dart`) implements the full upload path:
 
----
+1. **Pick** — `image_picker` (gallery/camera).
+2. **Validate** — MIME allow-list (`jpg`/`png`/`webp`) + size ≤ 8 MB.
+3. **Process** — decode + resize to a **512px square**, JPEG **q85** (`package:image`).
+4. **Upload** — to the Storage bucket **`user-avatars`** at path `{auth.uid()}/avatar_{ts}.jpg` (matches the per-user Storage RLS policy).
+5. **Persist** — set `profiles.avatar_url`.
+6. **Cleanup** — best-effort delete of the user's old avatars.
 
-## Premium / PRO pill
-
-The profile displays a **"PRO" pill**. It is **purely cosmetic** — there is no subscription system, no entitlement check, no paywalled feature, and no billing integration anywhere in the app. Do not treat it as a feature flag; it gates nothing.
+- **Default avatar**: An initials fallback rendered from the display name when no avatar is set.
 
 ---
 
@@ -106,13 +113,15 @@ Password recovery is handled server-side via Supabase (see [authentication → P
 
 ## Related Files
 
-- Screen: `frontend/lib/presentation/screens/profile_screen.dart`
+- Screens: `frontend/lib/presentation/screens/profile_screen.dart`, `frontend/lib/presentation/screens/edit_profile_screen.dart`
 - Auth/profile controllers: `frontend/lib/presentation/state/auth_controller.dart` (+ `ProfileController`)
-- Profile repository/entity: `frontend/lib/data/repositories/profile_repository.dart`, `frontend/lib/domain/entities/profile.dart`
+- Profile repository/entity: `frontend/lib/data/repositories/profile_repository.dart` (`updateOwn`), `frontend/lib/domain/entities/profile.dart`
+- Avatar: `frontend/lib/core/media/avatar_service.dart` → Storage bucket `user-avatars`
 - Library stats source: `frontend/lib/presentation/state/library_controller.dart`
+- Home greeting uses `profile.firstName` (fallback `greetingName`, never empty) — see [home](home.md)
 - Residual `UserProfile` (on-device stats): Hive `typeId: 3` (see `frontend/lib/data/local/hive_storage.dart`)
 
-**See also:** [authentication](authentication.md) · [settings](settings.md) · [library](library.md) · [playlist](playlist.md) · [database](../database.md)
+**See also:** [authentication](authentication.md) · [onboarding](onboarding.md) · [settings](settings.md) · [library](library.md) · [playlist](playlist.md) · [database](../database.md)
 
 ---
 

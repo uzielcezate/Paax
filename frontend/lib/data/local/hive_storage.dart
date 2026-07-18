@@ -247,6 +247,20 @@ class HiveStorage {
   static bool get onboardingCompleted => _settings.get('onboarding_completed', defaultValue: false);
   static Future<void> setOnboardingCompleted(bool value) async => _settings.put('onboarding_completed', value);
   
+  /// Phase 3.2A — clears the user-owned LIBRARY on account switch to prevent
+  /// cross-account data leakage. Clears liked_tracks, saved_albums,
+  /// followed_artists and recently_played boxes, and removes the
+  /// `hidden_track_ids` key from settings. Intentionally LEAVES intact:
+  /// playlists (device-local, not yet cloud-synced), user_profile, and the
+  /// onboarding/pinned-playlist settings.
+  static Future<void> clearLibraryBoxes() async {
+    await _liked.clear();
+    await _albums.clear();
+    await _artists.clear();
+    await _recentlyPlayed.clear();
+    await _settings.delete(_hiddenTracksKey);
+  }
+
   static Future<void> clearAll() async {
     await _liked.clear();
     await _playlists.clear();

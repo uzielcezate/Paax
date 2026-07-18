@@ -1035,6 +1035,9 @@ class MusicRepositoryImpl implements MusicRepository {
       duration: e['duration'] as int? ?? 0,
       artists: artistsList,
       isExplicit: e['explicit'] == true,
+      // Deezer track id (top-level `id`) — kept only to resolve to the Supabase
+      // tracks.id UUID for cloud library sync (Phase 3.2A).
+      deezerTrackId: e['id']?.toString(),
     );
   }
 

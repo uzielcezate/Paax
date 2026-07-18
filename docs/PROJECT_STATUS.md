@@ -9,8 +9,8 @@
 
 | Dimension | Status | Notes |
 |-----------|--------|-------|
-| Build | 🟢 Passing | Flutter builds (web/Android); `flutter analyze` is the gate |
-| Tests | 🔴 None | No automated tests / CI — see [testing.md](testing.md) |
+| Build | 🟢 Passing | Flutter builds (web/Android, debug+release APK); `flutter analyze` clean |
+| Tests | 🟡 Minimal | Flutter unit tests 12/12 (`auth_errors`, `library_sync_state`) + SQL onboarding/hidden-tracks tests + paax-api 85; **no CI** — see [testing.md](testing.md) |
 | Deployments | 🟢 Healthy | paax-api, Worker, paax-stream, web PWA up; no uptime monitoring |
 | Open Bugs (Critical) | 3 | Deezer `verify=False`; unauth v1 write endpoints; debug-key release signing |
 | Open Bugs (Total) | ~8 | See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) |
@@ -24,7 +24,7 @@
 Phase: [ ] Concept  [ ] Design  [ ] MVP  [x] Alpha  [ ] Beta  [ ] GA  [ ] Maintenance
 ```
 
-**Description**: Feature-rich and demoable end-to-end (browse, play, library, lyrics, polished UI), and now with **real Supabase authentication** (Phase 3.1 — see [features/authentication.md](features/authentication.md)) replacing the old demo stub. Still **not production-ready** — no tests/CI, debug signing, and unconsolidated streaming block a real launch; the music library remains on-device (Hive), with cloud sync deferred to Phase 3.2+. Focus is on production hardening (see [roadmap.md](roadmap.md)).
+**Description**: Feature-rich and demoable end-to-end (browse, play, library, lyrics, polished UI), with **real Supabase authentication** (Phase 3.1) and, as of **Phase 3.2A**, real artist onboarding, a real Supabase-backed profile + avatar upload, and **offline-first cloud library sync** (Hive cache + Supabase authority — see [features/library.md](features/library.md), [decisions.md](decisions.md) ADR-011). Still **not production-ready** — no tests/CI, debug signing, and unconsolidated streaming block a real launch; playlists cloud migration and personalized Home remain ahead. Focus is on production hardening (see [roadmap.md](roadmap.md)).
 
 ---
 
@@ -39,9 +39,9 @@ Phase: [ ] Concept  [ ] Design  [ ] MVP  [x] Alpha  [ ] Beta  [ ] GA  [ ] Mainte
 | 2 | Real signing config + Paax `applicationId` | ⬜ Not started |
 | 3 | Fix Deezer `verify=False`; gate/remove unauth write endpoints | ⬜ Not started |
 | 4 | Real per-user auth (replace demo stub) | 🟢 Done (Phase 3.1, 2026-07-17) — Supabase Auth wired into the Flutter app; demo stub removed. See [features/authentication.md](features/authentication.md) |
-| 5 | Automated test baseline + CI | ⬜ Not started |
+| 5 | Automated test baseline + CI | 🟡 Started — first Flutter unit tests exist (`auth_errors_test`, `library_sync_state_test`, 12/12) + SQL onboarding/hidden-tracks tests; no CI pipeline yet. See [testing.md](testing.md) |
 
-**Completion**: 1 / 5 goals complete (20%) — real per-user auth landed (Phase 3.1).
+**Completion**: 1 / 5 goals complete (20%); goal 5 partially underway. Real per-user auth landed (Phase 3.1); cloud library sync + onboarding + real profile landed (Phase 3.2A).
 
 ---
 
@@ -66,7 +66,7 @@ Single maintainer (`uzielcezate`); no formal sprints. Development is continuous 
 | Blocker | Impact | Owner | Since |
 |---------|--------|-------|-------|
 | Streaming fragmentation (IFrame vs Worker vs IPv6 proxy) unresolved | Medium | uzielcezate | 2026 |
-| No cloud library sync → no cross-device data (auth landed Phase 3.1; sync is Phase 3.2+) | Medium | uzielcezate | 2026 |
+| Playlists not yet cloud-synced (library liked/albums/artists/hidden sync landed Phase 3.2A; playlists remain Hive-only) | Low–Medium | uzielcezate | 2026 |
 | Debug-key release signing + Beaty `applicationId` | High | uzielcezate | 2026 |
 
 ---
@@ -88,7 +88,7 @@ Single maintainer (`uzielcezate`); no formal sprints. Development is continuous 
 
 1. Consolidate streaming and delete dead resolver code (ADR-006).
 2. Production hardening: signing, `applicationId`, TLS, endpoint auth.
-3. Cloud library sync: real Supabase auth is now live in the app (Phase 3.1 — see [features/authentication.md](features/authentication.md)); next is Phase 3.2+ cloud sync of the on-device Hive library, then automated tests + CI.
+3. Phase 3.2B: following expansion + personalized Home; then playlists cloud migration, listening history, and a CI pipeline over the new unit tests. (Auth Phase 3.1 + onboarding/profile/cloud-library-sync Phase 3.2A are done.)
 
 See [current-state.md](current-state.md), [roadmap.md](roadmap.md), [tasks/backlog.md](tasks/backlog.md).
 

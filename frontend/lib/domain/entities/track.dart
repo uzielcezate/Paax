@@ -38,6 +38,13 @@ class Track extends HiveObject {
   @HiveField(10)
   final bool isExplicit;
 
+  /// Deezer track id (from the v2 payload's top-level `id`). Used ONLY to
+  /// resolve this track to its Supabase `tracks.id` UUID for cloud library
+  /// sync. Nullable + additive: pre-3.2A Hive records read back as null and
+  /// simply stay local-only (see docs/features/library.md, CatalogResolver).
+  @HiveField(11)
+  final String? deezerTrackId;
+
   Track({
     required this.id,
     required this.title,
@@ -50,6 +57,7 @@ class Track extends HiveObject {
     this.artistId,
     this.artists,
     this.isExplicit = false,
+    this.deezerTrackId,
   });
 
   /// Single source of truth for the artist subtitle line shown in all UIs.
@@ -96,6 +104,7 @@ class Track extends HiveObject {
     String? artistId,
     List<Map<String, String>>? artists,
     bool? isExplicit,
+    String? deezerTrackId,
   }) {
     return Track(
       id: id ?? this.id,
@@ -109,6 +118,7 @@ class Track extends HiveObject {
       artistId: artistId ?? this.artistId,
       artists: artists ?? this.artists,
       isExplicit: isExplicit ?? this.isExplicit,
+      deezerTrackId: deezerTrackId ?? this.deezerTrackId,
     );
   }
 }

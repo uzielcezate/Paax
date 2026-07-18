@@ -28,6 +28,64 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
+### Phase 3.2A — Onboarding, real profile + avatar, cloud library sync (2026-07-17)
+
+> Branch `feat/phase-3.2a-onboarding-profile-library`. Three features + one Phase 3.1
+> fix. paax-api was **not** modified (no Railway redeploy); the YouTube IFrame
+> playback engine is unchanged. See [decisions.md](decisions.md) ADR-011,
+> [features/onboarding.md](features/onboarding.md), [features/library.md](features/library.md),
+> [features/profile.md](features/profile.md).
+
+- **Added** — **Artist onboarding** (`ArtistOnboardingScreen`, `OnboardingController`):
+  min-5 selection, popular artists from the `artists` table (top 30 by followers) +
+  `/v2/find` search (debounced 350ms, stale-cancel + dedup) with lazy
+  Deezer→catalog-UUID resolve on selection (`/v2/artists/deezer/{id}`); in-progress
+  selection persisted locally (`paax_onboarding_selection_v1`, cleared on logout);
+  `PopScope(canPop:false)` bypass prevention; completion via the
+  `complete_artist_onboarding` RPC then `AuthController.bootstrap()` → Home. Replaces
+  and **deletes** `onboarding_placeholder_screen.dart`.
+- **Added** — **Real profile + avatar**: `profile_screen` renders the Supabase
+  `profiles` row (name, `@username`, email, city/state/country, real
+  `subscription_tier`, joined date) + live library stats; skeleton while
+  `profile == null`; `EditProfileScreen` edits whitelisted fields
+  (`ProfileRepository.updateOwn`); new `ProfileController`; `AvatarService`
+  (image_picker → MIME/size validate → resize 512px/JPEG q85 → upload to
+  `user-avatars/{uid}/avatar_{ts}.jpg` → set `avatar_url` → delete old). Home greeting
+  uses `profile.firstName`.
+- **Added** — **Offline-first cloud library sync** (Hive cache + Supabase authority):
+  `catalog_resolver`, `library_remote_data_source`, `library_repository`,
+  `library_sync_state`. RLS-safe CRUD on `user_liked_tracks`/`user_saved_albums`/
+  `user_followed_artists`/`user_hidden_tracks`, scoped to `auth.uid()`, idempotent
+  (ignore `23505`), counters never client-written. Optimistic local write + best-effort
+  push; pending-ops journal (last-write-wins); add-only `hydrateFromCloud` (skips
+  pending removes); migrate-once; clear-on-account-switch; unowned-local not uploaded.
+  Wired via `ChangeNotifierProxyProvider<AuthController,LibraryController>`.
+- **Added (DB)** — migration `20260717160000_phase3_2a_onboarding_and_hidden_tracks`:
+  `public.user_hidden_tracks` (own-row RLS, FK index) and the
+  `complete_artist_onboarding(p_artist_ids uuid[])` SECURITY DEFINER RPC
+  (`search_path=''`, authenticated-only, ≥5 unique existing artists, idempotent
+  follows, atomically flips `profiles.onboarding_completed`, returns
+  `jsonb{onboarding_completed,followed_count}`). SQL tests in
+  `supabase/tests/phase3_2a_onboarding_hidden_tracks_test.sql`.
+- **Changed** — `Track` gained a nullable `deezerTrackId` (**HiveField 11**, additive/
+  backwards-compatible; from the v2 payload's top-level id in `_mapTrackV2`) so tracks
+  resolve to `tracks.id`. Logout now also clears the in-progress onboarding selection.
+- **Fixed** — Phase 3.1: `AuthErrorMapper` maps Supabase's reused-current-password
+  error (`same_password` / "should be different from the old password") to "Your new
+  password must be different from your current password." — matched **before** the
+  generic weak-password branch (regression test added).
+- **Security** — onboarding RPC is authenticated-only + validates ownership/inputs;
+  `user_hidden_tracks` own-row RLS; multi-account local isolation
+  (clear-on-switch, unowned-not-uploaded); avatar Storage writes scoped to the caller's
+  `{uid}/` prefix; trigger-maintained counters never client-written;
+  `onboarding_completed` flippable only by the RPC.
+- **Tests** — `flutter test test/unit/` = **12/12** (`auth_errors_test` +
+  `library_sync_state_test`); live disposable-account DB verification (onboarding RPC
+  happy/reject/dedup/auth-guard; hidden-tracks RLS+idempotency; like/save/follow/hide
+  under RLS with counter bump→restore; cross-user isolation; 0 leftover test users);
+  `flutter analyze` clean; debug+release APK build (`applicationId com.paax.music`;
+  release still debug-signed — pre-existing).
+
 ### Phase 3.1 — Real Supabase authentication in Flutter (2026-07-17)
 
 - **Added** — The Flutter app is wired to **Supabase Auth** (anon key, PKCE):
@@ -186,7 +244,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - (nothing pending)
 
 ### Security
-- (nothing pending — but see open items in [known issues](KNOWN_ISSUES.md): TLS `verify=False`, `str(e)` leakage, no rate limiting)
+- (see Phase 3.2A above; plus open items in [known issues](KNOWN_ISSUES.md): TLS `verify=False`, `str(e)` leakage, no rate limiting)
 
 ---
 
@@ -287,4 +345,4 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*

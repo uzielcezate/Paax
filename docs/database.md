@@ -15,14 +15,14 @@ A hosted Supabase project (`jecgmiuypuathhvjuhea`) now carries the full server s
 
 > **Critical status note**: this layer is **deployed but consumed by nothing**. Flutter still runs on Hive + the demo auth stub, `paax-api` is unchanged, and there are no ingestion/matching jobs. Integration is Phase 2+ (ADR-009 rollout plan).
 
-### (b) Client-side Hive — the LIVE user datastore
+### (b) Client-side Hive — the LIVE local cache (now cloud-synced)
 
-Until the Phase 3 migration, the **live persistent datastore remains client-side Hive**, on the user's device — everything below in this document still accurately describes the running product:
+Hive remains the **live local datastore** on the user's device, and everything below still accurately describes its shape. **As of Phase 3.2A (2026-07-17)** it is the fast **offline-first cache** in front of Supabase: the library (liked / saved albums / followed artists / hidden tracks) is now **synced to Supabase** as the cross-device authority (identity/profile since Phase 3.1). Playlists, recent searches, and the residual local profile stay Hive-only for now. See [features/library.md](features/library.md), [decisions.md](decisions.md) ADR-011.
 
 - **Engine**: **Hive** ^2.2.3 (`hive_flutter` ^1.1.0) — a pure-Dart, key-value, box-based embedded store.
-- **Hosting**: On-device (app documents directory). Nothing is uploaded or synced.
-- **ORM / Query Builder**: None — direct box access through `HiveStorage` (`frontend/lib/data/local/hive_storage.dart`).
-- **Migration Tool**: None. Schema evolution is handled with typed adapters (`hive_generator`) plus **imperative one-time migrations** in `HiveStorage.init()` (currently de-duplication passes).
+- **Hosting**: On-device (app documents directory). Library entities are pushed best-effort to Supabase; playlists/searches are not uploaded.
+- **ORM / Query Builder**: None — direct box access through `HiveStorage` (`frontend/lib/data/local/hive_storage.dart`; `clearLibraryBoxes` supports multi-account isolation).
+- **Migration Tool**: None. Schema evolution is handled with typed adapters (`hive_generator`) plus **imperative one-time migrations** in `HiveStorage.init()` (currently de-duplication passes). `Track` field additions append `@HiveField` indices — `deezerTrackId` (11) is the latest, additive/backwards-compatible.
 
 > The `.claude/rules/database.md` and `.claude/rules/supabase.md` describe a Postgres/Supabase design (UUIDs, RLS, migrations, FKs). Since Phase 1 (2026-07-16) they **describe reality for the server layer** — the deployed schema follows them (with one documented deviation: rollbacks are documented drops, not down-files, since Supabase migration history is forward-only). They do not apply to the Hive layer, which this document describes.
 
@@ -66,7 +66,7 @@ Hive has no tables/columns; the analogous concepts are **boxes** (collections) a
 
 ### `Track` — `@HiveType(typeId: 0)`
 
-The core media object. All 11 fields persist.
+The core media object. All 12 fields persist.
 
 | Field | Idx | Type | Nullable | Description |
 |-------|-----|------|----------|-------------|
@@ -81,6 +81,7 @@ The core media object. All 11 fields persist.
 | `artistId` | 8 | `String?` | Yes | Primary artist id |
 | `artists` | 9 | `List<Map<String,String>>?` | Yes | Structured `{name,id}` per artist |
 | `isExplicit` | 10 | `bool` | No | Explicit flag |
+| `deezerTrackId` | 11 | `String?` | Yes | **Deezer track id** (Phase 3.2A, additive/backwards-compatible; sourced from the v2 payload's top-level id in `_mapTrackV2`). Lets cloud sync resolve a local track to `tracks.id` via `CatalogResolver` — see [features/library.md](features/library.md) |
 
 ### `Playlist` — `@HiveType(typeId: 1)`
 `id`(0), `name`(1), `tracks`(2 `List<Track>` embedded), `createdAt`(3 `DateTime`), `coverColor`(4 `int?` `0xAARRGGBB`). All persist. See [features/playlist.md](features/playlist.md).
@@ -165,6 +166,8 @@ Phase 1 (2026-07-16) introduced 11 versioned SQL migrations in `supabase/migrati
 
 `20260716090000_extensions_and_helpers` · `20260716090100_catalog` · `20260716090200_profiles_and_auth` · `20260716090300_library_and_social` · `20260716090400_playlists` · `20260716090500_stories` · `20260716090600_billing` · `20260716090700_notifications` · `20260716090800_catalog_views` · `20260716090900_storage_buckets` · `20260716091000_storage_tighten_listing`
 
+Phase 3.2A (2026-07-17) added `20260717160000_phase3_2a_onboarding_and_hidden_tracks` — the `user_hidden_tracks` table (own-row RLS + FK index) and the `complete_artist_onboarding(uuid[])` SECURITY DEFINER RPC that flips `profiles.onboarding_completed`. Full detail: [backend/database-schema.md](backend/database-schema.md).
+
 ### Client (Hive)
 
 No SQL migrations. Data-shape migrations are imperative, run once at `HiveStorage.init()`:
@@ -180,9 +183,9 @@ Future field additions must append `@HiveField` indices; a corresponding migrati
 
 ## Backup & Recovery
 
-- **Backup frequency**: None automated — Hive lives only on-device. Uninstalling the app or `logout()` (`HiveStorage.clearAll()`) **permanently destroys** the user's library. This is a known limitation and the motivation for planned cloud sync (see [roadmap.md](roadmap.md), [features/library.md](features/library.md)).
-- **Retention**: Until uninstall / clear-data.
-- **Restore process**: None. No export/import exists yet ([IDEAS.md](IDEAS.md) tracks adding one).
+- **Backup frequency**: As of Phase 3.2A the **library** (liked / saved albums / followed artists / hidden tracks) is durably synced to Supabase, so a re-login re-hydrates it cross-device (`hydrateFromCloud`, add-only). Logout no longer wipes Hive (Phase 3.1); the Profile "Clear Data" action still wipes the local cache but **not** the cloud — the same user re-hydrates on next login (see [KNOWN_ISSUES.md](KNOWN_ISSUES.md)). **Playlists and the residual local profile remain Hive-only** and are still lost on uninstall/clear-data until playlist cloud migration lands.
+- **Retention**: Cloud-synced entities persist server-side; playlists/searches until uninstall / clear-data.
+- **Restore process**: Automatic cloud re-hydration for synced entities on login. No manual export/import yet ([IDEAS.md](IDEAS.md) tracks adding one).
 
 For the **Redis** caches on the server side (not a system of record), backup is irrelevant — entries are TTL'd and regenerated on miss. See [CACHE_STRATEGY.md](CACHE_STRATEGY.md).
 
@@ -203,4 +206,4 @@ Full detail: [architecture-review.md](architecture-review.md#8-database-improvem
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*

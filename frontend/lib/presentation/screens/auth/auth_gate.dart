@@ -9,10 +9,10 @@ import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../state/auth_controller.dart';
+import '../../state/onboarding_controller.dart';
 import '../main_wrapper.dart';
+import '../onboarding/artist_onboarding_screen.dart';
 import 'complete_profile_screen.dart';
-import 'login_screen.dart';
-import 'onboarding_placeholder_screen.dart';
 import 'reset_password_screen.dart';
 import 'verify_email_screen.dart';
 import 'welcome_screen.dart';
@@ -38,7 +38,10 @@ class AuthGate extends StatelessWidget {
           case AppAuthState.completeProfile:
             return const CompleteProfileScreen();
           case AppAuthState.onboarding:
-            return const OnboardingPlaceholderScreen();
+            return ChangeNotifierProvider(
+              create: (_) => OnboardingController(),
+              child: const ArtistOnboardingScreen(),
+            );
           case AppAuthState.ready:
             return MainWrapper(key: MainWrapper.shellKey);
         }

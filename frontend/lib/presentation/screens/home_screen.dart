@@ -116,8 +116,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<AuthController>().currentUser;
-    final userName = user?.name.split(' ').first ?? 'Guest';
+    final profile = context.watch<AuthController>().profile;
+    final firstName = profile?.firstName?.trim() ?? '';
+    final userName = firstName.isNotEmpty
+        ? firstName.split(RegExp(r'\s+')).first
+        : (profile?.greetingName.trim().isNotEmpty ?? false)
+            ? profile!.greetingName
+            : 'there';
     
     final hour = DateTime.now().hour;
     String greeting = "Good morning";
