@@ -3,6 +3,10 @@ import '../entities/saved_album.dart';
 import '../entities/artist.dart';
 
 abstract class MusicRepository {
+  /// Optional: warm the HTTP connection (DNS/TLS/keep-alive) ahead of the first
+  /// search so it feels instant. No-op-safe to call repeatedly.
+  Future<void> prewarm() => Future<void>.value();
+
   Future<List<Track>> searchTracks(String query);
   Future<List<SavedAlbum>> searchAlbums(String query);
   Future<List<Artist>> searchArtists(String query);

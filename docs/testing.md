@@ -9,7 +9,7 @@
 
 Paax has **minimal automated test coverage** (growing since Phase 3.1/3.2A). There is:
 
-- **A small Flutter test suite** — `frontend/test/unit/` has **13 passing** unit tests (`auth_errors_test`, `library_sync_state_test` — the latter now including a `genreFollow` journal round-trip) plus the Phase 3.1 live anon-contract test `frontend/test/live/auth_live_test.dart` (4/4). Coverage is otherwise still sparse.
+- **A small Flutter test suite** — `frontend/test/unit/` has **18 passing** unit tests (`auth_errors_test`, `library_sync_state_test` — including a `genreFollow` journal round-trip — and `search_controller_test`: min-length gate, newest-wins cancellation, instant cache, coalesced-query resolution, prewarm) plus the Phase 3.1 live anon-contract test `frontend/test/live/auth_live_test.dart` (4/4). Coverage is otherwise still sparse.
 - **No backend test suite** — `backend/` contains standalone **probe scripts** (`test_*.py`, `verify_*.py`, `debug_*.py`, `explore_genres.py`) that hit live APIs or dump `ytmusicapi` structures. They are **exploratory tooling, not assertions**, and are gitignored.
 - **No CI** — no GitHub Actions; nothing runs tests on push/PR.
 

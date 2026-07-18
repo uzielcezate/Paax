@@ -3,21 +3,51 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:beaty/core/config/api_config.dart';
 
+/// Top-level so it can run in a background isolate via [compute]: decode +
+/// UTF-8 the raw body off the main thread for large (search) responses, keeping
+/// the UI thread free for 60 FPS scrolling while results load.
+Object? _decodeBody(List<int> bytes) => json.decode(utf8.decode(bytes));
+
 class YouTubeMusicDataSource {
   // Base URL resolved from --dart-define=ENV= (local | lan | prod).
   // See lib/core/config/api_config.dart for full documentation.
   static String get _baseUrl => ApiConfig.baseUrl;
-  
+
+  // A single persistent client per data source. On mobile this is an IOClient
+  // that pools + keep-alives connections; reusing one instance across searches
+  // means the TLS/socket is established once and reused.
   final http.Client _client;
 
   YouTubeMusicDataSource({http.Client? client}) : _client = client ?? http.Client();
 
-  Future<dynamic> _get(String path, {Map<String, String>? params}) async {
+  bool _prewarmed = false;
+
+  /// Establishes the DNS + TLS + keep-alive connection to the API host up front
+  /// so the first real search reuses an open socket. Fire-and-forget; failures
+  /// are ignored (it is purely an optimization).
+  Future<void> prewarm() async {
+    if (_prewarmed) return;
+    _prewarmed = true;
+    try {
+      await _client.head(Uri.parse(_baseUrl));
+    } catch (_) {
+      // Non-fatal — a real request will simply establish the connection itself.
+    }
+  }
+
+  Future<dynamic> _get(String path,
+      {Map<String, String>? params, bool offloadDecode = false}) async {
     final uri = Uri.parse('$_baseUrl$path').replace(queryParameters: params);
     try {
       final response = await _client.get(uri);
       if (response.statusCode == 200) {
-        return json.decode(utf8.decode(response.bodyBytes));
+        final bytes = response.bodyBytes;
+        // Offload large payloads (search results carry per-track match blocks)
+        // to a background isolate so decoding never janks the UI thread.
+        if (offloadDecode && bytes.length > 32 * 1024) {
+          return await compute(_decodeBody, bytes);
+        }
+        return json.decode(utf8.decode(bytes));
       } else {
         throw Exception('API Error ${response.statusCode}: ${response.body}');
       }
@@ -93,7 +123,9 @@ class YouTubeMusicDataSource {
   /// Search via Deezer with YouTube video ID matching.
   /// [type]: tracks | albums | artists
   Future<Map<String, dynamic>> searchV2(String query, String type, {int limit = 25}) async {
-    final res = await _get('/v2/search', params: {'q': query, 'type': type, 'limit': limit.toString()});
+    final res = await _get('/v2/search',
+        params: {'q': query, 'type': type, 'limit': limit.toString()},
+        offloadDecode: true);
     return res as Map<String, dynamic>;
   }
 

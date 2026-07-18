@@ -29,10 +29,15 @@ Searchable via paax-api `/v2/search?type=...`:
 
 ## Search Behavior
 
-- **Trigger**: Debounced live search. `SearchController` waits **400ms** after the last keystroke before issuing requests, so fast typing doesn't spawn a request per character (also protects the image pipeline from 429 storms — see [performance](../performance.md)).
-- **Minimum characters**: Empty query short-circuits to the browse (genre grid) state; any non-empty trimmed query triggers a search.
-- **Parallel fan-out**: On trigger, the controller runs `Future.wait([searchTracks, searchAlbums, searchArtists])` concurrently against `MusicRepositoryImpl`, so all three result groups resolve together rather than serially.
+- **Trigger**: Debounced live search. `SearchController` waits **220 ms** after the last keystroke before issuing requests (tuned down from 400 ms for responsiveness).
+- **Minimum characters**: Searches start at **≥ 2 characters**. A single character does nothing; an empty query short-circuits to the browse (genre grid) state.
+- **Parallel + partial fan-out**: The controller runs `searchTracks`/`searchAlbums`/`searchArtists` concurrently against `MusicRepositoryImpl` and paints **each group the moment it returns** (no wait-for-all); a single group failing doesn't fail the others.
+- **Cancellation (newest-wins)**: a monotonic generation token is bumped on every query change, so a slower older response can never overwrite a newer query's results.
+- **In-memory LRU cache (40 entries)**: a repeated query paints **instantly** and then silently revalidates in the background (stale-while-revalidate); identical in-flight queries are coalesced.
+- **Connection reuse**: one persistent keep-alive HTTP client per data source, **prewarmed** (HEAD) on `SearchController` init; large search payloads are JSON-decoded in a **background isolate** (`compute`) to keep scrolling at 60 FPS.
 - **Results limit**: `limit=25` per type (paax-api default for `/v2/search`).
+
+> **/v2-migration compatible**: the pipeline talks only to the `MusicRepository` interface — a future move to the normalized `/v2` endpoints is a drop-in repository swap, and the debounce/cancellation/cache/partial logic is unaffected. See [architecture](../architecture.md). The search perf work is **logic-only** — the Search screen, cards, spacing, animations and layout are unchanged. Covered by `frontend/test/unit/search_controller_test.dart` (min-length gate, newest-wins cancellation, instant cache, coalesced-query resolution, prewarm).
 
 ---
 
@@ -92,4 +97,4 @@ Tapping a track opens the [player](player.md) (and can reach `track_detail_scree
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*
