@@ -32,7 +32,7 @@ Paax aims to be a **free, beautiful, cross-platform music app** that delivers a 
 
 | Milestone | Description | Target | Status |
 |-----------|-------------|--------|--------|
-| v1.1 — Durable Library | Cloud sync + backup/restore so uninstall no longer destroys data — server foundation deployed (ADR-009 Phase 1); rollout: Phase 2 backend ingestion (Deezer upsert + YouTube matcher + Redis jobs) → Phase 3 Flutter integration + Hive migration → Phase 4 social (friends/stories/notifications) → Phase 5 Stripe activation | After v1.0 | Foundation deployed; integration planned |
+| v1.1 — Durable Library | Cloud sync + backup/restore so uninstall no longer destroys data — server foundation deployed (ADR-009 Phase 1) → Phase 2 backend ingestion → Phase 3.1 Flutter auth → **Phase 3.2A landed (2026-07-17, ADR-011): offline-first cloud library sync (Hive cache + Supabase authority) + artist onboarding + real profile/avatar + Hive `deezerTrackId` migration** → ahead: Phase 3.2B (following expansion + personalized Home), playlists cloud migration, listening history → Phase 4 social → Phase 5 Stripe | After v1.0 | In progress — library sync live; playlists + social ahead |
 | v1.2 — Offline | Functional downloads + offline playback (wire `stream_candidates`, local file cache) | After v1.1 | Planned |
 | v1.3 — Discovery | Personalized recommendations beyond charts/related | Later | Planned |
 | v2.0 — Multi-platform | iOS build + parity; possible desktop | Later | Exploratory |
@@ -47,7 +47,7 @@ Paax aims to be a **free, beautiful, cross-platform music app** that delivers a 
 - Branding migration Beaty → Paax.
 
 ### Next (next cycle)
-- Real authentication + cloud sync integration — the Supabase server datastore now exists (deployed Phase 1, [decisions.md](decisions.md) ADR-009, [backend/database-schema.md](backend/database-schema.md)); next: Phase 2 backend ingestion, then Phase 3 Flutter Auth + Hive migration.
+- Phase 3.2B: **following expansion + personalized Home** (real auth Phase 3.1, and cloud library sync + onboarding + real profile Phase 3.2A, are done — [decisions.md](decisions.md) ADR-011). Then playlists cloud migration + qualified-play listening history.
 - Working Settings screen (currently a stub — [features/settings.md](features/settings.md)).
 - Downloads + offline mode ([features/downloads.md](features/downloads.md), [features/offline.md](features/offline.md)).
 - Automated tests + CI ([testing.md](testing.md)).
@@ -80,10 +80,10 @@ Paax aims to be a **free, beautiful, cross-platform music app** that delivers a 
 | Crash-free sessions | > 99% | Unmeasured |
 | Play success rate (track → audio) | > 95% | Unmeasured |
 | Metadata p95 (warm cache) | < 200 ms | Unmeasured |
-| Library retained across sessions | 100% on-device | Achieved (no cross-device) |
+| Library retained across sessions | 100% + cross-device | Achieved on-device; cross-device sync live for liked/albums/artists/hidden (Phase 3.2A); playlists still on-device |
 
 See [tasks/backlog.md](tasks/backlog.md), [PROJECT_GOALS.md](PROJECT_GOALS.md), and [current-state.md](current-state.md).
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*

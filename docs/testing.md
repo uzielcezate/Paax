@@ -7,9 +7,9 @@
 
 ## Current Reality (read this first)
 
-Paax has **near-zero automated test coverage**. There is:
+Paax has **minimal automated test coverage** (growing since Phase 3.1/3.2A). There is:
 
-- **No Flutter test suite** — `frontend/test/` is effectively empty; `flutter_test` ships but is unused for real tests.
+- **A small Flutter test suite** — `frontend/test/unit/` has **12 passing** unit tests (`auth_errors_test`, `library_sync_state_test`) plus the Phase 3.1 live anon-contract test `frontend/test/live/auth_live_test.dart` (4/4). Coverage is otherwise still sparse.
 - **No backend test suite** — `backend/` contains standalone **probe scripts** (`test_*.py`, `verify_*.py`, `debug_*.py`, `explore_genres.py`) that hit live APIs or dump `ytmusicapi` structures. They are **exploratory tooling, not assertions**, and are gitignored.
 - **No CI** — no GitHub Actions; nothing runs tests on push/PR.
 
@@ -131,6 +131,25 @@ rate limiter, and `/v2` endpoints. Phase 2.6 added 9 discography-attribution
 regressions (parent-context attribution, explicit-data preservation + dedupe,
 no-placeholder-without-context, partial downgrade, ingest idempotency). Run:
 `cd paax-api && ./.venv/Scripts/python -m pytest -q`.
+
+---
+
+## Frontend + DB tests (Phase 3.2A)
+
+- **Flutter unit** — `flutter test test/unit/` = **12/12**: `auth_errors_test`
+  (`AuthErrorMapper`, incl. the reused-current-password `same_password` mapping)
+  and `library_sync_state_test` (pending-ops journal: dedup by `kind + deezerId`,
+  last-write-wins, replay). `flutter analyze` clean.
+- **SQL tests** — `supabase/tests/phase3_2a_onboarding_hidden_tracks_test.sql`
+  exercises the `complete_artist_onboarding` RPC and `user_hidden_tracks` RLS/PK.
+- **Live disposable-account verification** — the migration was validated against
+  throwaway Supabase accounts (deleted afterward, 0 leftover): onboarding RPC
+  happy-path / reject-<5 / dedup / auth-guard (`42501`); hidden-tracks RLS +
+  idempotency; like/save/follow/hide under RLS with counter bump→restore;
+  cross-user isolation (account B sees 0 of account A's rows). This live-DB approach
+  complements (does not replace) the checked-in SQL/unit tests.
+- **Build** — debug + release APK build verified (`applicationId com.paax.music`;
+  release still debug-signed — pre-existing).
 
 ---
 

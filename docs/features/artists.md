@@ -9,7 +9,7 @@
 
 An artist in Paax is a **Deezer artist**, surfaced through paax-api's `/v2/artist/{id}` family of endpoints. The artist profile (`artist_detail_screen.dart`) is the richest catalog surface in the app: a hero header, popular tracks, split discography (albums / singles & EPs), and "fans also like" related artists. A separate `artist_discography_screen.dart` shows the full, filterable discography.
 
-Users can **follow** an artist; followed artists persist locally in Hive as `Artist` objects (there is no server-side social graph — see [library](library.md) and [architecture](../architecture.md)).
+Users can **follow** an artist; followed artists persist to the offline-first library — Hive locally, synced to Supabase `user_followed_artists` (**Phase 3.2A**, see [library](library.md) and [decisions](../decisions.md) ADR-011). Artist onboarding follows the same table via the `complete_artist_onboarding` RPC (see [onboarding](onboarding.md)).
 
 A key backend convenience: the v2 artist endpoints return **pre-split** release buckets — `topTracks`, `albums`, `singles`, and `relatedArtists` come already categorized from paax-api (Deezer already carries release dates and `record_type`), so the client does no client-side classification. Consequently `MusicRepositoryImpl.enrichArtistReleases` is a **no-op in the v2 path** (it existed to backfill dates/types in the old v1 ytmusicapi world). See [repositories](../backend/repositories.md).
 
@@ -67,7 +67,7 @@ The full release list with filter chips: **All**, **Albums**, **Singles & EPs**.
 
 ## Following
 
-- **Follow action**: `LibraryController.toggleFollowArtist` writes/removes the `Artist` in the `followed_artists` Hive box and notifies listeners. The follow button reflects state reactively.
+- **Follow action**: `LibraryController.toggleFollowArtist` writes/removes the `Artist` in the `followed_artists` Hive box, notifies listeners, and fires a best-effort cloud push to `user_followed_artists` (resolved by Deezer id → catalog UUID; journaled if unresolvable/offline — see [library](library.md)). The follow button reflects state reactively.
 - **Effect on home**: **None currently** — the Home feed does not aggregate followed artists' new releases (there is no notifications/new-release pipeline; see [home](home.md) and [notifications](notifications.md)).
 - **Effect on library**: The artist appears in the [Library](library.md) → **Artists** tab.
 
@@ -101,8 +101,8 @@ See the [UI states rule](../../.claude/rules/ui.md). The 2-phase load means the 
 - Repository: `frontend/lib/data/repositories/music_repository_impl.dart` → `getArtistV2`, `getArtistTopV2`, `getArtistAlbumsV2` in `youtube_music_data_source.dart`
 - Controller: `frontend/lib/presentation/state/library_controller.dart` (`toggleFollowArtist`) — see [state-management](../frontend/state-management.md)
 - API: `GET /v2/artist/{id}`, `/v2/artist/{id}/top`, `/v2/artist/{id}/albums` — see [api](../api.md)
-- Related features: [albums](albums.md), [library](library.md), [player](player.md), [recommendations](recommendations.md)
+- Related features: [albums](albums.md), [library](library.md), [onboarding](onboarding.md), [player](player.md), [recommendations](recommendations.md)
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*

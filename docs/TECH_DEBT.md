@@ -43,6 +43,10 @@ Technical debt is any code or design decision that works today but creates futur
 | DEBT-015 | Dual-store period: Hive live + Supabase deployed-but-unconsumed | 🟡 Medium | Data / Architecture | L | 🔴 Open (deliberate) |
 | DEBT-016 | Demo auth stub still live despite real Supabase Auth existing | 🟡 Medium | Auth | M | 🔴 Open |
 | DEBT-017 | Stories cleanup job not scheduled (expired stories accumulate) | 🟢 Low | Supabase / Jobs | S | 🔴 Open |
+| DEBT-018 | Cloud-hydrated library entities are sparse | 🟢 Low | Library / Sync | M | 🔴 Open |
+| DEBT-019 | Track cloud resolution depends on a known Deezer track id | 🟡 Medium | Library / Sync | M | 🔴 Open |
+| DEBT-020 | Onboarding search UUID coverage (null-id discoveries) | 🟢 Low | Onboarding | S | 🔴 Open |
+| DEBT-021 | "Clear Data" doesn't reset cloud/sync bookkeeping | 🟢 Low | Library / Sync | S | 🔴 Open (deliberate) |
 
 ---
 
@@ -267,6 +271,52 @@ Technical debt is any code or design decision that works today but creates futur
 
 ---
 
+## Phase 3.2A cloud-sync debt
+
+### DEBT-018 — Cloud-hydrated library entities are sparse
+
+**Status**: 🔴 Open · **Severity**: Low · **Area**: Library / Sync · **Incurred on**: 2026-07-17 · **Effort**: M
+
+**Description**: `hydrateFromCloud` returns relation ids only, so a hydrated liked track's `artistName`/`artworkUrl` and a saved album's `artistName` are empty until re-fetched by browsing ([KNOWN_ISSUES.md](KNOWN_ISSUES.md) ISSUE-022).
+**Why it was incurred**: The cloud stores durable relations, not the full display payload; a full denormalized mirror was out of scope for 3.2A.
+**Impact if unaddressed**: Freshly hydrated lists on a new device look incomplete until the user navigates into each item.
+**Fix Plan**: Batch-refetch sparse entities on hydrate (or store a minimal display cache server-side).
+
+---
+
+### DEBT-019 — Track cloud resolution depends on a known Deezer track id
+
+**Status**: 🔴 Open · **Severity**: Medium · **Area**: Library / Sync · **Incurred on**: 2026-07-17 · **Effort**: M
+
+**Description**: A liked/hidden track syncs only when its Deezer track id is resolvable (`Track.deezerTrackId`, HiveField 11). Pre-3.2A likes may lack it; hidden tracks recover it best-effort from a locally-known `Track`. Unresolved tracks stay local-only ([KNOWN_ISSUES.md](KNOWN_ISSUES.md) ISSUE-023).
+**Why it was incurred**: The field is additive; older rows predate it and there is no backfill.
+**Impact if unaddressed**: A subset of the pre-existing library never becomes cross-device.
+**Fix Plan**: Backfill `deezerTrackId` by matching videoId→catalog, or resolve on next play.
+
+---
+
+### DEBT-020 — Onboarding search UUID coverage
+
+**Status**: 🔴 Open · **Severity**: Low · **Area**: Onboarding · **Incurred on**: 2026-07-17 · **Effort**: S
+
+**Description**: `/v2/find` can return artists with a null Supabase id; only cataloged or lazily-resolved (`/v2/artists/deezer/{id}`) artists yield a submittable UUID ([KNOWN_ISSUES.md](KNOWN_ISSUES.md) ISSUE-024).
+**Why it was incurred**: Deezer-discovered artists aren't guaranteed to be in the catalog at search time; lazy resolve covers selection.
+**Impact if unaddressed**: A search hit that fails to resolve can't be selected — minor UX friction.
+**Fix Plan**: Pre-warm/ingest search results, or surface a clear "not yet available" affordance.
+
+---
+
+### DEBT-021 — "Clear Data" doesn't reset cloud/sync bookkeeping
+
+**Status**: 🔴 Open (deliberate) · **Severity**: Low · **Area**: Library / Sync · **Incurred on**: 2026-07-17 · **Effort**: S
+
+**Description**: Profile → "Clear Data" wipes Hive but not the Supabase rows nor `lastUserId`/migrated flags, so the same user re-hydrates on next login ([KNOWN_ISSUES.md](KNOWN_ISSUES.md) ISSUE-026).
+**Why it was incurred**: Intended behavior for a cloud-backed library; a true erase needs a server-side deletion flow (not yet built).
+**Impact if unaddressed**: "Clear Data" is easily mistaken for a full account reset.
+**Fix Plan**: Add an explicit server-side "delete my library / account" flow; keep local clear separate.
+
+---
+
 ## ✅ Paid Off Debt
 
 | Debt # | Title | Fixed On | PR/Commit |
@@ -279,7 +329,7 @@ Technical debt is any code or design decision that works today but creates futur
 
 | Metric | Value |
 |--------|-------|
-| Total open debt items | 17 |
+| Total open debt items | 21 |
 | Critical + High items | 6 |
 | Paid off this quarter | 0 |
 
@@ -315,3 +365,4 @@ See [architecture-review.md](architecture-review.md) §1–§2 for the full list
 ---
 
 *Last updated: 2026-07-17*
+

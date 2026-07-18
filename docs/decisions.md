@@ -298,4 +298,40 @@ Extends ADR-009 · preserves ADR-001/ADR-004. Full reference:
 
 ---
 
+### ADR-011 — Offline-first cloud library sync (Hive cache + Supabase authority)
+
+**Date**: 2026-07-17 · **Status**: ACCEPTED (Phase 3.2A) · **Author**: AI agent (directed by uzielcezate) · **Deciders**: maintainer
+
+#### Context
+Phase 3.1 landed real Supabase Auth, but the music **library** (liked tracks, saved albums, followed artists, hidden tracks) still lived only in on-device Hive — no cross-device durability, and the ADR-009 Phase-3 goal of cloud-backed library remained open. Local entities are keyed by YouTube `videoId` / Deezer ids, while the Supabase catalog is keyed by internal UUIDs, so a durable sync needs an id-resolution strategy that never blocks the UI or resurrects deleted rows. paax-api is **not** involved (unchanged this phase); the client talks to Supabase directly under RLS.
+
+#### Decision
+Adopt an **offline-first** model: **Hive is the fast local cache; Supabase is the durable cross-device authority.**
+
+- **Resolve by `deezer_id`** — `CatalogResolver` maps local Deezer ids → catalog UUIDs via the publicly-readable `artists/albums/tracks.deezer_id` columns (cached in memory + `SharedPreferences`). `Track` gained an additive nullable `deezerTrackId` (HiveField 11) so tracks resolve to `tracks.id`.
+- **Optimistic local write, best-effort cloud push** — every toggle writes Hive first, then `LibraryController` fires a best-effort `pushX` (cloud side only) with the post-toggle state. `LibraryRemoteDataSource` does RLS-safe, `auth.uid()`-scoped CRUD (idempotent inserts ignoring `23505`) and **never** writes trigger-maintained counters.
+- **Pending-ops journal, last-write-wins** — on an unresolved id or network failure the op is journaled in `LibrarySyncState` (deduped by `kind + deezerId`); `flushPending` replays it.
+- **`hydrateFromCloud` is add-only** and **skips any cloud item with a pending `remove` op** — an unlike/unfollow is never resurrected.
+- **`migrateLocalToCloud` runs once per user** (guarded); unresolvable legacy items stay local-only.
+- **Clear-on-account-switch** — `onUserSession(uid)` clears the local library boxes + pending journal when the recorded `lastUserId` differs from the new uid (playlists/profile preserved).
+- **Unowned local not uploaded** — a pre-existing local library with no recorded owner (`lastUserId == null`, the pre-3.2A upgrade path) is kept local-only, never bulk-uploaded, preventing a cross-account cloud write.
+- **Hidden tracks** — new `user_hidden_tracks` table (own-row RLS); hidden = excluded from automatic playback + future recommendation inputs, catalog track not deleted.
+
+Artist onboarding is completed by the companion **`complete_artist_onboarding(p_artist_ids uuid[])` SECURITY DEFINER RPC** (`search_path=''`, authenticated-only, ≥5 unique existing artists, idempotent follows, atomically flips `profiles.onboarding_completed`) — the only path allowed to set that flag (see [features/onboarding.md](features/onboarding.md)).
+
+#### Rejected alternatives
+- **Realtime subscriptions / full two-way merge** — overkill for a per-user library; a best-effort push + add-only hydrate with a small journal is simpler and sufficient.
+- **Resolve by videoId** — the catalog is keyed on Deezer ids; videoId has no stable catalog mapping.
+- **Block the UI on cloud writes** — rejected; sync must never degrade the offline-first feel.
+- **Bulk-upload any pre-existing local library on first login** — rejected; it would leak a prior/unowned device's library into a new account's cloud rows.
+
+#### Consequences
+- **Positive**: durable, cross-device library; offline-first UX preserved; multi-account safe; counters stay trigger-only.
+- **Negative**: hydrated liked/album/artist entities are **sparse** until re-fetched by browsing; hidden/liked tracks only resolve to cloud when a Deezer track id is known (new likes carry it; some pre-3.2A likes may not); "Clear Data" wipes Hive but not the cloud/sync bookkeeping, so the same user re-hydrates on next login. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md), [TECH_DEBT.md](TECH_DEBT.md).
+
+#### Related
+Executes part of ADR-009 Phase 3 · preserves ADR-001/ADR-004 (playback unchanged; paax-api not modified). Full reference: [features/library.md](features/library.md), [features/onboarding.md](features/onboarding.md).
+
+---
+
 *Last updated: 2026-07-17*

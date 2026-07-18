@@ -88,9 +88,9 @@ oauth = os.environ.get("YTMUSIC_OAUTH_JSON")
 
 ---
 
-## Supabase security model (Phase 1 — deployed, not yet consumed)
+## Supabase security model (deployed; auth + profile + library consumed since Phase 3.1/3.2A)
 
-Deployed 2026-07-16 ([decisions.md](decisions.md) ADR-009; full reference: [backend/database-schema.md](backend/database-schema.md)). **Nothing in the app or paax-api uses it yet**, so the live threat model above is unchanged — but the following controls are already in force on the Supabase project (`jecgmiuypuathhvjuhea`):
+Deployed 2026-07-16 ([decisions.md](decisions.md) ADR-009; full reference: [backend/database-schema.md](backend/database-schema.md)). **The app now consumes it directly** for auth/profile (Phase 3.1) and library sync + onboarding (Phase 3.2A) — paax-api still does not (unchanged). RLS is the enforcement boundary. The following controls are in force on the Supabase project (`jecgmiuypuathhvjuhea`):
 
 - **RLS on all 34 tables** — no exceptions. User data uses own-row policies; catalog is public-read.
 - **Service-role-only writes** for catalog, billing, notification creation, counters, and play qualification — clients cannot write any of these.
@@ -102,7 +102,16 @@ Deployed 2026-07-16 ([decisions.md](decisions.md) ADR-009; full reference: [back
 - **`service_role` key is server/scripts-only** — it must never ship in Flutter or any client bundle.
 - **⚠️ Manual Dashboard step required** (MCP cannot set it): Authentication → Sign In / Providers → Email → minimum password length **8**, required characters **"lowercase, uppercase, digits and symbols"** — matching the app-side regex `^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$`. See [backend/auth.md](backend/auth.md).
 
-> Once integration begins (Phases 2–3), server-side PII appears (emails, profiles) and the Data Privacy section below must be revised — the "no PII on servers" statements will stop being true.
+> Integration has begun: server-side PII (emails, profile fields) is now live under RLS. The "no PII on servers" statements in the older Threat Model / Data Privacy sections below are being superseded — treat the Supabase controls here and the Phase 3.2A section as authoritative.
+
+### Phase 3.2A controls (onboarding, hidden tracks, library sync, avatars)
+
+- **Onboarding RPC is a hardened boundary** — `public.complete_artist_onboarding(p_artist_ids uuid[])` is **SECURITY DEFINER** with `set search_path=''`, `EXECUTE` granted to `authenticated` only (revoked from `anon`/`public`). It requires `auth.uid()` (else `42501`), validates ≥5 unique **existing** artists (`<5` → `22023`; non-existent → `23503`), inserts idempotent follows, and is the **only** path allowed to flip `profiles.onboarding_completed` (excluded from the client `updateOwn` whitelist).
+- **`user_hidden_tracks` own-row RLS** — `SELECT`/`INSERT`/`DELETE` scoped to `auth.uid()`; hiding excludes a track from automatic playback + future recommendation inputs without deleting the catalog track.
+- **Multi-account local isolation** — on a real account switch the client clears the local library boxes + pending sync journal (`clear-on-switch`); a pre-existing library with no recorded owner is kept **local-only and never bulk-uploaded** (`unowned-not-uploaded`), preventing one account's data from leaking into another's cloud rows.
+- **Avatar Storage is per-user** — `AvatarService` uploads only to `user-avatars/{auth.uid()}/…`, matching the own-folder Storage RLS policy; MIME + size validated client-side before upload.
+- **Counters never client-written** — library sync writes only relation rows (`user_liked_tracks`/`user_saved_albums`/`user_followed_artists`/`user_hidden_tracks`); `platform_likes_count`/`platform_followers_count` are maintained solely by the `bump_*` triggers.
+- **Idempotent, RLS-scoped CRUD** — inserts ignore Postgres `23505`; all writes are scoped to `auth.uid()`. paax-api was not modified, so no new server attack surface.
 
 ---
 

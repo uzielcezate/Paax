@@ -28,11 +28,11 @@ The client uses **only the public anon key** (`lib/core/config/supabase_config.d
 | Validators | `core/auth/validators.dart` | Pure email/password/username/DOB/country validators mirroring the server policy |
 | State | `presentation/state/auth_controller.dart` | Session restore, auth-event subscription, routing state machine, all actions |
 | Router | `presentation/screens/auth/auth_gate.dart` | `Selector<AuthController, AppAuthState>` → one destination |
-| Screens | `presentation/screens/auth/*.dart` | Welcome, Login, Register (3-step), Verify Email, Forgot/Reset Password, Complete Profile, Onboarding placeholder |
+| Screens | `presentation/screens/auth/*.dart` (+ `screens/onboarding/`) | Welcome, Login, Register (3-step), Verify Email, Forgot/Reset Password, Complete Profile; artist onboarding is `ArtistOnboardingScreen` (see [onboarding](onboarding.md)) |
 
 ### Routing state machine
 
-`AppAuthState` ∈ `initializing`, `unauthenticated`, `unverified`, `profileLoading`, `completeProfile`, `onboarding` (Phase 3.2 placeholder), `ready`, `recovery`.
+`AppAuthState` ∈ `initializing`, `unauthenticated`, `unverified`, `profileLoading`, `completeProfile`, `onboarding` (**real artist onboarding as of Phase 3.2A** — see [onboarding](onboarding.md)), `ready`, `recovery`.
 
 ```
 initializing ──▶ unauthenticated ──▶ (register/login)
@@ -97,7 +97,7 @@ If a verified user has no complete profile (pending payload lost/expired, or a p
 
 ### Logout
 
-`AuthController.logout` calls `signOut()` and clears in-memory auth state. **It no longer wipes the local Hive library** (the old stub did a full `clearAll`). The email-scoped `PendingRegistration` is intentionally retained so a genuine re-login with the same email can still finish onboarding; a different account can never receive it (email match enforced).
+`AuthController.logout` calls `signOut()` and clears in-memory auth state. **It no longer wipes the local Hive library** (the old stub did a full `clearAll`). It clears the in-progress onboarding selection (`paax_onboarding_selection_v1`). The email-scoped `PendingRegistration` is intentionally retained so a genuine re-login with the same email can still finish onboarding; a different account can never receive it (email match enforced).
 
 ---
 
@@ -118,7 +118,7 @@ If a verified user has no complete profile (pending payload lost/expired, or a p
 - `public.profiles` is **1:1 with `auth.users`**. The `on_auth_user_created` trigger (`private.handle_new_user()`) creates the row on signup, deriving the username from signup metadata when it is valid and free, otherwise a safe `user_<id>`. It never fails signup and never reads role/tier from metadata.
 - **RLS**: users may `SELECT`/`INSERT`/`UPDATE` only their own row (`auth.uid() = id`). The anon role sees nothing.
 - **Privileged columns** (`id`, `app_role`, `subscription_tier`, `subscription_status`, `subscription_expires_at`, `created_at`) are guarded by the `protect_profiles_privileged_columns` BEFORE UPDATE trigger, which **raises `42501`** if a client (`anon`/`authenticated`) tries to change them. The client also whitelists writable columns (`ProfileRepository.writableFields`) as defense-in-depth.
-- `onboarding_completed` is server-managed and never set by the Complete-Profile path (onboarding is Phase 3.2).
+- `onboarding_completed` is server-managed and never set by the Complete-Profile path or client `updateOwn` — it is flipped **only** by the `complete_artist_onboarding` RPC (Phase 3.2A; see [onboarding](onboarding.md)).
 
 See [database](../database.md), [backend/database-schema.md](../backend/database-schema.md), and [`.claude/rules/supabase.md`](../../.claude/rules/supabase.md).
 
@@ -152,6 +152,7 @@ Enforced in **both** the client (`AuthValidators`) and Supabase:
 | Wrong email/password | `invalidCredentials` | "Incorrect email or password" |
 | Unverified email at login | `emailNotConfirmed` | "Please verify your email to continue" (+ routes to Verify screen) |
 | Email already registered | `emailAlreadyRegistered` | "This email is already registered" |
+| Reused current password (`same_password` / "should be different from the old password") | `samePassword` | "Your new password must be different from your current password." — matched **before** the generic weak-password branch (Phase 3.1 fix, 2026-07-17; regression test added) |
 | Weak password (server) | `weakPassword` | "Password must be 8+ chars with upper, lower, number and symbol" |
 | Username taken (`23505`) | `usernameTaken` | "That username is taken" |
 | Too many attempts (`429`) | `rateLimited` | "Too many attempts. Please try again in a moment" |

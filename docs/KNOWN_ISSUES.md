@@ -61,6 +61,11 @@
 | ISSUE-010 | Branding inconsistency Beaty/Paax | Medium | Branding | 🔴 | None |
 | ISSUE-011 | `DynamicBackground` dormant (not mounted) | Low | Frontend / Theming | 🟡 | Contrast still flows via `foregroundColor` |
 | ISSUE-012 | paax-stream README stale + orphaned resolver | Low | Streaming / Docs | 🟡 | Ignore `resolve/` scaffolding |
+| ISSUE-022 | Cloud-hydrated library entities are sparse | Low | Library / Sync | 🟡 | Fields refill on normal browsing |
+| ISSUE-023 | Hidden/liked tracks only sync when a Deezer track id is known | Low–Med | Library / Sync | 🟡 | New likes carry the id; unresolved stay local-only |
+| ISSUE-024 | Onboarding search UUID only for cataloged/lazily-resolved artists | Low | Onboarding | 🟡 | Popular grid + lazy `/v2/artists/deezer` resolve |
+| ISSUE-025 | Hydrate can duplicate a local liked/hidden row if preferred videoId differs | Low | Library / Sync | 🟡 | Low likelihood; no deezer-id dedup fallback |
+| ISSUE-026 | "Clear Data" wipes Hive but not cloud/sync bookkeeping | Low | Library / Sync | 🟡 | Same user re-hydrates from cloud on next login |
 
 ---
 
@@ -266,6 +271,58 @@
 
 ---
 
+## 🟡 Phase 3.2A cloud-sync limitations
+
+### ISSUE-022 — Cloud-hydrated library entities are sparse
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Library / Sync · **First Observed**: 2026-07-17
+
+**Description**: After `hydrateFromCloud`, liked/album/artist entities come back **sparse** — a liked track's `artistName`/`artworkUrl` and a saved album's `artistName` are empty until the entity is re-fetched by normal browsing. The cloud stores relations/ids, not the full display payload.
+
+**Workaround**: Fields refill when the user opens the artist/album/track through normal navigation. See [decisions.md](decisions.md) ADR-011, [TECH_DEBT.md](TECH_DEBT.md).
+
+---
+
+### ISSUE-023 — Hidden/liked tracks resolve to cloud only when a Deezer track id is known
+
+**Status**: 🟡 Workaround Available · **Severity**: Low–Medium · **Affected Area**: Library / Sync · **First Observed**: 2026-07-17
+
+**Description**: A track syncs to Supabase only when its Deezer track id is resolvable (via `Track.deezerTrackId`, HiveField 11). New likes carry it; **pre-3.2A likes may not**. Hidden tracks recover the Deezer id best-effort from a locally-known `Track` (liked/recently-played) — a hidden track with no locally-known `Track` stays local-only.
+
+**Workaround**: Unresolved items remain fully functional locally; they simply do not appear cross-device until re-encountered with an id.
+
+---
+
+### ISSUE-024 — Onboarding search yields a usable UUID only for cataloged/resolved artists
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Onboarding · **First Observed**: 2026-07-17
+
+**Description**: `GET /v2/find?type=artists` can return a freshly-discovered artist with a **null Supabase id**; only already-cataloged artists (or ones resolved via the lazy `/v2/artists/deezer/{id}` call on selection) produce a real catalog UUID submittable to `complete_artist_onboarding`.
+
+**Workaround**: The popular grid (top 30 from `artists`) is always real UUIDs; selection triggers the lazy resolve so submitted ids are always valid. See [features/onboarding.md](features/onboarding.md).
+
+---
+
+### ISSUE-025 — Hydrate can create a duplicate local liked/hidden row on videoId drift
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Library / Sync · **First Observed**: 2026-07-17
+
+**Description**: If the catalog's `preferred_youtube_video_id` ever differs from the `videoId` a track was originally liked with, `hydrateFromCloud` could create a **duplicate** local liked/hidden row (rows are keyed by videoId; there is no deezer-id dedup fallback).
+
+**Workaround**: Low likelihood. No action needed today; a deezer-id-based dedup pass would eliminate it. See [TECH_DEBT.md](TECH_DEBT.md).
+
+---
+
+### ISSUE-026 — "Clear Data" wipes Hive but not the cloud or sync bookkeeping
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Library / Sync · **First Observed**: 2026-07-17
+
+**Description**: The Profile → "Clear Data" action wipes local Hive but **not** the Supabase rows nor the sync bookkeeping (`lastUserId`/migrated flags). So the same user's next login re-hydrates the library from the cloud — "Clear Data" is not a full account reset.
+
+**Workaround**: Expected behavior for a cloud-backed library; a separate server-side deletion flow would be needed for a true erase. See [decisions.md](decisions.md) ADR-011.
+
+---
+
 ## ✅ Resolved Issues
 
 *(None resolved yet — this log was seeded on 2026-07-16.)*
@@ -297,6 +354,12 @@ placeholders removed). Verified generic on Pink Floyd (64 albums, 0 placeholders
 **Residual**: none for the artist-profile flow. `mappers/deezer_common.build_track_artists`
 retains a separate track-level "Unknown Artist" fallback (out of scope; tracks
 reliably carry an artist) — tracked in TECH_DEBT.
+
+---
+
+> **Note (Phase 3.2A)**: ISSUE-022–026 above are the documented cloud-library-sync
+> limitations, not bugs — they follow directly from the offline-first design
+> ([decisions.md](decisions.md) ADR-011).
 
 ---
 

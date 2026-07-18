@@ -54,7 +54,7 @@ If a session is asked to "fix streaming," first confirm whether the request is a
 > **[SUPERSEDED in part by ADR-009 (2026-07-16)]** — A Supabase project (`jecgmiuypuathhvjuhea`) now **EXISTS** with a fully deployed Phase-1 schema (34 RLS-enabled tables, views, functions, Storage buckets — see [`backend/database-schema.md`](backend/database-schema.md)). However, the second half of this warning remains **fully valid**: the running app still uses **Hive + the demo auth stub**, and neither Flutter nor `paax-api` consumes Supabase. **Do not assume integration** — it is a deployed-but-unconnected foundation.
 
 - ~~**No Postgres, no Supabase, nothing.**~~ *(Superseded — a Supabase server DB now exists, unconnected.)* All **live** user state (library, playlists, liked, followed, recently played, settings) still lives client-side in **Hive**. The rule docs [`.claude/rules/database.md`](../.claude/rules/database.md) and [`.claude/rules/supabase.md`](../.claude/rules/supabase.md) and the `supabase-architect`/`database-reviewer` profiles now apply to the real Supabase project — but only for schema/migration work, not for app code, which has no Supabase wiring.
-- **Auth is a demo stub.** `AuthController.login` hardcodes `user@gmail.com` / `12345` and saves a local `UserProfile(name:"Uziel")`; `signup` always succeeds; `logout` = `HiveStorage.clearAll()`. No tokens, no server accounts. See [Security Notes](#security-notes).
+- ~~**Auth is a demo stub.**~~ **[SUPERSEDED by Phase 3.1 (2026-07-17)]** — the demo stub is **removed**; the app now uses real **Supabase Auth** (see [`features/authentication.md`](features/authentication.md)). And **[Phase 3.2A]** the library liked/saved-albums/followed-artists/hidden-tracks + profile/avatar + onboarding now read/write Supabase directly (see the 2026-07-17 architecture note above). The remaining valid caveat: **playlists, recent searches, and the residual local profile are still Hive-only**, and **paax-api still serves the legacy `/v2` browsing path** (unmodified).
 
 ### [2026-07-16] — Stale comments will lie to you; the docs are authoritative
 
@@ -88,6 +88,20 @@ Non-obvious facts about the new Supabase schema ([`backend/database-schema.md`](
 - **`billing_events` has RLS enabled with ZERO policies on purpose** — that means service-role-only access. Do not "fix" it by adding policies.
 - **`public_profiles` is a deliberate `security definer` view** (safe columns only, `security_barrier`) — a documented advisor exception, not a vulnerability. See [`security.md`](security.md).
 - **Migrations must go through `supabase/migrations/` + the Supabase MCP** (repo ↔ remote 1:1, forward-only with documented rollback strategies). **Never** make Dashboard-only schema changes.
+
+### [2026-07-17] — Phase 3.2A: offline-first cloud library sync boundary
+
+**Added by**: AI agent (Phase 3.2A) · **Category**: Architecture · **Confidence**: High · **Still valid as of**: 2026-07-17
+
+The library is now **offline-first**: **Hive is the fast local cache; Supabase is the durable cross-device authority** (ADR-011, [`features/library.md`](features/library.md)). Traps for future sessions:
+
+- **Reads render from Hive; writes go Hive-first then a best-effort cloud `pushX`.** Never make the UI await the cloud write — failures are journaled in `LibrarySyncState` (dedup `kind+deezerId`, last-write-wins) and replayed by `flushPending`.
+- **Deezer-id → catalog-UUID resolution** is the linchpin: `CatalogResolver` maps local Deezer ids to Supabase UUIDs via the public `artists/albums/tracks.deezer_id` columns (cached in memory + SharedPreferences). `Track.deezerTrackId` (**HiveField 11**, additive) exists solely so tracks resolve to `tracks.id`. A track with no known Deezer id **stays local-only** — don't treat missing cloud rows as a bug.
+- **`hydrateFromCloud` is ADD-ONLY and skips items with a pending `remove` op** — do not "fix" it to also delete or it will resurrect unlikes/unfollows. `migrateLocalToCloud` runs **once per user** (guarded).
+- **Counters are still trigger-only** (`bump_*` maintains `platform_likes_count`/`platform_followers_count`). `LibraryRemoteDataSource` writes **only** relation rows and idempotent inserts (ignores `23505`); never write a counter.
+- **`profiles.onboarding_completed` is RPC-only** — flipped exclusively by `complete_artist_onboarding` (SECURITY DEFINER, authenticated-only, ≥5 unique existing artists). It is **excluded** from `ProfileRepository.updateOwn`'s whitelist; don't try to set it via a profile update.
+- **Multi-account isolation**: `LibraryRepository.onUserSession(uid)` clears local library boxes (`HiveStorage.clearLibraryBoxes`) + the pending journal on a real account switch; a pre-existing library with `lastUserId == null` is kept local-only and **never bulk-uploaded** (prevents cross-account cloud writes on the pre-3.2A upgrade path).
+- **Browsing still calls the LEGACY `/v2` endpoints** (via `MusicRepositoryImpl` — unchanged). Only **onboarding + the sync resolver** use the normalized `/v2/find`, `/v2/artists/deezer/{id}` and **direct Supabase reads** (`artists`/`albums`/`tracks`, `profiles`, `user_*` tables, `user-avatars` Storage). **paax-api was NOT modified in 3.2A** (no Railway redeploy); the YouTube IFrame playback engine is unchanged.
 
 ### [2026-07-16] — The layout is layer-first, not feature-first
 
@@ -234,4 +248,4 @@ Per [`ai/memory.md`](ai/memory.md), these are settled and should only change via
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*

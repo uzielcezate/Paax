@@ -33,7 +33,7 @@ Limit to 3 — the highest-leverage, lowest-effort items that unblock a real Paa
 ### Features
 
 - [ ] **TASK-201** — Implement offline **downloads** (download queue, offline library, storage mgmt). Prereq: a real audio path (TASK-204). *(FR-001)*
-- [ ] **TASK-202** — Real **per-user auth + cloud library sync** to replace the demo stub. *(FR-002)* — **Phase 1 foundation (2026-07-16, ADR-009)** + **Phase 2 backend catalog (ADR-010)** complete. **Phase 3.1 auth complete (2026-07-17)**: Flutter now signs in against Supabase Auth (verification, recovery, RLS profile, deep links) — demo stub removed. **Remaining (Phase 3.2+)**: migrate the Hive library to Supabase cloud sync + real 5-artist onboarding.
+- [ ] **TASK-202** — Real **per-user auth + cloud library sync** to replace the demo stub. *(FR-002)* — **Phase 1 foundation (ADR-009)** + **Phase 2 backend catalog (ADR-010)** + **Phase 3.1 auth** complete. **Phase 3.2A complete (2026-07-17, ADR-011)**: real 5-artist onboarding (`complete_artist_onboarding` RPC), real Supabase profile + avatar upload, offline-first cloud library sync (liked/saved-albums/followed-artists/hidden-tracks; `user_hidden_tracks` table). **Remaining**: Phase 3.2B (following expansion + personalized Home), 3.2.4 playlists cloud migration, 3.2.5 qualified-play listening history + followed genres.
 - [ ] **TASK-203** — Build a working **Settings** screen (storage/cache, playback prefs, about/version). *(FR-003)*
 - [ ] **TASK-204** — Wire a server-side **streaming path** into playback (choose Worker vs paax-stream) instead of the direct IFrame. *(FR-004 / IDEA-006)*
 - [ ] **TASK-205** — Genuine **personalized recommendations** from local play history (not just recent searches). *(FR-005)*
@@ -100,4 +100,4 @@ Limit to 3 — the highest-leverage, lowest-effort items that unblock a real Paa
 
 ---
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-17*
