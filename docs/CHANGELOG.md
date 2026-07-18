@@ -26,6 +26,24 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Search performance — faster, cancellable, cached (2026-07-17)
+
+- **Performance** — Optimized the Deezer-backed search pipeline (**logic only**;
+  the Search screen/cards/spacing/animations/layout are unchanged): debounce
+  400 ms → **220 ms**; searches start at **≥ 2 chars**; a generation token gives
+  proper **newest-wins cancellation** (a slow older response can never overwrite
+  a newer query); an in-memory **LRU cache** (40) paints repeated queries
+  instantly with background **stale-while-revalidate**; track/album/artist
+  searches paint **partially** as each returns; identical in-flight queries are
+  **coalesced**; the keep-alive HTTP client is **prewarmed** and large search
+  JSON is decoded in a **background isolate** for 60 FPS scrolling. Still Deezer
+  `/v2` search (no normalized-`/v2` migration); the pipeline stays behind the
+  `MusicRepository` interface so that migration remains a drop-in swap.
+- **Tests** — `SearchController` repository made injectable; +6 unit tests
+  (`search_controller_test`): min-length gate, newest-wins cancellation, instant
+  cache, coalesced-query resolution, prewarm. Suite now 18/18.
+
+
 > Accumulate changes here as they are merged. Move to a version section at release time.
 
 ### Phase 3.2B — Followed genres + personalized Home (real data) (2026-07-17)
