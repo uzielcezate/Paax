@@ -34,11 +34,13 @@ class CatalogResolver {
   static const String _kArtistsCache = 'catalog_resolver_artists_v1';
   static const String _kAlbumsCache = 'catalog_resolver_albums_v1';
   static const String _kTracksCache = 'catalog_resolver_tracks_v1';
+  static const String _kGenresCache = 'catalog_resolver_genres_v1';
 
   // ── In-memory caches: deezerId(String) -> Supabase UUID(String) ──
   final Map<String, String> _artistCache = {};
   final Map<String, String> _albumCache = {};
   final Map<String, String> _trackCache = {};
+  final Map<String, String> _genreCache = {};
 
   bool _loaded = false;
 
@@ -51,6 +53,7 @@ class CatalogResolver {
       _mergeInto(_artistCache, prefs.getString(_kArtistsCache));
       _mergeInto(_albumCache, prefs.getString(_kAlbumsCache));
       _mergeInto(_trackCache, prefs.getString(_kTracksCache));
+      _mergeInto(_genreCache, prefs.getString(_kGenresCache));
     } catch (_) {
       // Ignore — cache is a pure optimization.
     }
@@ -100,6 +103,9 @@ class CatalogResolver {
     return _resolveOne('tracks', deezerTrackId!, _trackCache, _kTracksCache);
   }
 
+  Future<String?> resolveGenre(String deezerGenreId) =>
+      _resolveOne('genres', deezerGenreId, _genreCache, _kGenresCache);
+
   Future<String?> _resolveOne(
     String table,
     String deezerId,
@@ -144,6 +150,9 @@ class CatalogResolver {
         _trackCache,
         _kTracksCache,
       );
+
+  Future<Map<String, String>> resolveGenres(Iterable<String> deezerIds) =>
+      _resolveMany('genres', deezerIds, _genreCache, _kGenresCache);
 
   Future<Map<String, String>> _resolveMany(
     String table,

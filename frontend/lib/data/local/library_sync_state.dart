@@ -12,7 +12,7 @@
 //
 // A pending op is a JSON object:
 //   { "op": "add"|"remove",
-//     "kind": "like"|"save"|"follow"|"hide",
+//     "kind": "like"|"save"|"follow"|"hide"|"genreFollow",
 //     "deezerId": "<deezer id, or track deezer id for like/hide>",
 //     "ts": <millisSinceEpoch> }
 //
@@ -25,7 +25,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Current migration schema version. Bump to force a re-migration for all users.
 const int kLibraryMigrationVersion = 1;
 
-enum SyncOpKind { like, save, follow, hide }
+enum SyncOpKind { like, save, follow, hide, genreFollow }
 
 enum SyncOpType { add, remove }
 

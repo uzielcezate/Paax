@@ -3,7 +3,8 @@ import '../../domain/entities/track.dart';
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/user_profile.dart';
-import '../../domain/entities/artist.dart'; 
+import '../../domain/entities/artist.dart';
+import '../../domain/entities/genre.dart';
 
 class HiveStorage {
   static const String likedTracksBox      = 'liked_tracks';
@@ -13,6 +14,7 @@ class HiveStorage {
   static const String settingsBox          = 'settings';
   static const String recentSearchesBox    = 'recent_searches';
   static const String followedArtistsBox   = 'followed_artists';
+  static const String followedGenresBox    = 'followed_genres';
   static const String recentlyPlayedBox    = 'recently_played';
   /// Persisted stream URL cache used by StreamCache / MediaResolver.
   static const String streamCandidatesBox  = 'stream_candidates';
@@ -27,6 +29,7 @@ class HiveStorage {
       Hive.registerAdapter(SavedAlbumAdapter());
       Hive.registerAdapter(UserProfileAdapter());
       Hive.registerAdapter(ArtistAdapter());
+      Hive.registerAdapter(GenreAdapter());
     } catch (e) {
       // Adapters might be registered already if hot restart
     }
@@ -36,6 +39,7 @@ class HiveStorage {
     await Hive.openBox<SavedAlbum>(savedAlbumsBox);
     await Hive.openBox<UserProfile>(userBox);
     await Hive.openBox<Artist>(followedArtistsBox);
+    await Hive.openBox<Genre>(followedGenresBox);
     await Hive.openBox(settingsBox);
     await Hive.openBox<String>(recentSearchesBox);
     await Hive.openBox<Track>(recentlyPlayedBox);
@@ -228,7 +232,26 @@ class HiveStorage {
   static bool isArtistFollowed(String id) {
     return _artists.containsKey(id);
   }
-  
+
+  // Followed Genres
+  static Box<Genre> get _genres => Hive.box<Genre>(followedGenresBox);
+
+  static List<Genre> getFollowedGenres() {
+    return _genres.values.toList();
+  }
+
+  static Future<void> toggleFollowGenre(Genre genre) async {
+    if (_genres.containsKey(genre.id)) {
+      await _genres.delete(genre.id);
+    } else {
+      await _genres.put(genre.id, genre);
+    }
+  }
+
+  static bool isGenreFollowed(String id) {
+    return _genres.containsKey(id);
+  }
+
   // User Profile
   static Box<UserProfile> get _userProfileBox => Hive.box<UserProfile>(userBox);
   
@@ -257,6 +280,7 @@ class HiveStorage {
     await _liked.clear();
     await _albums.clear();
     await _artists.clear();
+    await _genres.clear();
     await _recentlyPlayed.clear();
     await _settings.delete(_hiddenTracksKey);
   }
@@ -266,6 +290,7 @@ class HiveStorage {
     await _playlists.clear();
     await _albums.clear();
     await _artists.clear();
+    await _genres.clear();
     await _userProfileBox.clear();
     await _settings.clear();
     await _recentlyPlayed.clear();

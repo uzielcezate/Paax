@@ -30,6 +30,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../domain/entities/artist.dart';
+import '../../domain/entities/genre.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/track.dart';
 import '../local/hive_storage.dart';
@@ -64,6 +65,17 @@ class LibraryRepository {
       resolve: () => _resolver.resolveArtist(a.id),
       remoteAdd: _remote.followArtist,
       remoteRemove: _remote.unfollowArtist,
+    );
+  }
+
+  Future<void> pushFollowGenre(Genre g, {required bool nowFollowed}) async {
+    await _push(
+      kind: SyncOpKind.genreFollow,
+      add: nowFollowed,
+      deezerId: g.id,
+      resolve: () => _resolver.resolveGenre(g.id),
+      remoteAdd: _remote.followGenre,
+      remoteRemove: _remote.unfollowGenre,
     );
   }
 
@@ -199,6 +211,8 @@ class LibraryRepository {
     switch (kind) {
       case SyncOpKind.follow:
         return _resolver.resolveArtists(deezerIds);
+      case SyncOpKind.genreFollow:
+        return _resolver.resolveGenres(deezerIds);
       case SyncOpKind.save:
         return _resolver.resolveAlbums(deezerIds);
       case SyncOpKind.like:
@@ -212,6 +226,8 @@ class LibraryRepository {
     switch (kind) {
       case SyncOpKind.follow:
         return add ? _remote.followArtist(uuid) : _remote.unfollowArtist(uuid);
+      case SyncOpKind.genreFollow:
+        return add ? _remote.followGenre(uuid) : _remote.unfollowGenre(uuid);
       case SyncOpKind.save:
         return add ? _remote.saveAlbum(uuid) : _remote.unsaveAlbum(uuid);
       case SyncOpKind.like:
@@ -233,10 +249,12 @@ class LibraryRepository {
     final removedLikes = removedIds(SyncOpKind.like);
     final removedSaves = removedIds(SyncOpKind.save);
     final removedFollows = removedIds(SyncOpKind.follow);
+    final removedGenreFollows = removedIds(SyncOpKind.genreFollow);
     final removedHidden = removedIds(SyncOpKind.hide);
 
     try {
       final artistUuids = await _remote.fetchFollowedArtistIds();
+      final genreUuids = await _remote.fetchFollowedGenreIds();
       final albumUuids = await _remote.fetchSavedAlbumIds();
       final likedUuids = await _remote.fetchLikedTrackIds();
       final hiddenUuids = await _remote.fetchHiddenTrackIds();
@@ -257,6 +275,25 @@ class LibraryRepository {
                     '')
                 .toString(),
             nbFans: 0,
+          ));
+        }
+      }
+
+      // Followed genres
+      if (genreUuids.isNotEmpty) {
+        final rows = await _remote.fetchCatalogGenres(genreUuids);
+        for (final row in rows) {
+          final dz = row['deezer_id']?.toString();
+          if (dz == null || dz.isEmpty) continue;
+          if (removedGenreFollows.contains(dz)) continue;
+          if (HiveStorage.isGenreFollowed(dz)) continue;
+          await HiveStorage.toggleFollowGenre(Genre(
+            id: dz,
+            name: (row['name'] ?? '').toString(),
+            imageUrl: (row['image_cached_url'] ?? row['image_original_url'])
+                ?.toString(),
+            slug: row['slug']?.toString(),
+            supabaseId: row['id']?.toString(),
           ));
         }
       }
@@ -372,6 +409,7 @@ class LibraryRepository {
   bool _hasLocalLibrary() {
     return HiveStorage.getLikedTracks().isNotEmpty ||
         HiveStorage.getFollowedArtists().isNotEmpty ||
+        HiveStorage.getFollowedGenres().isNotEmpty ||
         HiveStorage.getSavedAlbums().isNotEmpty ||
         HiveStorage.getHiddenTrackIds().isNotEmpty;
   }
@@ -401,6 +439,22 @@ class LibraryRepository {
         }
         try {
           await _remote.followArtist(uuid);
+          pushed++;
+        } catch (_) {}
+      }
+
+      // Followed genres
+      final genres = HiveStorage.getFollowedGenres();
+      final genreMap =
+          await _resolver.resolveGenres(genres.map((g) => g.id));
+      for (final g in genres) {
+        final uuid = genreMap[g.id.trim()];
+        if (uuid == null) {
+          unresolved++;
+          continue;
+        }
+        try {
+          await _remote.followGenre(uuid);
           pushed++;
         } catch (_) {}
       }
