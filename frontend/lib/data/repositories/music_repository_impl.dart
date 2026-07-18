@@ -17,6 +17,9 @@ class MusicRepositoryImpl implements MusicRepository {
   final Map<String, Map<String, dynamic>> _albumDetailCache = {};
 
   @override
+  Future<void> prewarm() => _dataSource.prewarm();
+
+  @override
   Future<(List<SavedAlbum>, String?)> getArtistAlbumsPage(String id, String? params, String? token) async {
     // v2: Deezer pagination uses offset/limit, no tokens.
     // Return all albums from the v2 endpoint.
