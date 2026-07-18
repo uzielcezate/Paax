@@ -156,19 +156,34 @@ class SearchController extends ChangeNotifier {
 
     void onSettled() {
       if (--pending > 0) return;
+      final res = _SearchResults(
+          tracks ?? const [], albums ?? const [], artists ?? const []);
+      final anySuccess = tracks != null || albums != null || artists != null;
       // Cache whatever succeeded (avoid caching a total failure).
-      if (tracks != null || albums != null || artists != null) {
-        _put(normalized,
-            _SearchResults(tracks ?? const [], albums ?? const [], artists ?? const []));
-      }
+      if (anySuccess) _put(normalized, res);
+      _inFlight.remove(normalized);
+
       if (gen == _gen) {
+        // Current generation: per-category updates already painted the results.
         _isLoading = false;
-        if (!revalidate && tracks == null && albums == null && artists == null) {
+        if (!revalidate && !anySuccess) {
           _error = "Couldn't load results";
         }
         notifyListeners();
+      } else if (anySuccess &&
+          !revalidate &&
+          _normalize(_query) == normalized &&
+          !_inFlight.contains(normalized)) {
+        // Stale by generation, but it matches the CURRENT query and no fresher
+        // fetch is running for it (it was coalesced) — apply it so the UI is not
+        // stuck loading.
+        _trackResults = res.tracks;
+        _albumResults = res.albums;
+        _artistResults = res.artists;
+        _isLoading = false;
+        _error = null;
+        notifyListeners();
       }
-      _inFlight.remove(normalized);
     }
 
     // Each category runs independently: it paints the moment it lands and a

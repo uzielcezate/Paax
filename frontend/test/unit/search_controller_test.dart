@@ -123,4 +123,19 @@ void main() {
     expect(c.trackResults.single.title, 't-rock');
     expect(c.isLoading, isFalse);
   });
+
+  test('a coalesced identical in-flight query still resolves (no stuck loading)',
+      () async {
+    final repo = _FakeRepo();
+    repo.delayFor = (_) => const Duration(milliseconds: 300); // all slow
+    final c = app.SearchController(repository: repo);
+    c.onQueryChanged('jazz'); // gen1
+    await Future.delayed(const Duration(milliseconds: 240)); // fetch in flight
+    c.onQueryChanged('jaz'); // gen2 (changed)
+    await Future.delayed(const Duration(milliseconds: 10));
+    c.onQueryChanged('jazz'); // gen3 — same query; will be coalesced by gen1
+    await Future.delayed(const Duration(milliseconds: 700)); // let everything settle
+    expect(c.isLoading, isFalse, reason: 'must not be stuck loading');
+    expect(c.trackResults.single.title, 't-jazz');
+  });
 }
