@@ -9,6 +9,7 @@ import 'core/config/supabase_config.dart';
 import 'data/local/hive_storage.dart';
 import 'data/repositories/library_repository.dart';
 import 'presentation/state/auth_controller.dart';
+import 'presentation/state/home_controller.dart';
 import 'presentation/state/library_controller.dart';
 import 'presentation/state/playback_controller.dart';
 import 'presentation/state/search_controller.dart' as app_search;
@@ -118,6 +119,8 @@ class PaaxApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),
         ChangeNotifierProvider(create: (_) => PlaybackController()),
         ChangeNotifierProvider(create: (_) => ThemeState()),
+        // Phase 3.2.5: personalized Home feed (real Supabase catalog sections).
+        ChangeNotifierProvider(create: (_) => HomeController()),
       ],
       child: MaterialApp(
         title: 'Paax',
