@@ -120,7 +120,19 @@ class PaaxApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => PlaybackController()),
         ChangeNotifierProvider(create: (_) => ThemeState()),
         // Phase 3.2.5: personalized Home feed (real Supabase catalog sections).
-        ChangeNotifierProvider(create: (_) => HomeController()),
+        // Driven by the auth session so a persistent Home tab drops the previous
+        // user's personalized content on an account switch (idempotent per id).
+        ChangeNotifierProxyProvider<AuthController, HomeController>(
+          create: (_) => HomeController(),
+          update: (_, auth, home) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            // ignore: discarded_futures
+            home!.onUserSession(uid);
+            return home;
+          },
+        ),
       ],
       child: MaterialApp(
         title: 'Paax',

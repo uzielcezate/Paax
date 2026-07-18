@@ -53,8 +53,18 @@ class HomeController extends ChangeNotifier {
         _remote = remoteDataSource ?? LibraryRemoteDataSource(),
         _prefs = prefs ?? SharedPreferences.getInstance();
 
-  static const String _cacheKey = 'paax_home_sections_v1';
+  static const String _cachePrefix = 'paax_home_sections_v1_';
   static const int _cacheSchemaVersion = 1;
+
+  /// The current authenticated user id (drives per-user cache scoping and the
+  /// account-switch reset). Null when signed out.
+  String? get _uid => _remote.currentUserId;
+  String _cacheKeyFor(String uid) => '$_cachePrefix$uid';
+
+  // Account-switch tracking so a persistent Home tab drops the previous user's
+  // personalized content immediately on a different sign-in.
+  String? _sessionUid;
+  bool _sessionUidSet = false;
 
   // ── Section data (in-memory cache; survives rebuilds) ─────────────
   final Map<HomeSectionKey, List<HomeAlbum>> _sections = {
@@ -194,13 +204,41 @@ class HomeController extends ChangeNotifier {
   /// Retry after a hard failure.
   Future<void> retry() => load();
 
+  /// Drive this from the auth session (main.dart ProxyProvider). On a real
+  /// account switch (or sign-out) it drops the previous user's in-memory
+  /// personalized sections immediately so they are never shown to the next
+  /// user, then reloads fresh for a signed-in user. Idempotent per identity.
+  /// (The persisted cache is already scoped per-user, so it cannot bleed.)
+  Future<void> onUserSession(String? userId) async {
+    if (_sessionUidSet && userId == _sessionUid) return;
+    final switched = _sessionUidSet && _sessionUid != userId;
+    _sessionUid = userId;
+    _sessionUidSet = true;
+    if (switched || userId == null) {
+      for (final k in HomeSectionKey.values) {
+        _sections[k] = const <HomeAlbum>[];
+      }
+      _hasLoadedOnce = false;
+      _isOffline = false;
+      _error = null;
+      _cacheHydrated = false; // re-hydrate the NEW user's own cache on next load
+      _requestToken++; // cancel any in-flight load for the previous identity
+      notifyListeners();
+    }
+    if (userId != null) {
+      await load();
+    }
+  }
+
   // ── Offline cache (SharedPreferences, JSON) ───────────────────────
 
   Future<void> _hydrateFromCache() async {
     _cacheHydrated = true;
+    final uid = _uid;
+    if (uid == null) return; // signed out — nothing personalized to restore
     try {
       final p = await _prefs;
-      final raw = p.getString(_cacheKey);
+      final raw = p.getString(_cacheKeyFor(uid));
       if (raw == null) return;
       final map = jsonDecode(raw) as Map<String, dynamic>;
       if ((map['schema_version'] as num?)?.toInt() != _cacheSchemaVersion) {
@@ -222,6 +260,8 @@ class HomeController extends ChangeNotifier {
   }
 
   Future<void> _persist() async {
+    final uid = _uid;
+    if (uid == null) return; // never persist personalized data without an owner
     try {
       final p = await _prefs;
       final payload = jsonEncode({
@@ -231,7 +271,7 @@ class HomeController extends ChangeNotifier {
             entry.key.name: entry.value.map((a) => a.toJson()).toList(),
         },
       });
-      await p.setString(_cacheKey, payload);
+      await p.setString(_cacheKeyFor(uid), payload);
     } catch (_) {
       // Best-effort — persistence failure never breaks the UI.
     }

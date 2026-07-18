@@ -106,20 +106,33 @@ class _GenreResultsScreenState extends State<GenreResultsScreen> {
   /// control simply stays hidden. Never throws.
   Future<void> _resolveGenre() async {
     try {
-      final row = await Supabase.instance.client
+      const cols = 'id, deezer_id, name, image_cached_url, image_original_url';
+      final client = Supabase.instance.client;
+      // Prefer an EXACT (case-insensitive) name match so we never bind the
+      // Follow control to a different genre that merely contains the slug as a
+      // substring. Fall back to a deterministic (name-ordered) substring match.
+      Map<String, dynamic>? row = await client
           .from('genres')
-          .select('id, deezer_id, name, image_cached_url, image_original_url')
+          .select(cols)
+          .ilike('name', widget.genreSlug)
+          .limit(1)
+          .maybeSingle();
+      row ??= await client
+          .from('genres')
+          .select(cols)
           .ilike('name', '%${widget.genreSlug}%')
+          .order('name')
           .limit(1)
           .maybeSingle();
       if (!mounted || row == null) return;
-      final deezerId = row['deezer_id']?.toString();
-      final cached = row['image_cached_url']?.toString();
-      final original = row['image_original_url']?.toString();
+      final r = row; // final + non-null so promotion holds inside setState
+      final deezerId = r['deezer_id']?.toString();
+      final cached = r['image_cached_url']?.toString();
+      final original = r['image_original_url']?.toString();
       setState(() {
-        _genreUuid = row['id']?.toString();
+        _genreUuid = r['id']?.toString();
         _genreDeezerId = (deezerId != null && deezerId.isNotEmpty) ? deezerId : null;
-        _genreName = row['name']?.toString() ?? widget.genreSlug;
+        _genreName = r['name']?.toString() ?? widget.genreSlug;
         _genreImage = (cached != null && cached.isNotEmpty) ? cached : original;
       });
     } catch (_) {

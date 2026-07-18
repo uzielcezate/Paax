@@ -38,9 +38,13 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _scrollController = ScrollController();
-    // Kick off the personalized load once the tree is ready.
+    // Ensure a load happens once the tree is ready. The auth-driven proxy
+    // usually triggers the first load already, so only load if it hasn't — this
+    // avoids a duplicate fetch while still covering the cold-start case.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<HomeController>().load();
+      if (!mounted) return;
+      final home = context.read<HomeController>();
+      if (!home.hasLoadedOnce && !home.isLoading) home.load();
     });
   }
 
@@ -50,15 +54,20 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  /// Maps a catalog [HomeAlbum] into the existing [SavedAlbum] card model used
-  /// by [_buildAlbumRow]. AlbumDetailScreen re-resolves the album's artist from
+  /// Maps catalog [HomeAlbum]s into the existing [SavedAlbum] card model used by
+  /// [_buildAlbumRow]. Albums without a Deezer id are dropped, because
+  /// AlbumDetailScreen is keyed by the Deezer id — a card that can't open its
+  /// detail should not be shown. AlbumDetailScreen re-resolves the artist from
   /// its own metadata fetch, so artistName can be empty here.
-  SavedAlbum _asSavedAlbum(HomeAlbum a) => SavedAlbum(
-        albumId: (a.deezerId != null && a.deezerId!.isNotEmpty) ? a.deezerId! : a.uuid,
-        title: a.title,
-        artistName: '',
-        artworkUrl: a.artworkUrl ?? '',
-      );
+  List<SavedAlbum> _asSavedAlbums(List<HomeAlbum> albums) => albums
+      .where((a) => a.deezerId != null && a.deezerId!.isNotEmpty)
+      .map((a) => SavedAlbum(
+            albumId: a.deezerId!,
+            title: a.title,
+            artistName: '',
+            artworkUrl: a.artworkUrl ?? '',
+          ))
+      .toList();
 
   @override
   Widget build(BuildContext context) {
@@ -83,26 +92,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Personalized + global album sections (real catalog data). Each renders
     // only when it has content, so a new user sees only what actually exists.
+    final newFromArtists = _asSavedAlbums(home.newFromArtists);
+    final popularFromArtists = _asSavedAlbums(home.popularFromArtists);
+    final recommended = _asSavedAlbums(home.recommended);
+    final trending = _asSavedAlbums(home.trending);
+    final recentlyAdded = _asSavedAlbums(home.recentlyAdded);
+
     final sections = <Widget>[
       if (followedArtists.isNotEmpty)
         _buildArtistRow(context, "Your artists", followedArtists),
       if (followedGenres.isNotEmpty)
         _buildGenreRow(context, "Your genres", followedGenres),
-      if (home.newFromArtists.isNotEmpty)
-        _buildAlbumRow(context, "New from your artists",
-            home.newFromArtists.map(_asSavedAlbum).toList()),
-      if (home.popularFromArtists.isNotEmpty)
-        _buildAlbumRow(context, "Popular from your artists",
-            home.popularFromArtists.map(_asSavedAlbum).toList()),
-      if (home.recommended.isNotEmpty)
-        _buildAlbumRow(context, "Recommended for you",
-            home.recommended.map(_asSavedAlbum).toList()),
-      if (home.trending.isNotEmpty)
-        _buildAlbumRow(
-            context, "Trending", home.trending.map(_asSavedAlbum).toList()),
-      if (home.recentlyAdded.isNotEmpty)
-        _buildAlbumRow(context, "Recently added",
-            home.recentlyAdded.map(_asSavedAlbum).toList()),
+      if (newFromArtists.isNotEmpty)
+        _buildAlbumRow(context, "New from your artists", newFromArtists),
+      if (popularFromArtists.isNotEmpty)
+        _buildAlbumRow(context, "Popular from your artists", popularFromArtists),
+      if (recommended.isNotEmpty)
+        _buildAlbumRow(context, "Recommended for you", recommended),
+      if (trending.isNotEmpty)
+        _buildAlbumRow(context, "Trending", trending),
+      if (recentlyAdded.isNotEmpty)
+        _buildAlbumRow(context, "Recently added", recentlyAdded),
     ];
 
     final showFirstLoad = home.isLoading && sections.isEmpty;
