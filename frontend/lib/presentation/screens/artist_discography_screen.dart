@@ -64,9 +64,10 @@ class _ArtistDiscographyScreenState extends State<ArtistDiscographyScreen> {
   }
 
   int _compareByYearDesc(SavedAlbum a, SavedAlbum b) =>
-      // Date-aware newest-first (exact date > year > title). The old
+      // Date-aware newest-first (exact date > year > title > id). The old
       // int.tryParse on ISO dates collapsed every dated release to 0 (§5).
-      compareReleaseDesc(a.releaseDate, a.title, b.releaseDate, b.title);
+      compareReleaseDesc(a.releaseDate, a.title, b.releaseDate, b.title,
+          idA: a.albumId, idB: b.albumId);
 
   List<SavedAlbum> get _filteredReleases {
     switch (_selectedFilter) {

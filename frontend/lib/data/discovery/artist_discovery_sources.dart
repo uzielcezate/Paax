@@ -189,6 +189,9 @@ class SupabaseArtistDiscoverySource implements ArtistDiscoveryRepository {
   Future<OnboardingArtist?> resolveByDeezerId(int deezerId,
           {OnboardingArtist? fallback}) =>
       api.resolveByDeezerId(deezerId, fallback: fallback);
+
+  @override
+  void dispose() => api.close();
 }
 
 /// Deezer-first discovery: "popular" candidates come from a broad paax-api
@@ -210,6 +213,9 @@ class DeezerArtistDiscoverySource implements ArtistDiscoveryRepository {
   Future<OnboardingArtist?> resolveByDeezerId(int deezerId,
           {OnboardingArtist? fallback}) =>
       api.resolveByDeezerId(deezerId, fallback: fallback);
+
+  @override
+  void dispose() => api.close();
 }
 
 /// CURRENT PRODUCTION default: Supabase "popular" grid with a Deezer fallback
@@ -246,4 +252,7 @@ class HybridArtistDiscoverySource implements ArtistDiscoveryRepository {
   Future<OnboardingArtist?> resolveByDeezerId(int deezerId,
           {OnboardingArtist? fallback}) =>
       api.resolveByDeezerId(deezerId, fallback: fallback);
+
+  @override
+  void dispose() => api.close();
 }

@@ -64,12 +64,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   bool _isEnriching = false;
   String _resolvedArtistId = '';
 
-  // Phase 3.3 §6: Paax follower count reconciliation. The API count is the DB
-  // truth at fetch time (already includes the current user iff they followed
-  // then); the displayed count is adjusted by the current follow state so
-  // follow/unfollow reflects immediately without double-counting.
+  // Phase 3.3 §6: Paax follower count reconciliation. The API count is server
+  // truth at fetch time (already reflects the user's persisted follow state);
+  // the displayed count is that baseline plus the net follow/unfollow toggles
+  // the user makes on THIS screen. This is independent of library-load timing,
+  // so it never double-counts on a cold/cross-device open.
   int? _followBaselineCount;
-  bool _wasFollowingAtLoad = false;
+  int _sessionFollowDelta = 0;
   
   ThumbnailPrefetcher? _prefetcher;
   Artist? _cachedArtist;
@@ -148,11 +149,11 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         if (artist.picture.isNotEmpty && artist.picture != _resolvedPictureUrl) {
           _resolvedPictureUrl = artist.picture;
         }
-        // Capture the follower baseline + follow state at fetch time.
+        // Capture the follower baseline (server truth) and reset the per-screen
+        // toggle delta for this load.
         if (artist.platformFollowers != null) {
           _followBaselineCount = artist.platformFollowers;
-          _wasFollowingAtLoad =
-              context.read<LibraryController>().isArtistFollowed(_resolvedArtistId);
+          _sessionFollowDelta = 0;
         }
         setState(() {
           _isLoading = false;
@@ -404,18 +405,11 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                 if (artist.platformFollowers == null) {
                                   return pill(formatFans(artist.nbFans));
                                 }
-                                return Consumer<LibraryController>(
-                                  builder: (context, lib, _) {
-                                    final isFollowing =
-                                        lib.isArtistFollowed(_resolvedArtistId);
-                                    final base = _followBaselineCount ??
-                                        artist.platformFollowers!;
-                                    final delta = (isFollowing ? 1 : 0) -
-                                        (_wasFollowingAtLoad ? 1 : 0);
-                                    final count = (base + delta).clamp(0, 1 << 31);
-                                    return pill(formatFollowers(count));
-                                  },
-                                );
+                                final base =
+                                    _followBaselineCount ?? artist.platformFollowers!;
+                                final count =
+                                    (base + _sessionFollowDelta).clamp(0, 1 << 31);
+                                return pill(formatFollowers(count));
                               },
                             ),
                           ],
@@ -489,6 +483,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                     icon: isFollowed ? Icons.check_rounded : Icons.person_add_rounded,
                                     onTap: () {
                                       if (artistObj != null) {
+                                        // Track the count change for this screen
+                                        // session so the follower pill reflects it
+                                        // without depending on library-load timing.
+                                        final willFollow = !lib.isArtistFollowed(_resolvedArtistId);
+                                        setState(() =>
+                                            _sessionFollowDelta += willFollow ? 1 : -1);
                                         lib.toggleFollowArtist(artistObj);
                                       }
                                     },
@@ -699,8 +699,9 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
 
         // Newest first — date-aware (exact date > year > title); the old
         // int.tryParse on ISO dates collapsed everything to year 0 (§5).
-        allReleases.sort((a, b) =>
-            compareReleaseDesc(a.releaseDate, a.title, b.releaseDate, b.title));
+        allReleases.sort((a, b) => compareReleaseDesc(
+            a.releaseDate, a.title, b.releaseDate, b.title,
+            idA: a.albumId, idB: b.albumId));
         final latest = allReleases.first;
         final yearStr = latest.releaseDate ?? '';
 

@@ -195,13 +195,19 @@ String? extractYear(String? dateOrYear) {
 /// ordering (Phase 3.3 §5): exact date desc → year desc → title asc. Undated
 /// releases sink last. Use as a safe deterministic presentation sort so
 /// malformed upstream ordering never leaks into the UI.
-int compareReleaseDesc(String? dateA, String? titleA, String? dateB, String? titleB) {
+int compareReleaseDesc(String? dateA, String? titleA, String? dateB, String? titleB,
+    {String? idA, String? idB}) {
   final a = releaseYmd(dateA);
   final b = releaseYmd(dateB);
   if (a.$1 != b.$1) return b.$1.compareTo(a.$1);
   if (a.$2 != b.$2) return b.$2.compareTo(a.$2);
   if (a.$3 != b.$3) return b.$3.compareTo(a.$3);
-  return (titleA ?? '').toLowerCase().compareTo((titleB ?? '').toLowerCase());
+  final byTitle =
+      (titleA ?? '').toLowerCase().compareTo((titleB ?? '').toLowerCase());
+  if (byTitle != 0) return byTitle;
+  // Final id tie-break so identical (date, title) pairs order deterministically
+  // even though Dart's List.sort is not stable (mirrors the backend).
+  return (idA ?? '').compareTo(idB ?? '');
 }
 
 /// Returns an English display label for a normalized release type.

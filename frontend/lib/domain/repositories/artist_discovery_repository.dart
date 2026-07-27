@@ -43,4 +43,7 @@ abstract class ArtistDiscoveryRepository {
   /// (ingest-on-miss). Returns null when it cannot be resolved.
   Future<OnboardingArtist?> resolveByDeezerId(int deezerId,
       {OnboardingArtist? fallback});
+
+  /// Release the underlying HTTP client. Call from the owner's dispose().
+  void dispose();
 }

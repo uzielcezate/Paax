@@ -120,5 +120,15 @@ void main() {
       expect(list.last, null);
       expect(list.first, '2018-01-01');
     });
+
+    test('identical date+title break deterministically on id', () {
+      final rows = [
+        ('2020-01-01', 'same', 'id-b'),
+        ('2020-01-01', 'same', 'id-a'),
+      ];
+      rows.sort((a, b) =>
+          compareReleaseDesc(a.$1, a.$2, b.$1, b.$2, idA: a.$3, idB: b.$3));
+      expect(rows.map((r) => r.$3).toList(), ['id-a', 'id-b']);
+    });
   });
 }

@@ -216,6 +216,12 @@ class MusicRepositoryImpl implements MusicRepository {
     final normalized = await normalizedF;
     final legacy = await legacyF;
 
+    // Both sources failed → surface an error so the screen shows its retry
+    // state, rather than rendering a bogus empty "Unknown Artist" page.
+    if (normalized == null && legacy.isEmpty) {
+      throw Exception('Artist $id is unavailable (catalog + legacy both failed)');
+    }
+
     // Top tracks (playable) — eager legacy path, unchanged.
     final topTracks = (legacy['topTracks'] as List? ?? []).map((t) {
       try { return _mapTrackV2(t as Map<String, dynamic>); }
@@ -258,6 +264,22 @@ class MusicRepositoryImpl implements MusicRepository {
       // Existing UI has two shelves: "Albums" and "Singles & EPs".
       albums = [...mapRel('albums'), ...mapRel('compilations')];
       singles = [...mapRel('singles'), ...mapRel('eps')];
+
+      // Defensive: if the normalized discography came back empty (e.g. a partial
+      // ingest) but the legacy response has releases, use the legacy lists so
+      // the discography section never regresses to blank.
+      if (albums.isEmpty && singles.isEmpty) {
+        final legacyAlbums = (legacy['albums'] as List? ?? []).map((a) {
+          try { return _mapAlbumV2(a as Map<String, dynamic>); } catch (_) { return null; }
+        }).whereType<SavedAlbum>().toList();
+        final legacySingles = (legacy['singles'] as List? ?? []).map((a) {
+          try { return _mapAlbumV2(a as Map<String, dynamic>); } catch (_) { return null; }
+        }).whereType<SavedAlbum>().toList();
+        if (legacyAlbums.isNotEmpty || legacySingles.isNotEmpty) {
+          albums = legacyAlbums;
+          singles = legacySingles;
+        }
+      }
     } else {
       // Normalized unavailable — fall back entirely to the legacy shape so the
       // screen still renders (no regression when Supabase/ingest is degraded).
@@ -308,12 +330,14 @@ class MusicRepositoryImpl implements MusicRepository {
   /// (legacy) album path; artwork uses the canonical resolver.
   SavedAlbum _mapReleaseToSavedAlbum(Map<String, dynamic> r,
       {required String artistName, required int artistDeezerId}) {
+    // Album navigation uses the legacy album path (int Deezer id); use the
+    // numeric id only (catalog releases always carry one).
     final dz = _asInt(r['deezerId']);
     // Prefer the exact date; fall back to the year so year-only releases still
     // sort/label correctly on the client (extractYear handles both forms).
     final releaseDate = r['releaseDate']?.toString() ?? _asInt(r['releaseYear'])?.toString();
     return SavedAlbum(
-      albumId: (dz ?? r['id'])?.toString() ?? '',
+      albumId: dz?.toString() ?? '',
       title: r['title']?.toString() ?? 'Unknown Album',
       artistName: artistName,
       artistId: artistDeezerId.toString(),
@@ -1201,9 +1225,13 @@ class MusicRepositoryImpl implements MusicRepository {
   /// on [Artist.uuid]. Discovery items with only a UUID (not yet ingested with
   /// a Deezer id) are skipped by the caller when unnavigable.
   Artist _mapArtistFind(Map<String, dynamic> e) {
+    // Navigation id MUST be the numeric Deezer id — getArtist(id) does
+    // int.parse(id). Items with only a UUID (no Deezer id) get an empty id and
+    // are dropped by the caller's `id.isNotEmpty` filter rather than producing
+    // a card that throws on tap.
     final dz = _asInt(e['deezerId']);
     return Artist(
-      id: (dz ?? e['id'])?.toString() ?? '',
+      id: dz?.toString() ?? '',
       name: e['name']?.toString() ?? 'Unknown Artist',
       picture: ArtworkResolver.artist(e),
       uuid: e['id']?.toString(),
@@ -1213,10 +1241,12 @@ class MusicRepositoryImpl implements MusicRepository {
   /// Map a normalized `/v2/find` album item into a [SavedAlbum]. `albumId` is
   /// the Deezer id so album-detail navigation stays on the existing path.
   SavedAlbum _mapAlbumFind(Map<String, dynamic> e) {
+    // Album navigation uses the legacy album path (int Deezer id). UUID-only
+    // items get an empty albumId and are filtered by the caller.
     final dz = _asInt(e['deezerId']);
     final name = e['artistName']?.toString() ?? '';
     return SavedAlbum(
-      albumId: (dz ?? e['id'])?.toString() ?? '',
+      albumId: dz?.toString() ?? '',
       title: e['title']?.toString() ?? 'Unknown Album',
       artistName: name.isNotEmpty ? name : 'Unknown Artist',
       artistId: '',

@@ -345,6 +345,7 @@ class OnboardingController extends ChangeNotifier {
     _disposed = true;
     _debounceTimer?.cancel();
     _searchToken++; // invalidate in-flight searches
+    _discovery.dispose(); // release the discovery HTTP client
     super.dispose();
   }
 }
