@@ -369,6 +369,28 @@
 
 ---
 
+### ISSUE-031 — Cached artist response can show a stale Paax follower count
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Catalog / Artist · **First Observed**: 2026-07-26 (Phase 3.3)
+
+**Description**: `GET /v2/artists/deezer/{id}` returns `platformFollowersCount` from the DB row, but the response is cached (24 h TTL / 7 d freshness). Follows are written client-side straight to Supabase (`user_followed_artists`), so paax-api has no hook to invalidate the artist cache — a fresh fetch on a cache hit can show a count that lags the true value by up to the TTL.
+
+**Workaround**: The artist detail screen applies an **optimistic per-screen delta** on follow/unfollow, so the visible count is correct in-session. Cross-device/other-viewer counts self-correct when the cache expires.
+
+**Root Cause**: No cross-writer cache invalidation between the Flutter→Supabase follow path and the paax-api response cache (by design; acceptable for this phase).
+
+---
+
+### ISSUE-032 — Cache-source observability limited to `X-Cache` + ingest logs
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: API / Observability · **First Observed**: 2026-07-26 (Phase 3.3)
+
+**Description**: Phase 3.3 §3 suggested explicit source labels (`memory`/`redis`/`supabase-fresh`/`supabase-stale`/`deezer-miss`/`background-refresh`). Implemented today: the `X-Cache: hit|miss|stale` header plus structured ingest timing logs (`core=…ms total=…ms discography=…`). The richer per-source labels were deferred to avoid changing the well-tested SWR cache-status enum.
+
+**Workaround**: Use `X-Cache` + the `[ingest]` timing logs. Richer labels are a future enhancement.
+
+---
+
 ## ✅ Resolved Issues
 
 *(None resolved yet — this log was seeded on 2026-07-16.)*

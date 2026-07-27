@@ -267,8 +267,11 @@ Full detail: [architecture-review.md](architecture-review.md#9-api-improvements)
 ## Phase 2 — normalized Supabase-first `/v2/*` (additive)
 
 Introduced in Phase 2.5 alongside the unchanged legacy `/v2/artist|album|track|
-search|chart` endpoints (Flutter migrates in Phase 3). All return one normalized
-camelCase model; reads carry `X-Cache: hit|miss|stale`.
+search|chart` endpoints. **Phase 3.3**: Flutter now consumes these for the
+browsing **display** — artist detail (`/v2/artists/deezer/{id}`) and search
+artists/albums (`/v2/find`) — while the eager legacy endpoints remain the
+**playback** path (unchanged). All return one normalized camelCase model; reads
+carry `X-Cache: hit|miss|stale`.
 
 ```
 GET  /v2/artists/{artist_id}                    GET  /v2/albums/{album_id}
@@ -284,8 +287,14 @@ Normalized track shape includes `id`, `deezerId`, `title`, `artists[]`
 `genres`, and `playback:{provider,engine,videoId,audioVideoId,musicVideoId,
 preferredType,matchStatus}` where `videoId` = audio-preferred YouTube id.
 
+The artist response exposes `platformFollowersCount` (Paax followers,
+trigger-maintained) and `deezerFansCount` (external), plus a
+deterministically-ordered `discography:{albums,eps,singles,compilations}` and
+`latestRelease`. Each release carries `releaseDate` **and** `releaseYear`
+(Phase 3.3), ordered by exact date → year → title.
+
 Full reference: [backend/phase2-catalog.md](backend/phase2-catalog.md).
 
 ---
 
-*Last updated: 2026-07-17*
+*Last updated: 2026-07-26*

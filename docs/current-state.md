@@ -7,9 +7,9 @@
 
 ## Project Status
 
-**Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (no CI, debug signing, streaming not consolidated). **Real Supabase auth landed in Phase 3.1**; **Phase 3.2A** added real artist onboarding, a real Supabase-backed profile + avatar upload, and offline-first cloud library sync; **Phase 3.2B** (branch `feat/phase-3.2b-genres-home`) added **followed genres** (same offline-first pipeline) and a **personalized Home** rebuilt from real Supabase catalog sections.
-**Last Updated**: 2026-07-17
-**Updated By**: Phase 3.2B followed genres + personalized Home (AI agent)
+**Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (no CI, debug signing, streaming not consolidated). **Real Supabase auth landed in Phase 3.1**; **Phase 3.2A** added real artist onboarding, a real Supabase-backed profile + avatar upload, and offline-first cloud library sync; **Phase 3.2B** added **followed genres** and a **personalized Home** from real Supabase catalog sections; **Phase 3.3** migrated the browsing **display** (artist detail, search artists/albums, Home hydration) onto the normalized Supabase-first `/v2` catalog, fixed artist artwork/follower-count/discography-ordering, parallelized cold-artist ingestion, extracted a replaceable onboarding discovery source, and aligned the auth top bars — **playback left exactly as-is** (eager legacy YouTube path).
+**Last Updated**: 2026-07-26
+**Updated By**: Phase 3.3 catalog normalization (AI agent)
 
 > For the at-a-glance health dashboard (build/tests/deploys/bug counts, milestone progress), see [PROJECT_STATUS.md](PROJECT_STATUS.md). This doc and that one should always agree.
 
@@ -25,7 +25,7 @@
 - **Artist onboarding (Phase 3.2A)** — real 5-artist minimum selection (popular from the `artists` table + `/v2/find` search with lazy Deezer→UUID resolve), completed via the `complete_artist_onboarding` RPC, local selection persistence, bypass prevention. See [features/onboarding.md](features/onboarding.md).
 - **Real profile + avatar (Phase 3.2A)** — profile screen renders the real Supabase `profiles` row (name, `@username`, email, location, real subscription tier, joined date) + live library stats; `EditProfileScreen` edits whitelisted fields; `AvatarService` uploads to the `user-avatars` Storage bucket (resize 512px/JPEG q85). See [features/profile.md](features/profile.md).
 - **Search** — debounced (400 ms) parallel track/album/artist search; genre browse grid. See [features/search.md](features/search.md).
-- **Artist & album detail** — 2-phase artist profiles, discography (album/single/EP), album detail with track lists. See [features/artists.md](features/artists.md), [features/albums.md](features/albums.md).
+- **Artist & album detail** — 2-phase artist profiles, discography (album/single/EP), album detail with track lists. **Phase 3.3**: the artist profile display (image, Paax follower count, genres, deterministically-ordered discography, latest release) is served by the normalized Supabase-first `/v2/artists/deezer/{id}`; top tracks + related artists stay on the eager legacy path (playback unchanged). Discography ordering is date-aware (exact date → year → title). See [features/artists.md](features/artists.md), [features/albums.md](features/albums.md).
 - **Lyrics** — synced/plain lyrics via LRCLIB (+ ytmusicapi fallback). See [features/player.md](features/player.md).
 - **Cinematic black / "liquid glass" UI** — dark-only, dominant-color adaptivity, gradient fades. See [design/design-system.md](design/design-system.md).
 - **Image resilience** — throttling/backoff/domain-sharding to survive Google/Deezer 429s. See [performance.md](performance.md).
@@ -71,6 +71,7 @@ See [tasks/in-progress.md](tasks/in-progress.md).
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-07-26 | Phase 3.3 — browsing display migrated to normalized Supabase-first `/v2` (artist detail, search artists/albums, Home hydration); canonical `ArtworkResolver` fixes missing artist artwork; Paax follower count + singular/plural + optimistic reconcile; date-aware discography ordering (client + backend `release_ordering`); bounded-concurrency cold-artist discography ingest; replaceable `ArtistDiscoveryRepository` (`ARTIST_DISCOVERY_MODE`); auth top-bar chevron/tint fix. Playback untouched. No schema change. | AI agent |
 | 2026-07-17 | Phase 3.2B — followed genres (offline-first, `user_followed_genres`, no migration; Follow pill on `GenreResultsScreen`) + personalized Home rebuilt from real Supabase catalog sections (`HomeRepository`/`HomeController`, per-user cache) | AI agent |
 | 2026-07-17 | Phase 3.2A — real artist onboarding (5-artist min + RPC), real Supabase profile + avatar upload, offline-first cloud library sync (`user_hidden_tracks` + `complete_artist_onboarding` RPC), Phase 3.1 password-reuse error fix | AI agent |
 | 2026-07-17 | Phase 3.1 — Flutter wired to real Supabase Auth (verification, recovery, profile, deep links, routing state machine); demo stub + old onboarding removed; live integration test added | AI agent |

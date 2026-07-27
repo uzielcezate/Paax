@@ -26,6 +26,60 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.3 — Catalog normalization, Deezer→Supabase browsing migration, perf + UI fixes (2026-07-26)
+
+Migrates the browsing **display** onto the normalized Supabase-first `/v2`
+catalog while keeping the current UI and the existing (eager, legacy) YouTube
+playback path **exactly as-is** — playback was explicitly out of scope.
+
+- **Changed (frontend)** — Artist detail now loads its displayed profile (name,
+  artwork, Paax follower count, genres, deterministically-ordered discography,
+  latest release) from the normalized `GET /v2/artists/deezer/{id}`, in parallel
+  with the legacy call that still supplies **top tracks + related artists** (the
+  playback/navigation-bearing parts, unchanged). Search **artists + albums**
+  results now come from normalized `GET /v2/find`; **track** search stays on the
+  eager legacy path so playback is untouched.
+- **Fixed (frontend §7)** — Artist artwork no longer blanks on Home circles /
+  search / onboarding / compact cards. Root cause was mapping fragmentation (5
+  different image-key rules); replaced with one canonical `ArtworkResolver`
+  (cached → original → Deezer picture) used by every artist/album mapper.
+- **Fixed (frontend §6)** — Artist header shows the **Paax platform follower
+  count** (`artists.platform_followers_count`, trigger-maintained) with correct
+  singular/plural ("1 Follower"/"2 Followers") and optimistic follow/unfollow
+  reconciliation, instead of the external Deezer fan count. Fan count kept only
+  as a fallback.
+- **Fixed (frontend + backend §5)** — Discography ordering. Client sort was
+  `int.tryParse("2025-03-15") → 0`, collapsing dated releases; replaced with a
+  date-aware `compareReleaseDesc` (exact date → year → title → id). Backend adds
+  a canonical `release_ordering` module (same rule) used by the repository and
+  response mapper so malformed upstream order never leaks; `latestRelease` is the
+  newest eligible record of any type. `releaseYear` is now exposed on releases.
+- **Performance (backend §3)** — Uncached-artist first open no longer runs a
+  serial loop of up to 100 partial-album upserts; it's a bounded-concurrency
+  fan-out (`MAX_DISCOGRAPHY_CONCURRENCY`, default 8), cutting perceived latency
+  toward the 1–1.5 s target while keeping discography populated. Artwork + YT
+  matching remain deferred (already off the read path). Ingest timing is logged.
+- **Added (frontend §9)** — Onboarding discovery is now a replaceable
+  `ArtistDiscoveryRepository` (Deezer / Supabase / Hybrid sources) behind
+  `ARTIST_DISCOVERY_MODE` (default `hybrid` = current behavior). The onboarding
+  UI/controller is source-agnostic; switching to Supabase-first later needs no UI
+  change.
+- **Fixed (frontend §13)** — Home: followed-artist hydration uses the canonical
+  resolver and carries the catalog UUID; followed artists are deduped and
+  un-navigable entries (no Deezer id and no UUID) are dropped; search avatars
+  render via `AppImage` (graceful placeholder) instead of raw `NetworkImage`.
+- **Fixed (frontend §11)** — Auth top bars (Login/Register/Verify/Forgot/Reset/
+  Complete Profile) drop the Material-3 surface-tint/scroll-under gray overlay
+  and use the canonical Paax chevron (`arrow_back_ios_new_rounded`). No redesign,
+  no navigation change.
+- **Verified (frontend §12)** — Transient Supabase 5xx/network failures already
+  map to a safe retryable message (never "invalid credentials"); locked with
+  regression tests. No auth-error redesign.
+- **Tests** — Backend 95 pytest (+10: release ordering, bounded ingest
+  concurrency); frontend +26 unit (artwork/follower/release-sort, discovery
+  abstraction, §12 transient auth). No schema/migration change (reads existing
+  `albums.release_year`). Playback files untouched.
+
 ### Search performance — faster, cancellable, cached (2026-07-17)
 
 - **Performance** — Optimized the Deezer-backed search pipeline (**logic only**;
