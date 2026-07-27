@@ -4,6 +4,9 @@
 // that maps "reused current password" to a specific, correct message instead of
 // the generic password-policy error.
 
+import 'dart:async';
+import 'dart:io' show SocketException;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:beaty/core/auth/auth_errors.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -46,6 +49,31 @@ void main() {
     test('email not confirmed', () {
       final f = AuthErrorMapper.map(AuthApiException('Email not confirmed'));
       expect(f.kind, AuthErrorKind.emailNotConfirmed);
+    });
+  });
+
+  // Phase 3.3 §12: a temporary Supabase/network failure must show a safe
+  // retryable message and must NEVER be mislabeled as invalid credentials
+  // (the paused-project "Service temporarily unavailable" case).
+  group('AuthErrorMapper — transient failures (§12)', () {
+    test('network error is retryable, not invalid credentials', () {
+      final f = AuthErrorMapper.map(const SocketException('failed host lookup'));
+      expect(f.kind, AuthErrorKind.network);
+      expect(f.kind, isNot(AuthErrorKind.invalidCredentials));
+    });
+
+    test('timeout maps to network (retryable)', () {
+      final f = AuthErrorMapper.map(TimeoutException('deadline'));
+      expect(f.kind, AuthErrorKind.network);
+    });
+
+    test('5xx maps to unavailable with the safe retry message', () {
+      final f = AuthErrorMapper.map(
+        AuthException('internal error', statusCode: '503'),
+      );
+      expect(f.kind, AuthErrorKind.unavailable);
+      expect(f.message, contains('temporarily unavailable'));
+      expect(f.kind, isNot(AuthErrorKind.invalidCredentials));
     });
   });
 }
