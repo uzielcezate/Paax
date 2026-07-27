@@ -124,6 +124,24 @@ String formatFans(int fans) {
   return '$m M Fans';
 }
 
+/// Formats a Paax **platform follower** count with correct singular/plural
+/// (Phase 3.3 §6). Unlike [formatFans] (external Deezer fans), this represents
+/// real Paax users who follow the artist.
+/// Examples:
+/// 0 -> "0 Followers"
+/// 1 -> "1 Follower"
+/// 2 -> "2 Followers"
+/// 1500 -> "1.5K Followers"
+/// 1200000 -> "1.2M Followers"
+String formatFollowers(int count) {
+  if (count == 1) return '1 Follower';
+  if (count < 1000) return '$count Followers';
+  if (count < 1000000) {
+    return '${(count / 1000).toStringAsFixed(1)}K Followers';
+  }
+  return '${(count / 1000000).toStringAsFixed(1)}M Followers';
+}
+
 // ─── Release Metadata Utilities ───────────────────────────────────────────
 
 /// Safely extracts a 4-digit year from a date string or year value.
@@ -150,6 +168,46 @@ String? extractYear(String? dateOrYear) {
   if (anyYear != null) return anyYear.group(1);
 
   return null;
+}
+
+/// Parses a release date/year string into a sortable `(year, month, day)`.
+/// Returns `(0, 0, 0)` when nothing usable exists so the release sorts last.
+///
+/// Fixes the Phase 3.3 §5 bug where `int.tryParse("2025-03-15")` returned
+/// `null → 0`, collapsing all ISO-dated releases to the same rank.
+(int, int, int) releaseYmd(String? dateOrYear) {
+  if (dateOrYear == null) return (0, 0, 0);
+  final s = dateOrYear.trim();
+  final iso = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(s);
+  if (iso != null) {
+    return (int.parse(iso.group(1)!), int.parse(iso.group(2)!), int.parse(iso.group(3)!));
+  }
+  final ym = RegExp(r'^(\d{4})-(\d{2})').firstMatch(s);
+  if (ym != null) {
+    return (int.parse(ym.group(1)!), int.parse(ym.group(2)!), 0);
+  }
+  final year = extractYear(s);
+  if (year != null) return (int.parse(year), 0, 0);
+  return (0, 0, 0);
+}
+
+/// Comparator for releases, **newest first**, mirroring the backend's canonical
+/// ordering (Phase 3.3 §5): exact date desc → year desc → title asc. Undated
+/// releases sink last. Use as a safe deterministic presentation sort so
+/// malformed upstream ordering never leaks into the UI.
+int compareReleaseDesc(String? dateA, String? titleA, String? dateB, String? titleB,
+    {String? idA, String? idB}) {
+  final a = releaseYmd(dateA);
+  final b = releaseYmd(dateB);
+  if (a.$1 != b.$1) return b.$1.compareTo(a.$1);
+  if (a.$2 != b.$2) return b.$2.compareTo(a.$2);
+  if (a.$3 != b.$3) return b.$3.compareTo(a.$3);
+  final byTitle =
+      (titleA ?? '').toLowerCase().compareTo((titleB ?? '').toLowerCase());
+  if (byTitle != 0) return byTitle;
+  // Final id tie-break so identical (date, title) pairs order deterministically
+  // even though Dart's List.sort is not stable (mirrors the backend).
+  return (idA ?? '').compareTo(idB ?? '');
 }
 
 /// Returns an English display label for a normalized release type.

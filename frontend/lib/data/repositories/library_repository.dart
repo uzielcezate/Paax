@@ -29,6 +29,7 @@
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/utils/artwork_resolver.dart';
 import '../../domain/entities/artist.dart';
 import '../../domain/entities/genre.dart';
 import '../../domain/entities/saved_album.dart';
@@ -264,17 +265,18 @@ class LibraryRepository {
         final rows = await _remote.fetchCatalogArtists(artistUuids);
         for (final row in rows) {
           final dz = row['deezer_id']?.toString();
+          // Skip un-navigable rows (no Deezer id → the artist screen can't open).
           if (dz == null || dz.isEmpty) continue;
           if (removedFollows.contains(dz)) continue;
           if (HiveStorage.isArtistFollowed(dz)) continue;
           await HiveStorage.toggleFollowArtist(Artist(
             id: dz,
             name: (row['name'] ?? '').toString(),
-            picture: (row['image_cached_url'] ??
-                    row['image_original_url'] ??
-                    '')
-                .toString(),
+            // Canonical resolver: cached → original → …; never blanks when a
+            // valid image exists on the row (Phase 3.3 §7/§13).
+            picture: ArtworkResolver.artist(row),
             nbFans: 0,
+            uuid: row['id']?.toString(),
           ));
         }
       }

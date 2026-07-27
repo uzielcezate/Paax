@@ -140,5 +140,23 @@ neither exists the album graph carries **no** album artists and is marked
 from this flow. This keeps the `artist_discography` / `artist_latest_release`
 views populated and correctly sorted (`release_date desc nulls last`).
 
+## Phase 3.3 backend changes (2026-07-26)
+
+- **Deterministic discography ordering** — a new canonical `mappers/release_ordering.py`
+  (`sort_releases`) is used by `ArtistRepository.load_releases` and the response
+  mapper: exact `release_date` desc → `release_year` desc → case-insensitive
+  title → id, undated last. `ReleaseSummary`/`ReleaseResponse` now carry
+  `release_year`; `latestRelease` is the newest eligible release of **any** type.
+- **Faster cold-artist first open** — `ingest_artist_profile` replaced its serial
+  loop of up to 100 partial-album upserts with a bounded-concurrency fan-out
+  (`MAX_DISCOGRAPHY_CONCURRENCY`, default 8; `asyncio.gather` +
+  `return_exceptions=True`), keeping discography populated on first open while
+  cutting perceived latency toward the 1–1.5 s target. Artwork + YouTube matching
+  stay deferred (already off the read path). Ingest emits `core=…ms total=…ms
+  discography=n/m` timing. No schema/RPC change.
+- **Followers** — `platformFollowersCount` (already exposed, trigger-maintained)
+  is what Flutter now displays; see [KNOWN_ISSUES.md](../KNOWN_ISSUES.md) ISSUE-031
+  for the cached-count staleness note.
+
 See also: [CACHE_STRATEGY.md](../CACHE_STRATEGY.md), [api.md](../api.md),
 [security.md](../security.md), [decisions.md](../decisions.md) ADR-009/ADR-010.

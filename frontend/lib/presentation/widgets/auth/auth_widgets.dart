@@ -29,10 +29,17 @@ class AuthScaffold extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        // Match Paax internal top bars: no Material-3 surface tint / scroll-under
+        // gray overlay (that greyish bar was the reported inconsistency, §11A).
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
         centerTitle: false,
         leading: showBack && Navigator.of(context).canPop()
             ? IconButton(
-                icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+                // Canonical Paax chevron back control (§11B), matching the
+                // inline pattern used across the internal detail screens.
+                icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white, size: 24),
                 onPressed: () => Navigator.of(context).maybePop(),
                 tooltip: 'Back',
               )

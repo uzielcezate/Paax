@@ -185,8 +185,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+          // Canonical Paax chevron back control (§11B).
+          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: Colors.white, size: 24),
           onPressed: () => _step == 0 ? Navigator.of(context).maybePop() : _goto(_step - 1),
         ),
         title: Text('Step ${_step + 1} of 3',

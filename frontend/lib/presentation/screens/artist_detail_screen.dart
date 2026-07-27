@@ -63,6 +63,14 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   bool _hasError = false;
   bool _isEnriching = false;
   String _resolvedArtistId = '';
+
+  // Phase 3.3 §6: Paax follower count reconciliation. The API count is server
+  // truth at fetch time (already reflects the user's persisted follow state);
+  // the displayed count is that baseline plus the net follow/unfollow toggles
+  // the user makes on THIS screen. This is independent of library-load timing,
+  // so it never double-counts on a cold/cross-device open.
+  int? _followBaselineCount;
+  int _sessionFollowDelta = 0;
   
   ThumbnailPrefetcher? _prefetcher;
   Artist? _cachedArtist;
@@ -140,6 +148,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         // Update the picture URL from API data so DynamicBackground can re-extract
         if (artist.picture.isNotEmpty && artist.picture != _resolvedPictureUrl) {
           _resolvedPictureUrl = artist.picture;
+        }
+        // Capture the follower baseline (server truth) and reset the per-screen
+        // toggle delta for this load.
+        if (artist.platformFollowers != null) {
+          _followBaselineCount = artist.platformFollowers;
+          _sessionFollowDelta = 0;
         }
         setState(() {
           _isLoading = false;
@@ -367,9 +381,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                               future: _artistInfoFuture,
                               builder: (context, snapshot) {
                                 if (!snapshot.hasData) return const SizedBox.shrink();
-                                final fans = snapshot.data!.nbFans;
-                                final fanStr = formatFans(fans);
-                                return Container(
+                                final artist = snapshot.data!;
+                                // Phase 3.3 §6: prefer the Paax platform follower
+                                // count (real Paax users) with correct singular/
+                                // plural. Fall back to the external Deezer fan
+                                // count only when no Paax count is available.
+                                Widget pill(String label) => Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                                   decoration: BoxDecoration(
                                     color: Colors.white.withValues(alpha: 0.1),
@@ -377,7 +394,7 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                     border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1),
                                   ),
                                   child: Text(
-                                    fanStr,
+                                    label,
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 12,
@@ -385,6 +402,14 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                     ),
                                   ),
                                 );
+                                if (artist.platformFollowers == null) {
+                                  return pill(formatFans(artist.nbFans));
+                                }
+                                final base =
+                                    _followBaselineCount ?? artist.platformFollowers!;
+                                final count =
+                                    (base + _sessionFollowDelta).clamp(0, 1 << 31);
+                                return pill(formatFollowers(count));
                               },
                             ),
                           ],
@@ -458,6 +483,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                     icon: isFollowed ? Icons.check_rounded : Icons.person_add_rounded,
                                     onTap: () {
                                       if (artistObj != null) {
+                                        // Track the count change for this screen
+                                        // session so the follower pill reflects it
+                                        // without depending on library-load timing.
+                                        final willFollow = !lib.isArtistFollowed(_resolvedArtistId);
+                                        setState(() =>
+                                            _sessionFollowDelta += willFollow ? 1 : -1);
                                         lib.toggleFollowArtist(artistObj);
                                       }
                                     },
@@ -666,12 +697,11 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         final allReleases = [...albums, ...singles];
         if (allReleases.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
 
-        // Sort newest first by year
-        allReleases.sort((a, b) {
-          final ya = int.tryParse(a.releaseDate ?? '') ?? 0;
-          final yb = int.tryParse(b.releaseDate ?? '') ?? 0;
-          return yb.compareTo(ya);
-        });
+        // Newest first — date-aware (exact date > year > title); the old
+        // int.tryParse on ISO dates collapsed everything to year 0 (§5).
+        allReleases.sort((a, b) => compareReleaseDesc(
+            a.releaseDate, a.title, b.releaseDate, b.title,
+            idA: a.albumId, idB: b.albumId));
         final latest = allReleases.first;
         final yearStr = latest.releaseDate ?? '';
 

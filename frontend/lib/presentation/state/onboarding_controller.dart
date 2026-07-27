@@ -19,15 +19,15 @@
 // after a successful complete().
 
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../core/config/api_config.dart';
+import '../../data/discovery/artist_discovery_sources.dart';
 import '../../data/local/onboarding_selection_store.dart';
 import '../../domain/entities/onboarding_artist.dart';
+import '../../domain/repositories/artist_discovery_repository.dart';
 
 class OnboardingController extends ChangeNotifier {
   /// Minimum artists the user must select to complete onboarding.
@@ -36,17 +36,22 @@ class OnboardingController extends ChangeNotifier {
   static const Duration _debounce = Duration(milliseconds: 350);
 
   final SupabaseClient _supabase;
-  final http.Client _http;
   final OnboardingSelectionStore _store;
+
+  /// Where onboarding candidates come from (Phase 3.3 §9). Defaults to the
+  /// AppConfig-selected source (hybrid) so the UI stays source-agnostic.
+  final ArtistDiscoveryRepository _discovery;
 
   OnboardingController({
     SupabaseClient? supabase,
     http.Client? httpClient,
     OnboardingSelectionStore? store,
+    ArtistDiscoveryRepository? discovery,
     bool autoStart = true,
   })  : _supabase = supabase ?? Supabase.instance.client,
-        _http = httpClient ?? http.Client(),
-        _store = store ?? OnboardingSelectionStore() {
+        _store = store ?? OnboardingSelectionStore(),
+        _discovery = discovery ??
+            artistDiscoveryRepository(httpClient: httpClient, supabase: supabase) {
     if (autoStart) {
       // ignore: discarded_futures
       _init();
@@ -137,29 +142,7 @@ class OnboardingController extends ChangeNotifier {
     _error = null;
     _safeNotify();
     try {
-      final rows = await _supabase
-          .from('artists')
-          .select(
-              'id,name,image_cached_url,image_original_url,platform_followers_count')
-          .order('platform_followers_count', ascending: false)
-          .limit(30);
-      final list = <OnboardingArtist>[];
-      for (final row in (rows as List)) {
-        final map = row as Map<String, dynamic>;
-        final id = (map['id'] as String?)?.trim();
-        final name = (map['name'] as String?)?.trim();
-        if (id == null || id.isEmpty) continue;
-        final image = (map['image_cached_url'] as String?)?.trim();
-        final original = (map['image_original_url'] as String?)?.trim();
-        list.add(OnboardingArtist(
-          id: id,
-          name: (name == null || name.isEmpty) ? 'Unknown artist' : name,
-          imageUrl: (image != null && image.isNotEmpty)
-              ? image
-              : (original != null && original.isNotEmpty ? original : null),
-        ));
-      }
-      _popular = list;
+      _popular = await _discovery.popular();
       _error = null;
     } catch (e) {
       _error = _friendlyLoadError(e);
@@ -200,26 +183,10 @@ class OnboardingController extends ChangeNotifier {
   Future<void> _runSearch(String q) async {
     final token = ++_searchToken;
     try {
-      final uri = Uri.parse('${ApiConfig.baseUrl}/v2/find').replace(
-        queryParameters: {'type': 'artists', 'q': q, 'limit': '20'},
-      );
-      final res = await _http.get(uri).timeout(const Duration(seconds: 12));
+      final parsed = await _discovery.search(q);
 
       // A newer query superseded this one — discard the result entirely.
       if (token != _searchToken || _disposed) return;
-
-      if (res.statusCode != 200) {
-        _searchResults = const [];
-        _searchError = 'Search is unavailable right now. Please try again.';
-        _searching = false;
-        _safeNotify();
-        return;
-      }
-
-      final decoded = json.decode(utf8.decode(res.bodyBytes));
-      final parsed = _parseSearchArtists(decoded);
-
-      if (token != _searchToken || _disposed) return; // re-check after parse
       _searchResults = parsed;
       _searchError = null;
       _searching = false;
@@ -231,59 +198,6 @@ class OnboardingController extends ChangeNotifier {
       _searching = false;
       _safeNotify();
     }
-  }
-
-  /// Defensive parse. The endpoint may return a bare list or wrap artists under
-  /// `data`/`artists`/`results`. Each item: `id` (uuid|null), `deezerId` (int),
-  /// `name`, `imageUrl` (camelCase; snake_case tolerated). Deduped by deezerId
-  /// (always present), falling back to uuid.
-  List<OnboardingArtist> _parseSearchArtists(dynamic decoded) {
-    List<dynamic>? items;
-    if (decoded is List) {
-      items = decoded;
-    } else if (decoded is Map<String, dynamic>) {
-      for (final key in const ['data', 'artists', 'results', 'items']) {
-        final v = decoded[key];
-        if (v is List) {
-          items = v;
-          break;
-        }
-      }
-    }
-    if (items == null) return const [];
-
-    final out = <OnboardingArtist>[];
-    final seen = <String>{};
-    for (final item in items) {
-      if (item is! Map) continue;
-      final map = item.cast<String, dynamic>();
-
-      final rawId = map['id'];
-      final id = (rawId is String && rawId.trim().isNotEmpty) ? rawId.trim() : null;
-      final deezerId = _asInt(map['deezerId'] ?? map['deezer_id']);
-
-      // Need at least one usable identifier.
-      if (id == null && deezerId == null) continue;
-
-      final dedupKey = deezerId != null ? 'd:$deezerId' : 'u:$id';
-      if (!seen.add(dedupKey)) continue;
-
-      final name = (map['name'] as String?)?.trim();
-      final image = (map['imageUrl'] ??
-              map['image_url'] ??
-              map['imageCachedUrl'] ??
-              map['image_cached_url'] ??
-              map['image'])
-          ?.toString()
-          .trim();
-      out.add(OnboardingArtist(
-        id: id,
-        deezerId: deezerId,
-        name: (name == null || name.isEmpty) ? 'Unknown artist' : name,
-        imageUrl: (image != null && image.isNotEmpty) ? image : null,
-      ));
-    }
-    return out;
   }
 
   // ── selection ────────────────────────────────────────────────────────────────
@@ -320,7 +234,8 @@ class OnboardingController extends ChangeNotifier {
     _resolving.add(deezerId);
     _safeNotify();
     try {
-      final resolved = await _resolveByDeezerId(deezerId, artist);
+      final resolved =
+          await _discovery.resolveByDeezerId(deezerId, fallback: artist);
       if (_disposed) return null;
       if (resolved == null || !resolved.hasCatalogId) {
         return "Couldn't add that artist. Please try again.";
@@ -339,36 +254,6 @@ class OnboardingController extends ChangeNotifier {
       _resolving.remove(deezerId);
       _safeNotify();
     }
-  }
-
-  /// Resolves a Deezer artist to its catalog UUID (ingest-on-miss). The response
-  /// top-level `id` is the Supabase UUID.
-  Future<OnboardingArtist?> _resolveByDeezerId(
-      int deezerId, OnboardingArtist fallback) async {
-    final uri = Uri.parse('${ApiConfig.baseUrl}/v2/artists/deezer/$deezerId');
-    final res = await _http.get(uri).timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) return null;
-    final decoded = json.decode(utf8.decode(res.bodyBytes));
-    Map<String, dynamic>? map;
-    if (decoded is Map<String, dynamic>) {
-      // Some endpoints wrap the object under `data`.
-      final inner = decoded['data'];
-      map = inner is Map<String, dynamic> ? inner : decoded;
-    }
-    if (map == null) return null;
-    final rawId = map['id'];
-    final id = (rawId is String && rawId.trim().isNotEmpty) ? rawId.trim() : null;
-    if (id == null) return null;
-    final name = (map['name'] as String?)?.trim();
-    final image = (map['imageUrl'] ?? map['image_url'] ?? map['image'])
-        ?.toString()
-        .trim();
-    return OnboardingArtist(
-      id: id,
-      deezerId: deezerId,
-      name: (name == null || name.isEmpty) ? fallback.name : name,
-      imageUrl: (image != null && image.isNotEmpty) ? image : fallback.imageUrl,
-    );
   }
 
   void _persist() {
@@ -448,13 +333,6 @@ class OnboardingController extends ChangeNotifier {
         msg.contains('connection');
   }
 
-  int? _asInt(dynamic v) {
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    if (v is String) return int.tryParse(v.trim());
-    return null;
-  }
-
   // ── internals ────────────────────────────────────────────────────────────────
 
   void _safeNotify() {
@@ -467,7 +345,7 @@ class OnboardingController extends ChangeNotifier {
     _disposed = true;
     _debounceTimer?.cancel();
     _searchToken++; // invalidate in-flight searches
-    _http.close();
+    _discovery.dispose(); // release the discovery HTTP client
     super.dispose();
   }
 }

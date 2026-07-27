@@ -63,6 +63,22 @@ class LibraryController extends ChangeNotifier {
   List<Artist> _followedArtists = [];
   List<Artist> get followedArtists => _followedArtists;
 
+  /// Dedupe followed artists (by Deezer id, then UUID) and drop entries that
+  /// cannot navigate to an artist screen (no Deezer id and no UUID). §13.
+  static List<Artist> _dedupeNavigableArtists(List<Artist> list) {
+    final seen = <String>{};
+    final out = <Artist>[];
+    for (final a in list) {
+      final id = a.id.trim();
+      final uuid = (a.uuid ?? '').trim();
+      if (id.isEmpty && uuid.isEmpty) continue; // un-navigable
+      final key = id.isNotEmpty ? 'd:$id' : 'u:$uuid';
+      if (!seen.add(key)) continue; // duplicate
+      out.add(a);
+    }
+    return out;
+  }
+
   List<Genre> _followedGenres = [];
   List<Genre> get followedGenres => _followedGenres;
 
@@ -70,7 +86,9 @@ class LibraryController extends ChangeNotifier {
     _likedTracks = HiveStorage.getLikedTracks();
     _playlists = HiveStorage.getPlaylists();
     _savedAlbums = HiveStorage.getSavedAlbums();
-    _followedArtists = HiveStorage.getFollowedArtists();
+    // Phase 3.3 §13: dedupe followed artists and drop any that can't navigate
+    // (no Deezer id AND no canonical UUID) so Home never renders dead cards.
+    _followedArtists = _dedupeNavigableArtists(HiveStorage.getFollowedArtists());
     _followedGenres = HiveStorage.getFollowedGenres();
     _hiddenTrackIds = HiveStorage.getHiddenTrackIds();
     _pinnedPlaylistMap = HiveStorage.getPinnedPlaylistMap();

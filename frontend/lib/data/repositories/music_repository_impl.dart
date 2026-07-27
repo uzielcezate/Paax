@@ -5,6 +5,7 @@ import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
 import '../api/youtube_music_data_source.dart';
 import '../../core/utils/string_utils.dart';
+import '../../core/utils/artwork_resolver.dart';
 
 class MusicRepositoryImpl implements MusicRepository {
   final YouTubeMusicDataSource _dataSource;
@@ -48,6 +49,23 @@ class MusicRepositoryImpl implements MusicRepository {
 
   @override
   Future<List<SavedAlbum>> searchAlbums(String query) async {
+    // Normalized Supabase-first discovery (albums are navigational, not played
+    // directly, so no playback path is involved). Falls back to legacy on error.
+    try {
+      final result = await _dataSource.findV2(query, 'albums');
+      final items = (result?['items'] as List? ?? []);
+      final mapped = items
+          .map((e) {
+            try { return _mapAlbumFind(e as Map<String, dynamic>); }
+            catch (err) { debugPrint('[Repo] searchAlbums find skip: $err'); return null; }
+          })
+          .whereType<SavedAlbum>()
+          .where((a) => a.albumId.isNotEmpty)
+          .toList();
+      if (mapped.isNotEmpty) return mapped;
+    } catch (err) {
+      debugPrint('[Repo] searchAlbums find error, falling back to legacy: $err');
+    }
     final result = await _dataSource.searchV2(query, 'albums');
     return (result['data'] as List? ?? [])
         .map((e) {
@@ -60,6 +78,23 @@ class MusicRepositoryImpl implements MusicRepository {
 
   @override
   Future<List<Artist>> searchArtists(String query) async {
+    // Normalized Supabase-first discovery (artists navigate to the artist
+    // screen; no playback path). Falls back to legacy on error.
+    try {
+      final result = await _dataSource.findV2(query, 'artists');
+      final items = (result?['items'] as List? ?? []);
+      final mapped = items
+          .map((e) {
+            try { return _mapArtistFind(e as Map<String, dynamic>); }
+            catch (err) { debugPrint('[Repo] searchArtists find skip: $err'); return null; }
+          })
+          .whereType<Artist>()
+          .where((a) => a.id.isNotEmpty)  // must be navigable (has a Deezer id)
+          .toList();
+      if (mapped.isNotEmpty) return mapped;
+    } catch (err) {
+      debugPrint('[Repo] searchArtists find error, falling back to legacy: $err');
+    }
     final result = await _dataSource.searchV2(query, 'artists');
     return (result['data'] as List? ?? [])
         .map((e) {
@@ -164,54 +199,154 @@ class MusicRepositoryImpl implements MusicRepository {
   @override
   Future<Artist> getArtist(String id) async {
     final stopwatch = Stopwatch()..start();
-    try {
-      final deezerId = int.parse(id);
-      final e = await _dataSource.getArtistV2(deezerId);
+    final deezerId = int.parse(id);
 
-      // Map top tracks
-      final topTracks = (e['topTracks'] as List? ?? []).map((t) {
-        try { return _mapTrackV2(t as Map<String, dynamic>); }
-        catch (_) { return null; }
-      }).whereType<Track>().toList();
+    // Phase 3.3: the *displayed* profile (name, artwork, Paax follower count,
+    // genres, deterministically-ordered discography, latest release) comes from
+    // the normalized Supabase-first catalog. Top tracks and related artists —
+    // the playback- and navigation-bearing parts — stay on the eager legacy
+    // endpoint so the Play action is unchanged. Both run in parallel.
+    final normalizedF = _dataSource
+        .getArtistNormalizedByDeezerId(deezerId)
+        .catchError((e) { debugPrint('[Repo] normalized artist error: $e'); return null; });
+    final legacyF = _dataSource
+        .getArtistV2(deezerId)
+        .catchError((e) { debugPrint('[Repo] legacy artist error: $e'); return <String, dynamic>{}; });
 
-      // Map albums — backend pre-splits into albums and singles
-      final albums = (e['albums'] as List? ?? []).map((a) {
-        try { return _mapAlbumV2(a as Map<String, dynamic>); }
-        catch (_) { return null; }
-      }).whereType<SavedAlbum>().toList();
+    final normalized = await normalizedF;
+    final legacy = await legacyF;
 
-      final singles = (e['singles'] as List? ?? []).map((a) {
-        try { return _mapAlbumV2(a as Map<String, dynamic>); }
-        catch (_) { return null; }
-      }).whereType<SavedAlbum>().toList();
-
-      // Map related artists
-      final relatedArtists = (e['relatedArtists'] as List? ?? []).map((a) {
-        try { return _mapArtistV2(a as Map<String, dynamic>); }
-        catch (_) { return null; }
-      }).whereType<Artist>().toList();
-
-      debugPrint('[Perf] getArtist($id) v2 completed in ${stopwatch.elapsedMilliseconds}ms');
-
-      return Artist(
-        id: id,
-        name: e['name']?.toString() ?? 'Unknown Artist',
-        picture: e['picture']?.toString() ?? '',
-        nbFans: e['nbFans'] as int? ?? 0,
-        albums: albums,
-        singles: singles,
-        topTracks: topTracks,
-        relatedArtists: relatedArtists,
-      );
-    } catch (e) {
-      debugPrint('[Repo] getArtist v2 error: $e');
-      rethrow;
+    // Both sources failed → surface an error so the screen shows its retry
+    // state, rather than rendering a bogus empty "Unknown Artist" page.
+    if (normalized == null && legacy.isEmpty) {
+      throw Exception('Artist $id is unavailable (catalog + legacy both failed)');
     }
+
+    // Top tracks (playable) — eager legacy path, unchanged.
+    final topTracks = (legacy['topTracks'] as List? ?? []).map((t) {
+      try { return _mapTrackV2(t as Map<String, dynamic>); }
+      catch (_) { return null; }
+    }).whereType<Track>().toList();
+
+    // Related artists ("Fans Also Like") — legacy discovery, unchanged.
+    final relatedArtists = (legacy['relatedArtists'] as List? ?? []).map((a) {
+      try { return _mapArtistV2(a as Map<String, dynamic>); }
+      catch (_) { return null; }
+    }).whereType<Artist>().toList();
+
+    List<SavedAlbum> albums;
+    List<SavedAlbum> singles;
+    String name;
+    String picture;
+    String? uuid;
+    int? platformFollowers;
+    int nbFans;
+
+    if (normalized != null) {
+      name = normalized['name']?.toString()
+          ?? legacy['name']?.toString() ?? 'Unknown Artist';
+      picture = ArtworkResolver.pick([
+        ArtworkResolver.artist(normalized),
+        legacy['picture']?.toString(),
+      ]);
+      uuid = normalized['id']?.toString();
+      platformFollowers = _asInt(normalized['platformFollowersCount']);
+      nbFans = _asInt(normalized['deezerFansCount']) ?? _asInt(legacy['nbFans']) ?? 0;
+
+      final disc = normalized['discography'] as Map<String, dynamic>? ?? {};
+      final artistDzId = _asInt(normalized['deezerId']) ?? deezerId;
+      List<SavedAlbum> mapRel(String key) => (disc[key] as List? ?? [])
+          .map((r) { try {
+            return _mapReleaseToSavedAlbum(r as Map<String, dynamic>,
+                artistName: name, artistDeezerId: artistDzId);
+          } catch (_) { return null; } })
+          .whereType<SavedAlbum>().toList();
+      // Existing UI has two shelves: "Albums" and "Singles & EPs".
+      albums = [...mapRel('albums'), ...mapRel('compilations')];
+      singles = [...mapRel('singles'), ...mapRel('eps')];
+
+      // Defensive: if the normalized discography came back empty (e.g. a partial
+      // ingest) but the legacy response has releases, use the legacy lists so
+      // the discography section never regresses to blank.
+      if (albums.isEmpty && singles.isEmpty) {
+        final legacyAlbums = (legacy['albums'] as List? ?? []).map((a) {
+          try { return _mapAlbumV2(a as Map<String, dynamic>); } catch (_) { return null; }
+        }).whereType<SavedAlbum>().toList();
+        final legacySingles = (legacy['singles'] as List? ?? []).map((a) {
+          try { return _mapAlbumV2(a as Map<String, dynamic>); } catch (_) { return null; }
+        }).whereType<SavedAlbum>().toList();
+        if (legacyAlbums.isNotEmpty || legacySingles.isNotEmpty) {
+          albums = legacyAlbums;
+          singles = legacySingles;
+        }
+      }
+    } else {
+      // Normalized unavailable — fall back entirely to the legacy shape so the
+      // screen still renders (no regression when Supabase/ingest is degraded).
+      name = legacy['name']?.toString() ?? 'Unknown Artist';
+      picture = ArtworkResolver.artist(legacy);
+      nbFans = _asInt(legacy['nbFans']) ?? 0;
+      albums = (legacy['albums'] as List? ?? []).map((a) {
+        try { return _mapAlbumV2(a as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<SavedAlbum>().toList();
+      singles = (legacy['singles'] as List? ?? []).map((a) {
+        try { return _mapAlbumV2(a as Map<String, dynamic>); }
+        catch (_) { return null; }
+      }).whereType<SavedAlbum>().toList();
+    }
+
+    debugPrint('[Perf] getArtist($id) completed in ${stopwatch.elapsedMilliseconds}ms '
+        '(normalized=${normalized != null})');
+
+    return Artist(
+      id: id,
+      name: name,
+      picture: picture,
+      nbFans: nbFans,
+      albums: albums,
+      singles: singles,
+      topTracks: topTracks,
+      relatedArtists: relatedArtists,
+      uuid: uuid,
+      platformFollowers: platformFollowers,
+    );
   }
 
-  /// Returns basic artist data — same as full getArtist in v2 (single API call).
+  /// Returns basic artist data — same as full getArtist (parallel normalized +
+  /// legacy fetch).
   @override
   Future<Artist> getArtistBasic(String id) => getArtist(id);
+
+  static int? _asInt(dynamic v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
+  }
+
+  /// Map a normalized discography [ReleaseResponse] into a [SavedAlbum]. The
+  /// album id is the Deezer id so album-detail navigation stays on the existing
+  /// (legacy) album path; artwork uses the canonical resolver.
+  SavedAlbum _mapReleaseToSavedAlbum(Map<String, dynamic> r,
+      {required String artistName, required int artistDeezerId}) {
+    // Album navigation uses the legacy album path (int Deezer id); use the
+    // numeric id only (catalog releases always carry one).
+    final dz = _asInt(r['deezerId']);
+    // Prefer the exact date; fall back to the year so year-only releases still
+    // sort/label correctly on the client (extractYear handles both forms).
+    final releaseDate = r['releaseDate']?.toString() ?? _asInt(r['releaseYear'])?.toString();
+    return SavedAlbum(
+      albumId: dz?.toString() ?? '',
+      title: r['title']?.toString() ?? 'Unknown Album',
+      artistName: artistName,
+      artistId: artistDeezerId.toString(),
+      artworkUrl: ArtworkResolver.cover(r),
+      releaseDate: releaseDate,
+      releaseType: r['albumType']?.toString() ?? 'album',
+      trackCount: _asInt(r['totalTracks']),
+    );
+  }
 
   // ── Album Enrichment Pipeline ───────────────────────────────────────────
 
@@ -1073,13 +1208,51 @@ class MusicRepositoryImpl implements MusicRepository {
     );
   }
 
-  /// Map a v2 artist response into an [Artist] entity.
+  /// Map a legacy v2 artist response into an [Artist] entity. Uses the canonical
+  /// artwork resolver so cards no longer blank out when the image lives under a
+  /// different key than the singular `/v2/artist` detail response (Phase 3.3 §7).
   Artist _mapArtistV2(Map<String, dynamic> e) {
     return Artist(
       id: e['id']?.toString() ?? '',
       name: e['name']?.toString() ?? 'Unknown Artist',
-      picture: e['picture']?.toString() ?? '',
-      nbFans: e['nbFans'] as int? ?? 0,
+      picture: ArtworkResolver.artist(e),
+      nbFans: _asInt(e['nbFans']) ?? 0,
+    );
+  }
+
+  /// Map a normalized `/v2/find` artist item into an [Artist]. `id` is the
+  /// Deezer id (navigation key → artist detail); the Supabase UUID is carried
+  /// on [Artist.uuid]. Discovery items with only a UUID (not yet ingested with
+  /// a Deezer id) are skipped by the caller when unnavigable.
+  Artist _mapArtistFind(Map<String, dynamic> e) {
+    // Navigation id MUST be the numeric Deezer id — getArtist(id) does
+    // int.parse(id). Items with only a UUID (no Deezer id) get an empty id and
+    // are dropped by the caller's `id.isNotEmpty` filter rather than producing
+    // a card that throws on tap.
+    final dz = _asInt(e['deezerId']);
+    return Artist(
+      id: dz?.toString() ?? '',
+      name: e['name']?.toString() ?? 'Unknown Artist',
+      picture: ArtworkResolver.artist(e),
+      uuid: e['id']?.toString(),
+    );
+  }
+
+  /// Map a normalized `/v2/find` album item into a [SavedAlbum]. `albumId` is
+  /// the Deezer id so album-detail navigation stays on the existing path.
+  SavedAlbum _mapAlbumFind(Map<String, dynamic> e) {
+    // Album navigation uses the legacy album path (int Deezer id). UUID-only
+    // items get an empty albumId and are filtered by the caller.
+    final dz = _asInt(e['deezerId']);
+    final name = e['artistName']?.toString() ?? '';
+    return SavedAlbum(
+      albumId: dz?.toString() ?? '',
+      title: e['title']?.toString() ?? 'Unknown Album',
+      artistName: name.isNotEmpty ? name : 'Unknown Artist',
+      artistId: '',
+      artworkUrl: ArtworkResolver.cover(e),
+      releaseDate: e['releaseDate']?.toString(),
+      releaseType: e['albumType']?.toString() ?? 'album',
     );
   }
 }
