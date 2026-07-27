@@ -33,4 +33,15 @@ class AppConfig {
     'API_BASE_URL',
     defaultValue: 'http://localhost:8000',
   );
+
+  /// Onboarding artist-discovery source (Phase 3.3 §9).
+  ///
+  /// Injected via --dart-define=ARTIST_DISCOVERY_MODE=<hybrid|supabase|deezer>.
+  /// Defaults to `hybrid` (Supabase popular grid + paax-api search/resolve),
+  /// the current production behavior. Switch to `supabase` once the Paax
+  /// catalog is well populated — no UI change required.
+  static const String artistDiscoveryMode = String.fromEnvironment(
+    'ARTIST_DISCOVERY_MODE',
+    defaultValue: 'hybrid',
+  );
 }

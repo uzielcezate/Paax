@@ -15,6 +15,8 @@ import 'track_detail_screen.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/music_card.dart';
 import '../widgets/thumbnail.dart';
+import '../widgets/app_image.dart';
+import '../../core/image/lh3_url_builder.dart';
 
 import '../widgets/bottom_content_padding.dart';
 import '../widgets/glass_surface.dart';
@@ -485,9 +487,14 @@ class _SearchScreenState extends State<SearchScreen> {
             children: [
               Hero(
                 tag: 'artist_${artist.id}',
-                child: CircleAvatar(
-                  radius: large ? 40 : 24,
-                  backgroundImage: NetworkImage(artist.picture),
+                // AppImage gives a graceful placeholder instead of a broken/blank
+                // avatar when the artist image is missing (§7).
+                child: AppImage(
+                  url: artist.picture,
+                  sizePx: Lh3UrlBuilder.listSize,
+                  width: (large ? 40 : 24) * 2,
+                  height: (large ? 40 : 24) * 2,
+                  isCircular: true,
                 ),
               ),
               const SizedBox(width: 16),
@@ -536,9 +543,12 @@ class _SearchScreenState extends State<SearchScreen> {
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ArtistDetailScreen(
                    artistId: artists[i].id, artistName: artists[i].name, pictureUrl: artists[i].picture
                 ))),
-                child: CircleAvatar(
-                  radius: avatarRadius,
-                  backgroundImage: NetworkImage(artists[i].picture),
+                child: AppImage(
+                  url: artists[i].picture,
+                  sizePx: Lh3UrlBuilder.listSize,
+                  width: avatarRadius * 2,
+                  height: avatarRadius * 2,
+                  isCircular: true,
                 ),
               ),
               const SizedBox(height: 8),
@@ -584,13 +594,12 @@ class _SearchScreenState extends State<SearchScreen> {
                  child: Column(
                    children: [
                      Expanded(
-                       child: Container(
-                         decoration: BoxDecoration(
-                           shape: BoxShape.circle,
-                           image: DecorationImage(
-                             image: NetworkImage(artist.picture),
-                             fit: BoxFit.cover,
-                           ),
+                       child: AspectRatio(
+                         aspectRatio: 1,
+                         child: AppImage(
+                           url: artist.picture,
+                           sizePx: Lh3UrlBuilder.listSize,
+                           isCircular: true,
                          ),
                        ),
                      ),
