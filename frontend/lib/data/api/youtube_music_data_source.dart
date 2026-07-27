@@ -164,4 +164,60 @@ class YouTubeMusicDataSource {
     final res = await _get('/v2/chart');
     return res as Map<String, dynamic>;
   }
+
+  // ── Normalized (Supabase-first) /v2 catalog endpoints ────────────────────
+  //
+  // These read the normalized Supabase catalog (Redis → Supabase → Deezer
+  // ingest) and carry canonical UUIDs, follower counts, collaborators, and
+  // deterministic discography ordering. Playback is intentionally NOT sourced
+  // from here — the eager legacy endpoints above remain the playback path.
+
+  /// GET a normalized /v2 resource. On `503 { status: processing }` (an
+  /// ingest is in flight for a cold entity) this waits for `Retry-After` and
+  /// retries a bounded number of times before giving up.
+  Future<Map<String, dynamic>?> _getNormalized(String path,
+      {Map<String, String>? params, int maxRetries = 3}) async {
+    final uri = Uri.parse('$_baseUrl$path').replace(queryParameters: params);
+    var attempt = 0;
+    while (true) {
+      final response = await _client.get(uri);
+      if (response.statusCode == 200) {
+        final decoded = json.decode(utf8.decode(response.bodyBytes));
+        return decoded is Map<String, dynamic> ? decoded : null;
+      }
+      if (response.statusCode == 404) return null;
+      if (response.statusCode == 503 && attempt < maxRetries) {
+        // Ingesting or briefly degraded — honor Retry-After (capped) and retry.
+        final retryAfter = int.tryParse(response.headers['retry-after'] ?? '') ?? 1;
+        await Future.delayed(Duration(milliseconds: (retryAfter.clamp(1, 3)) * 1000));
+        attempt++;
+        continue;
+      }
+      throw Exception('API Error ${response.statusCode}: ${response.body}');
+    }
+  }
+
+  /// Normalized artist profile by Deezer id (ingest-on-miss). Carries the
+  /// canonical UUID, `platformFollowersCount`, genres, deterministically
+  /// ordered `discography`, and `latestRelease`.
+  Future<Map<String, dynamic>?> getArtistNormalizedByDeezerId(int deezerId) =>
+      _getNormalized('/v2/artists/deezer/$deezerId');
+
+  /// Normalized artist profile by canonical Supabase UUID.
+  Future<Map<String, dynamic>?> getArtistNormalizedByUuid(String uuid) =>
+      _getNormalized('/v2/artists/$uuid');
+
+  /// Normalized, deterministically ordered discography for an artist UUID.
+  Future<Map<String, dynamic>?> getArtistDiscographyNormalized(String uuid) =>
+      _getNormalized('/v2/artists/$uuid/discography');
+
+  /// Normalized album by Deezer id (metadata only; playback stays legacy).
+  Future<Map<String, dynamic>?> getAlbumNormalizedByDeezerId(int deezerId) =>
+      _getNormalized('/v2/albums/deezer/$deezerId');
+
+  /// Normalized catalog search. [type]: tracks | albums | artists.
+  Future<Map<String, dynamic>?> findV2(String query, String type,
+          {int limit = 25}) =>
+      _getNormalized('/v2/find',
+          params: {'q': query, 'type': type, 'limit': limit.toString()});
 }

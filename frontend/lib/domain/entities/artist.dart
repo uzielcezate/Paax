@@ -40,11 +40,24 @@ class Artist extends HiveObject {
     this.relatedArtists = const [],
     this.albumsParams,
     this.singlesParams,
+    this.uuid,
+    this.platformFollowers,
   });
 
   // Non-persisted params for pagination
   final String? albumsParams; // "View All" params for albums
   final String? singlesParams; // "View All" params for singles
+
+  // ── Phase 3.3: normalized-catalog fields (transient, NOT persisted to Hive) ──
+  /// Canonical Supabase catalog UUID for this artist, when resolved via the
+  /// normalized `/v2` catalog. `id` remains the Deezer id (navigation key);
+  /// this carries the durable catalog identity alongside it.
+  final String? uuid;
+
+  /// Paax platform follower count (`artists.platform_followers_count`), shown
+  /// in the artist header instead of the external Deezer fan count. Null when
+  /// unknown (e.g. an artist loaded only from a legacy/Hive source).
+  final int? platformFollowers;
 
   /// Creates a copy with selectively overridden fields.
   /// Used for progressive profile rendering (basic → enriched).
@@ -59,6 +72,8 @@ class Artist extends HiveObject {
     List<Artist>? relatedArtists,
     String? albumsParams,
     String? singlesParams,
+    String? uuid,
+    int? platformFollowers,
   }) {
     return Artist(
       id: id ?? this.id,
@@ -71,6 +86,8 @@ class Artist extends HiveObject {
       relatedArtists: relatedArtists ?? this.relatedArtists,
       albumsParams: albumsParams ?? this.albumsParams,
       singlesParams: singlesParams ?? this.singlesParams,
+      uuid: uuid ?? this.uuid,
+      platformFollowers: platformFollowers ?? this.platformFollowers,
     );
   }
 }
