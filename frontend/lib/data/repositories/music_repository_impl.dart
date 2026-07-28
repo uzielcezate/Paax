@@ -245,9 +245,13 @@ class MusicRepositoryImpl implements MusicRepository {
     }
 
     // Normalized unavailable → legacy fallback (full profile incl. top tracks +
-    // related). Slower, but only when the Supabase catalog can't resolve.
+    // related). Slower, but only when the Supabase catalog can't resolve. Bound
+    // it so a normalized outage can't reintroduce the 40s cold-artist hang (§2);
+    // on timeout the screen shows its retry state.
     debugPrint('[Repo] getArtist($id) falling back to legacy full profile');
-    final legacy = await _dataSource.getArtistV2(deezerId);
+    final legacy = await _dataSource
+        .getArtistV2(deezerId)
+        .timeout(const Duration(seconds: 15));
     final topTracks = (legacy['topTracks'] as List? ?? []).map((t) {
       try { return _mapTrackV2(t as Map<String, dynamic>); } catch (_) { return null; }
     }).whereType<Track>().toList();
@@ -275,11 +279,16 @@ class MusicRepositoryImpl implements MusicRepository {
   Future<Artist> getArtistBasic(String id) => getArtist(id);
 
   @override
-  Future<({List<Track> topTracks, List<Artist> relatedArtists})> getArtistExtras(
-      String id) async {
+  Future<({
+    List<Track> topTracks,
+    List<Artist> relatedArtists,
+    List<SavedAlbum> albums,
+    List<SavedAlbum> singles,
+  })> getArtistExtras(String id) async {
     // Background section (Phase 3.3.1 §2): top tracks (eager, playable — the
-    // Play action stays legacy) + related artists. Off the artist-detail
-    // critical path; bounded so a slow eager match can't hang forever.
+    // Play action stays legacy) + related artists (+ legacy discography as a
+    // backfill for a partial normalized core). Off the artist-detail critical
+    // path; bounded so a slow eager match can't hang forever.
     try {
       final deezerId = int.parse(id);
       final legacy = await _dataSource
@@ -291,7 +300,13 @@ class MusicRepositoryImpl implements MusicRepository {
       final related = (legacy['relatedArtists'] as List? ?? []).map((a) {
         try { return _mapArtistV2(a as Map<String, dynamic>); } catch (_) { return null; }
       }).whereType<Artist>().toList();
-      return (topTracks: topTracks, relatedArtists: related);
+      final albums = (legacy['albums'] as List? ?? []).map((a) {
+        try { return _mapAlbumV2(a as Map<String, dynamic>); } catch (_) { return null; }
+      }).whereType<SavedAlbum>().toList();
+      final singles = (legacy['singles'] as List? ?? []).map((a) {
+        try { return _mapAlbumV2(a as Map<String, dynamic>); } catch (_) { return null; }
+      }).whereType<SavedAlbum>().toList();
+      return (topTracks: topTracks, relatedArtists: related, albums: albums, singles: singles);
     } catch (e) {
       debugPrint('[Repo] getArtistExtras error: $e');
       rethrow; // let the section show its retry state

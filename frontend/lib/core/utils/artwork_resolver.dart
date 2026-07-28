@@ -47,10 +47,12 @@ class ArtworkResolver {
     if (v is! String) return false;
     final s = v.trim();
     if (s.isEmpty || s.toLowerCase() == 'null') return false;
-    // Treat a malformed (non-http/data) value as absent so it never suppresses
-    // a valid lower-priority URL (Phase 3.3.1 §1).
+    // Treat a malformed value as absent so it never suppresses a valid
+    // lower-priority URL (Phase 3.3.1 §1). Accept http(s), protocol-relative
+    // (//host/...), and data: URIs.
     return s.startsWith('http://') ||
         s.startsWith('https://') ||
+        s.startsWith('//') ||
         s.startsWith('data:');
   }
 

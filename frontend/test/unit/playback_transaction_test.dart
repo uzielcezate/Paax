@@ -199,6 +199,31 @@ void main() {
     expect(c.errorMessage, isNull);
   });
 
+  test('auto-advance skips an unplayable (empty-id) track mid-queue', () async {
+    final e = FakeEngine();
+    final c = await _make(e);
+
+    // Queue A(ok), B(empty id), C(ok); confirm A.
+    final a = c.playQueue([
+      _track('vidA', title: 'A'),
+      _track('', title: 'B'),
+      _track('vidC', title: 'C'),
+    ]);
+    await _pump();
+    e.emitState(3);
+    await a;
+    expect(c.currentTrack?.id, 'vidA');
+
+    // Next should skip B and confirm C — not stall on the empty track.
+    final next = c.playNext();
+    await _pump();
+    e.emitState(3);
+    await next;
+    expect(c.currentTrack?.id, 'vidC');
+    expect(c.currentTrack?.title, 'C');
+    expect(c.errorMessage, isNull);
+  });
+
   test('stale "playing" from prior video does not confirm during load', () async {
     final e = FakeEngine();
     final c = await _make(e);

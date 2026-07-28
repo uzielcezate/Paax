@@ -21,8 +21,15 @@ abstract class MusicRepository {
   /// eager top-tracks/related fetch. Use [getArtistExtras] for those.
   Future<Artist> getArtistBasic(String id);
   /// Background-loadable extras: top tracks (playable) + related artists, from
-  /// the eager legacy path. Kept off the artist-detail critical path (§2).
-  Future<({List<Track> topTracks, List<Artist> relatedArtists})> getArtistExtras(String id);
+  /// the eager legacy path. Also returns the legacy albums/singles so the
+  /// artist-detail can backfill its discography if the normalized core came back
+  /// empty (partial ingest). Kept off the artist-detail critical path (§2).
+  Future<({
+    List<Track> topTracks,
+    List<Artist> relatedArtists,
+    List<SavedAlbum> albums,
+    List<SavedAlbum> singles,
+  })> getArtistExtras(String id);
   /// Enriches album/singles release metadata (years, types). Can run in background.
   Future<({List<SavedAlbum> albums, List<SavedAlbum> singles})> enrichArtistReleases({
     required List<SavedAlbum> existingAlbums,

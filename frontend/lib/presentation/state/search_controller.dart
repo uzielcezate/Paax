@@ -114,8 +114,12 @@ class SearchController extends ChangeNotifier {
       return;
     }
 
-    // Cache miss → show loading immediately (UI paints its skeleton), then fetch
-    // after the debounce.
+    // Cache miss → drop the previous query's results (they don't match the new
+    // query) so the UI shows its loading state instead of stale results under
+    // the new text (Phase 3.3.1 §5), then fetch after the debounce.
+    _trackResults = [];
+    _albumResults = [];
+    _artistResults = [];
     _isLoading = true;
     _error = null;
     _notify();

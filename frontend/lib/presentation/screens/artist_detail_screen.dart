@@ -149,12 +149,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         if (artist.picture.isNotEmpty && artist.picture != _resolvedPictureUrl) {
           _resolvedPictureUrl = artist.picture;
         }
-        // Capture the follower baseline (server truth) and reset the per-screen
-        // toggle delta for this load.
-        if (artist.platformFollowers != null) {
-          _followBaselineCount = artist.platformFollowers;
-          _sessionFollowDelta = 0;
-        }
+        // Capture the follower baseline and reset the per-screen toggle delta.
+        // Prefer the server-truth Paax count; when it's unavailable (legacy
+        // fallback / null column) seed from the local follow state so an
+        // already-followed artist reads at least "1 Follower" instead of 0.
+        _followBaselineCount = artist.platformFollowers ??
+            (context.read<LibraryController>().isArtistFollowed(_resolvedArtistId) ? 1 : 0);
+        _sessionFollowDelta = 0;
         setState(() {
           _isLoading = false;
         });
@@ -197,9 +198,16 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
 
       if (mounted) {
         final base = _cachedArtist ?? coreArtist;
+        // Backfill discography from the legacy profile only when the normalized
+        // core came back empty (partial ingest) — never overwrite good data.
+        final coreAlbums = (base.albums as List).cast<SavedAlbum>();
+        final coreSingles = (base.singles as List).cast<SavedAlbum>();
+        final needDisco = coreAlbums.isEmpty && coreSingles.isEmpty;
         final updated = base.copyWith(
           topTracks: extras.topTracks,
           relatedArtists: extras.relatedArtists,
+          albums: needDisco && extras.albums.isNotEmpty ? extras.albums : null,
+          singles: needDisco && extras.singles.isNotEmpty ? extras.singles : null,
         );
         _cachedArtist = updated;
         // Update the future so FutureBuilders rebuild

@@ -185,25 +185,41 @@ class PlaybackController extends ChangeNotifier {
     }
   }
 
+  /// True when the track at [i] has a usable (non-empty) playable id.
+  bool _isPlayableIndex(int i) =>
+      i >= 0 && i < _queue.length && _queue[i].id.trim().isNotEmpty;
+
   Future<void> playNext() async {
     if (_queue.isEmpty) return;
 
     int nextIndex = -1;
 
     if (_isShuffle) {
+      // Skip un-playable tracks: try a bounded number of random picks.
       if (_queue.length > 1) {
         final r = Random();
-        do {
-          nextIndex = r.nextInt(_queue.length);
-        } while (nextIndex == _currentIndex);
-      } else {
+        for (var attempt = 0; attempt < _queue.length * 2; attempt++) {
+          final candidate = r.nextInt(_queue.length);
+          if (candidate != _currentIndex && _isPlayableIndex(candidate)) {
+            nextIndex = candidate;
+            break;
+          }
+        }
+      } else if (_isPlayableIndex(0)) {
         nextIndex = 0;
       }
     } else {
-      if (_currentIndex < _queue.length - 1) {
-        nextIndex = _currentIndex + 1;
-      } else if (_loopMode == LoopMode.all) {
-        nextIndex = 0;
+      // Sequential: advance to the next PLAYABLE track (§4/M3) so an unplayable
+      // (empty-id) track never stalls autoplay; honor loop-all wraparound once.
+      var i = _currentIndex + 1;
+      final end = _loopMode == LoopMode.all ? _currentIndex + _queue.length : _queue.length - 1;
+      while (i <= end) {
+        final idx = i % _queue.length;
+        if (idx != _currentIndex && _isPlayableIndex(idx)) {
+          nextIndex = idx;
+          break;
+        }
+        i++;
       }
     }
 
@@ -222,12 +238,17 @@ class PlaybackController extends ChangeNotifier {
       return;
     }
 
-    if (_currentIndex > 0) {
-      _currentIndex--;
-      await _playCurrent();
-    } else if (_loopMode == LoopMode.all) {
-      _currentIndex = _queue.length - 1;
-      await _playCurrent();
+    // Step back to the previous PLAYABLE track (skip unplayable ones).
+    var i = _currentIndex - 1;
+    final floor = _loopMode == LoopMode.all ? _currentIndex - _queue.length : 0;
+    while (i >= floor) {
+      final idx = ((i % _queue.length) + _queue.length) % _queue.length;
+      if (idx != _currentIndex && _isPlayableIndex(idx)) {
+        _currentIndex = idx;
+        await _playCurrent();
+        return;
+      }
+      i--;
     }
   }
 
@@ -255,7 +276,7 @@ class PlaybackController extends ChangeNotifier {
     // has no playable match — do NOT switch to it (the previous track's audio
     // is still playing); restore the confirmed track and surface the error.
     if (videoId.isEmpty) {
-      _failPlayback(myGen, track);
+      _failPlayback(myGen, track, loadIssued: false);
       return;
     }
 
@@ -276,7 +297,9 @@ class PlaybackController extends ChangeNotifier {
     if (myGen != _playGeneration) return;
 
     if (!started) {
-      _failPlayback(myGen, track);
+      // The load WAS issued (engine now holds this failed video), so restoring
+      // must also re-cue the confirmed track's audio, not just its metadata.
+      _failPlayback(myGen, track, loadIssued: true);
       return;
     }
 
@@ -349,14 +372,31 @@ class PlaybackController extends ChangeNotifier {
   /// Playback failed for [track]: never present it as playing; restore the last
   /// confirmed track state (its audio may still be running) and show the safe
   /// retryable message. Best-effort failure report.
-  void _failPlayback(int myGen, Track track) {
+  void _failPlayback(int myGen, Track track, {required bool loadIssued}) {
     if (myGen != _playGeneration) return;
     _isLoadingTrack = false;
     _isPlaying      = false;
     _errorMessage   = 'Unable to play this track';
     if (_confirmedIndex >= 0 && _confirmedIndex < _confirmedQueue.length) {
+      // Restore the previously-confirmed track.
       _queue        = List.from(_confirmedQueue);
       _currentIndex = _confirmedIndex;
+      // If a load was actually issued for the failed track, the engine now holds
+      // that video (the confirmed track's audio was interrupted). Re-cue the
+      // confirmed track so the engine matches the restored metadata instead of
+      // silently holding the failed video. (Empty-id path never loaded, so the
+      // confirmed track is still playing and needs no reload.)
+      if (loadIssued) {
+        final restored = _confirmedQueue[_confirmedIndex];
+        if (restored.id.trim().isNotEmpty) {
+          _engine.load(restored.id.trim());
+        }
+      }
+    } else {
+      // Nothing was ever confirmed — don't leave a non-playing track in the
+      // mini-player; clear it so only the error surfaces.
+      _queue        = [];
+      _currentIndex = -1;
     }
     notifyListeners();
     _reportPlaybackFailure(track);
