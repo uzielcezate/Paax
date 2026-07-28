@@ -8,8 +8,10 @@
 ## Project Status
 
 **Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (no CI, debug signing, streaming not consolidated). **Real Supabase auth landed in Phase 3.1**; **Phase 3.2A** added real artist onboarding, a real Supabase-backed profile + avatar upload, and offline-first cloud library sync; **Phase 3.2B** added **followed genres** and a **personalized Home** from real Supabase catalog sections; **Phase 3.3** migrated the browsing **display** (artist detail, search artists/albums, Home hydration) onto the normalized Supabase-first `/v2` catalog, fixed artist artwork/follower-count/discography-ordering, parallelized cold-artist ingestion, extracted a replaceable onboarding discovery source, and aligned the auth top bars — **playback left exactly as-is** (eager legacy YouTube path).
-**Last Updated**: 2026-07-26
-**Updated By**: Phase 3.3 catalog normalization (AI agent)
+**Last Updated**: 2026-07-27
+**Updated By**: Phase 3.3.1 catalog integration stabilization (AI agent)
+
+> **Phase 3.3.1 (2026-07-27)** fixed four device-confirmed defects from Phase 3.3: compact/Home artist artwork now backfills from the catalog (stale-Hive root cause); cold artist profiles render the fast normalized core (top tracks/related load as a bounded background section) instead of blocking ~40 s on eager YouTube matching; the follower pill always shows Paax followers + optimistic delta (fixes follow-from-Related-Artists); and a play-transaction state machine stops the UI from showing a track as "playing" before the iframe actually loads it (empty/invalid videoId → "Unable to play", restore previous, skip unplayable on auto-advance). Playback engine + eager resolution unchanged. **On-device audio switch still needs manual QA.** No DB change.
 
 > For the at-a-glance health dashboard (build/tests/deploys/bug counts, milestone progress), see [PROJECT_STATUS.md](PROJECT_STATUS.md). This doc and that one should always agree.
 

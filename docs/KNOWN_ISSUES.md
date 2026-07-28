@@ -391,6 +391,26 @@
 
 ---
 
+### ISSUE-033 — Playback state truthfulness fixed in-app; audible switch needs device QA
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Player · **First Observed**: 2026-07-27 (Phase 3.3.1)
+
+**Description**: Phase 3.3.1 §4 added a play-transaction state machine so the UI never shows a track as "playing" before the YouTube iframe accepts the load (empty/invalid videoId → "Unable to play this track", previous track restored/re-cued, unplayable tracks skipped on auto-advance). The state logic is covered by unit tests, but **whether audio actually switches on a physical device cannot be verified in a headless environment** — it requires manual QA (e.g. JACKBOYS 2 "CHAMPAIN & VAC…": start another song, tap the affected track, confirm displayed track == audible track or the error UI shows).
+
+**Workaround**: Manual on-device QA per the Phase 3.3.1 checklist.
+
+---
+
+### ISSUE-034 — Followed-artist artwork backfills on next app launch, not live
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Home / Library · **First Observed**: 2026-07-27 (Phase 3.3.1)
+
+**Description**: The stale-Hive artwork fix (§1) re-resolves followed-artist images during cloud hydration, which runs on session start (`onUserSession` → `hydrateFromCloud`). An artist whose stored `picture` was empty gets its image on the **next app launch / session**, not instantly within the current session.
+
+**Workaround**: Relaunch the app (or switch account) to trigger hydration. A live refresh is a possible future enhancement.
+
+---
+
 ## ✅ Resolved Issues
 
 *(None resolved yet — this log was seeded on 2026-07-16.)*
