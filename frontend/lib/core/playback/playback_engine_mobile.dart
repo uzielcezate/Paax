@@ -25,6 +25,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
   final _durationController = StreamController<Duration>.broadcast();
   final _playingController  = StreamController<bool>.broadcast();
   final _completionController = StreamController<void>.broadcast();
+  final _stateController    = StreamController<int>.broadcast();
+  final _errorController     = StreamController<int>.broadcast();
 
   Timer? _positionTimer;
   bool _isDisposed = false;
@@ -55,6 +57,12 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   @override
   Stream<void> get completionStream => _completionController.stream;
+
+  @override
+  Stream<int> get playerStateStream => _stateController.stream;
+
+  @override
+  Stream<int> get errorStream => _errorController.stream;
 
   // ── Initialize ───────────────────────────────────────────────────────────
 
@@ -173,6 +181,11 @@ class PlaybackEngineImpl implements PlaybackEngine {
         case 'error':
           final errorCode = data['data'];
           debugPrint('[MobileEngine] ❌ YT Raw Error code: $errorCode');
+          if (!_errorController.isClosed) {
+            _errorController.add(errorCode is int
+                ? errorCode
+                : int.tryParse('$errorCode') ?? -1);
+          }
           break;
 
         case 'duration':
@@ -198,6 +211,7 @@ class PlaybackEngineImpl implements PlaybackEngine {
 
   void _handleStateChange(int state) {
     // YT states: -1=unstarted, 0=ended, 1=playing, 2=paused, 3=buffering, 5=cued
+    if (!_stateController.isClosed) _stateController.add(state);
     switch (state) {
       case 1: // Playing
         _playingController.add(true);
@@ -328,6 +342,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
     _durationController.close();
     _playingController.close();
     _completionController.close();
+    _stateController.close();
+    _errorController.close();
     debugPrint('[MobileEngine] Disposed');
   }
 

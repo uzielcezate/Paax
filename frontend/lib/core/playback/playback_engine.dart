@@ -12,7 +12,17 @@ abstract class PlaybackEngine {
   
   /// Stream of completion events (track ended)
   Stream<void> get completionStream;
-  
+
+  /// Raw player-state stream using YouTube IFrame semantics:
+  /// -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued.
+  /// Used by the play transaction to confirm the newly-loaded video actually
+  /// started (buffering/playing/cued) before committing it as the current track.
+  Stream<int> get playerStateStream;
+
+  /// Player-error stream (YouTube onError codes: 2, 5, 100, 101, 150). Emitted
+  /// when the loaded video is invalid/unavailable/embedding-disabled.
+  Stream<int> get errorStream;
+
   /// Initialize the engine (if needed)
   Future<void> initialize();
   
