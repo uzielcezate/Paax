@@ -16,8 +16,13 @@ abstract class MusicRepository {
   Future<({List<SavedAlbum> playlists, List<Track> tracks, List<Artist> artists})> getGenrePage(String slug);
 
   Future<Artist> getArtist(String id);
-  /// Returns basic artist data WITHOUT release enrichment (fast).
+  /// Returns the fast CORE artist profile (identity, artwork, follower count,
+  /// discography, latest release) from the normalized catalog, WITHOUT the
+  /// eager top-tracks/related fetch. Use [getArtistExtras] for those.
   Future<Artist> getArtistBasic(String id);
+  /// Background-loadable extras: top tracks (playable) + related artists, from
+  /// the eager legacy path. Kept off the artist-detail critical path (§2).
+  Future<({List<Track> topTracks, List<Artist> relatedArtists})> getArtistExtras(String id);
   /// Enriches album/singles release metadata (years, types). Can run in background.
   Future<({List<SavedAlbum> albums, List<SavedAlbum> singles})> enrichArtistReleases({
     required List<SavedAlbum> existingAlbums,

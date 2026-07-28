@@ -163,8 +163,10 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
       // Precache key images in background
       _precacheImages(artist);
 
-      // Phase 2: Enrich releases in background
-      _enrichReleases(artist);
+      // Phase 2 (Phase 3.3.1 §2): load top tracks + related artists as a
+      // background section so the core page is never blocked by the eager
+      // legacy top-track YouTube matching (which could take tens of seconds).
+      _loadExtras(artist);
     } catch (e) {
       debugPrint('[Perf] ArtistDetailScreen FAILED in ${loadStopwatch.elapsedMilliseconds}ms: $e');
       if (mounted) {
@@ -176,35 +178,37 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     }
   }
 
-  /// Background enrichment â€” updates albums/singles with year and type data.
-  Future<void> _enrichReleases(Artist basicArtist) async {
+  /// Background section load — top tracks + related artists (Phase 3.3.1 §2).
+  /// The core profile already rendered; these populate the "Popular" and
+  /// "Fans Also Like" sections when ready. On failure the sections stay hidden
+  /// (existing empty behavior) and the page remains visible — never a global
+  /// spinner.
+  Future<void> _loadExtras(Artist coreArtist) async {
+    // The legacy fallback path already includes top tracks + related.
+    if (coreArtist.topTracks.isNotEmpty || coreArtist.relatedArtists.isNotEmpty) {
+      return;
+    }
     if (!mounted) return;
     setState(() => _isEnriching = true);
 
     final enrichStopwatch = Stopwatch()..start();
     try {
-      final albums = (basicArtist.albums as List).cast<SavedAlbum>();
-      final singles = (basicArtist.singles as List).cast<SavedAlbum>();
-
-      final enriched = await _repository.enrichArtistReleases(
-        existingAlbums: albums,
-        existingSingles: singles,
-        rawSongs: _rawSongs,
-      );
+      final extras = await _repository.getArtistExtras(_resolvedArtistId);
 
       if (mounted) {
-        final updated = basicArtist.copyWith(
-          albums: enriched.albums,
-          singles: enriched.singles,
+        final base = _cachedArtist ?? coreArtist;
+        final updated = base.copyWith(
+          topTracks: extras.topTracks,
+          relatedArtists: extras.relatedArtists,
         );
         _cachedArtist = updated;
         // Update the future so FutureBuilders rebuild
         _artistInfoFuture = Future.value(updated);
-        debugPrint('[Perf] ArtistDetailScreen enrichment done in ${enrichStopwatch.elapsedMilliseconds}ms');
+        debugPrint('[Perf] ArtistDetailScreen extras loaded in ${enrichStopwatch.elapsedMilliseconds}ms');
         setState(() => _isEnriching = false);
       }
     } catch (err) {
-      debugPrint('[Repo] Background enrichment failed: $err');
+      debugPrint('[Repo] Background extras load failed: $err');
       if (mounted) setState(() => _isEnriching = false);
     }
   }
@@ -382,10 +386,13 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                               builder: (context, snapshot) {
                                 if (!snapshot.hasData) return const SizedBox.shrink();
                                 final artist = snapshot.data!;
-                                // Phase 3.3 §6: prefer the Paax platform follower
-                                // count (real Paax users) with correct singular/
-                                // plural. Fall back to the external Deezer fan
-                                // count only when no Paax count is available.
+                                // Phase 3.3.1 §3/§6: ALWAYS show the Paax platform
+                                // follower count (never the external Deezer fan
+                                // count) with correct singular/plural, plus the
+                                // in-session follow/unfollow delta — so following
+                                // an artist opened from Related Artists moves the
+                                // count 0→1 even when the normalized profile isn't
+                                // available and platformFollowers is unknown.
                                 Widget pill(String label) => Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                                   decoration: BoxDecoration(
@@ -402,11 +409,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                     ),
                                   ),
                                 );
-                                if (artist.platformFollowers == null) {
-                                  return pill(formatFans(artist.nbFans));
-                                }
-                                final base =
-                                    _followBaselineCount ?? artist.platformFollowers!;
+                                // Baseline = server-truth platform count when
+                                // known, else 0 (the delta still reflects the
+                                // user's own follow). Never the Deezer fan count.
+                                final base = _followBaselineCount ??
+                                    artist.platformFollowers ??
+                                    0;
                                 final count =
                                     (base + _sessionFollowDelta).clamp(0, 1 << 31);
                                 return pill(formatFollowers(count));
