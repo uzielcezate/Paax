@@ -26,6 +26,57 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.3.1 — Catalog integration stabilization (2026-07-27)
+
+Regression-fix phase after Phase 3.3, addressing **four defects confirmed on a
+real Android device** (Phase 3.3's API-only smoke tests had not exercised the
+runtime paths). No new features; UI and the YouTube IFrame playback engine
+preserved. **No schema/DB change** (verified read-only: artwork cached, follower
+triggers intact, the affected tracks aren't in the normalized catalog).
+
+- **Fixed — compact artist artwork (§1).** Home circles for followed artists
+  (Young Miko, Skrillex) showed the placeholder while the full Artist screen
+  showed a photo. Root cause: cloud hydration **skipped** already-followed
+  artists, so a Hive entry stored with an empty `picture` (followed before its
+  catalog row had an image) was never refreshed. Hydration now **upserts** every
+  followed row's resolved artwork + uuid (self-healing on next launch, never
+  regressing a good picture). `ArtworkResolver` gains the full §1 priority
+  (cached → original → picture_xl → picture_big → picture_medium → picture) and
+  treats malformed/`"null"`/non-URL values as absent.
+- **Fixed — cold artist load > 40 s (§2).** `getArtist` awaited the legacy
+  `/v2/artist/{id}` call, which eagerly YouTube-matches up to 50 top tracks
+  (tens of seconds), blocking the Artist Detail global spinner. It now returns
+  the fast normalized **core** only (bounded 12 s); top tracks + related artists
+  load as a **background section** via `getArtistExtras` (bounded 30 s). Backend
+  caps the eager match to a bounded head (`HYBRID_ARTIST_TOP_MATCH_LIMIT`,
+  default 15, 12 s each). Legacy fallback is now also bounded (15 s).
+- **Fixed — follow/unfollow from Related Artists (§3).** Following an artist
+  opened from another's Related list (Drake → Travis Scott) didn't move the
+  count. Root cause: the cold artist fell back to legacy, leaving
+  `platformFollowers` null, and the pill then showed the static Deezer **fan**
+  count and ignored the follow delta. The pill now **always** uses Paax follower
+  semantics + the in-session delta (never Deezer fans; seeds from local follow
+  state when the platform count is unknown), so following moves 0→1 regardless
+  of catalog warmth. The faster core also makes the count reliably available.
+- **Fixed — playback display/audio desync (§4).** Tapping some tracks
+  (JACKBOYS 2 "CHAMPAIN & VAC…") switched the UI to the new track as "playing"
+  while the previous song kept playing. Root cause: `Track.id` **is** the
+  videoId and can be empty; `currentTrack` was committed before `load()`, which
+  silently no-op'd on an empty id, and iframe `onError` was only logged. New
+  **play-transaction state machine**: validate the id, commit the new track only
+  after the iframe accepts it (buffering/playing/cued) for the current
+  generation, restore/re-cue the previous track on failure, ignore stale
+  callbacks, auto-advance past unplayable tracks, and show the safe "Unable to
+  play this track" with retry. The IFrame engine and eager videoId resolution
+  are unchanged. **Audible playback still requires manual on-device QA** — it
+  can't be verified headless.
+- **Fixed — search loading truthfulness (§5).** The global spinner no longer
+  hides cached/partial results; a cache-miss query clears stale results so the
+  previous query's hits never render under new text.
+- **Tests** — frontend +9 playback-transaction + expanded artwork fixtures
+  (54 unit total); backend 95 pytest. `flutter analyze` 0 errors. Adversarial
+  review; all medium findings fixed.
+
 ### Phase 3.3 — Catalog normalization, Deezer→Supabase browsing migration, perf + UI fixes (2026-07-26)
 
 Migrates the browsing **display** onto the normalized Supabase-first `/v2`

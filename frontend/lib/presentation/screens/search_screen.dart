@@ -290,10 +290,17 @@ class _SearchScreenState extends State<SearchScreen> {
   ];
 
   List<Widget> _buildBodySlivers(app_search.SearchController search) {
-    if (search.isLoading) {
+    // Phase 3.3.1 §5: show the global spinner ONLY while loading AND there are
+    // no usable (cached/partial) results yet — never hide already-available
+    // results behind a full-screen spinner. Once any category has painted, the
+    // results below stay visible while the rest revalidates.
+    final bool hasAnyResults = search.trackResults.isNotEmpty ||
+        search.albumResults.isNotEmpty ||
+        search.artistResults.isNotEmpty;
+    if (search.isLoading && _textController.text.isNotEmpty && !hasAnyResults) {
       return [const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: Colors.white)))];
     }
-    
+
     // Add top padding to content so it doesn't touch the divider immediately
     const topContentPadding = SliverToBoxAdapter(child: SizedBox(height: 12));
 

@@ -10,6 +10,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
   final _durationController = StreamController<Duration>.broadcast();
   final _playingController = StreamController<bool>.broadcast();
   final _completionController = StreamController<void>.broadcast();
+  final _stateController = StreamController<int>.broadcast();
+  final _errorController = StreamController<int>.broadcast();
   
   Timer? _positionTimer;
   bool _isDisposed = false;
@@ -27,6 +29,31 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Stream<void> get completionStream => _completionController.stream;
 
   @override
+  Stream<int> get playerStateStream => _stateController.stream;
+
+  @override
+  Stream<int> get errorStream => _errorController.stream;
+
+  static int _stateToInt(PlayerState s) {
+    switch (s) {
+      case PlayerState.unStarted:
+        return -1;
+      case PlayerState.ended:
+        return 0;
+      case PlayerState.playing:
+        return 1;
+      case PlayerState.paused:
+        return 2;
+      case PlayerState.buffering:
+        return 3;
+      case PlayerState.cued:
+        return 5;
+      default:
+        return -99;
+    }
+  }
+
+  @override
   Future<void> initialize() async {
     _controller = YoutubePlayerController(
       params: const YoutubePlayerParams(
@@ -40,10 +67,18 @@ class PlaybackEngineImpl implements PlaybackEngine {
     // Listen to iframe events
     _controller.listen((event) {
         if (_isDisposed) return;
-        
+
+        // Raw state + error signals for the play transaction.
+        if (!_stateController.isClosed) {
+          _stateController.add(_stateToInt(event.playerState));
+        }
+        if (event.error != YoutubeError.none && !_errorController.isClosed) {
+          _errorController.add(event.error.index);
+        }
+
         // Sync Duration
         _durationController.add(event.metaData.duration);
-        
+
         // Sync Playing State & Timer
         if (event.playerState == PlayerState.playing) {
             _playingController.add(true);
@@ -73,6 +108,8 @@ class PlaybackEngineImpl implements PlaybackEngine {
     _durationController.close();
     _playingController.close();
     _completionController.close();
+    _stateController.close();
+    _errorController.close();
   }
 
   void _startPositionTimer() {

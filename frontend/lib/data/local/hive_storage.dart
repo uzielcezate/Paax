@@ -228,7 +228,17 @@ class HiveStorage {
       await _artists.put(artist.id, artist);
     }
   }
-  
+
+  /// Unconditional upsert of a followed artist (does NOT toggle). Used by
+  /// cloud hydration to refresh a stored artist's artwork/uuid when the catalog
+  /// now has an image the previously-stored entry lacked (Phase 3.3.1 §1).
+  static Future<void> putFollowedArtist(Artist artist) async {
+    await _artists.put(artist.id, artist);
+  }
+
+  /// The stored followed [Artist] for a Deezer id, or null.
+  static Artist? getFollowedArtist(String id) => _artists.get(id);
+
   static bool isArtistFollowed(String id) {
     return _artists.containsKey(id);
   }

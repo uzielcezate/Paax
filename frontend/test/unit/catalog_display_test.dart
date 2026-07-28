@@ -13,59 +13,87 @@ import 'package:beaty/core/utils/artwork_resolver.dart';
 import 'package:beaty/core/utils/string_utils.dart';
 
 void main() {
-  group('ArtworkResolver.artist', () {
-    test('prefers cached over original over deezer picture', () {
+  // Phase 3.3.1 §1 required fixtures. Real (http) URLs — the resolver treats a
+  // non-http value as malformed/absent.
+  const cached = 'https://storage.example/cached.webp';
+  const original = 'https://cdn-images.dzcdn.net/original.jpg';
+  const xl = 'https://e-cdns-images.dzcdn.net/xl.jpg';
+  const big = 'https://e-cdns-images.dzcdn.net/big.jpg';
+  const medium = 'https://e-cdns-images.dzcdn.net/medium.jpg';
+
+  group('ArtworkResolver.artist (§1 priority)', () {
+    test('cached present → cached', () {
       expect(
         ArtworkResolver.artist({
-          'image_cached_url': 'cached',
-          'image_original_url': 'original',
-          'picture': 'pic',
+          'image_cached_url': cached,
+          'image_original_url': original,
+          'picture': xl,
         }),
-        'cached',
+        cached,
       );
     });
 
-    test('falls back to original when cached missing', () {
+    test('cached absent, original present → original', () {
       expect(
-        ArtworkResolver.artist({'image_cached_url': null, 'image_original_url': 'original'}),
-        'original',
+        ArtworkResolver.artist({'image_cached_url': null, 'image_original_url': original}),
+        original,
       );
     });
 
-    test('reads normalized camelCase imageUrl', () {
-      expect(ArtworkResolver.artist({'imageUrl': 'u'}), 'u');
+    test('only Deezer picture_xl present → picture_xl', () {
+      expect(ArtworkResolver.artist({'picture_xl': xl}), xl);
+      expect(ArtworkResolver.artist({'pictureXl': xl}), xl);
     });
 
-    test('reads legacy/Deezer picture and pictureXl', () {
-      expect(ArtworkResolver.artist({'pictureXl': 'xl', 'picture': 'p'}), 'xl');
-      expect(ArtworkResolver.artist({'picture': 'p'}), 'p');
+    test('priority xl > big > medium > picture', () {
+      expect(
+        ArtworkResolver.artist({'picture_big': big, 'picture_medium': medium, 'picture_xl': xl}),
+        xl,
+      );
+      expect(ArtworkResolver.artist({'picture_big': big, 'picture_medium': medium}), big);
+      expect(ArtworkResolver.artist({'picture_medium': medium, 'picture': original}), medium);
     });
 
-    test('returns empty when no usable url (placeholder path)', () {
+    test('malformed cached URL with valid original → original', () {
+      // A missing/garbage cached URL must NEVER suppress a valid original.
+      expect(
+        ArtworkResolver.artist({'image_cached_url': 'not-a-url', 'image_original_url': original}),
+        original,
+      );
+      expect(
+        ArtworkResolver.artist({'image_cached_url': 'null', 'image_original_url': original}),
+        original,
+      );
+    });
+
+    test('all image fields missing → placeholder (empty)', () {
       expect(ArtworkResolver.artist({'picture': '', 'imageUrl': null}), '');
       expect(ArtworkResolver.artist(null), '');
       expect(ArtworkResolver.artist({'picture': 'null'}), '');
+      expect(ArtworkResolver.artist({'name': 'x'}), '');
     });
 
-    test('never returns placeholder when original url is valid', () {
-      // Cached not yet generated, but original present -> must show original.
-      final url = ArtworkResolver.artist(
-          {'image_cache_status': 'pending', 'image_original_url': 'orig'});
-      expect(url, 'orig');
+    test('pending cache status does not suppress a valid original', () {
+      expect(
+        ArtworkResolver.artist({'image_cache_status': 'pending', 'image_original_url': original}),
+        original,
+      );
     });
   });
 
   group('ArtworkResolver.cover', () {
-    test('prefers cover cached then coverUrl then original', () {
-      expect(ArtworkResolver.cover({'cover_cached_url': 'c', 'coverUrl': 'u'}), 'c');
-      expect(ArtworkResolver.cover({'coverUrl': 'u', 'cover_original_url': 'o'}), 'u');
-      expect(ArtworkResolver.cover({'cover_original_url': 'o'}), 'o');
+    const cCached = 'https://storage.example/cover_c.webp';
+    const cOrig = 'https://cdn-images.dzcdn.net/cover_o.jpg';
+    test('prefers cover cached then original', () {
+      expect(ArtworkResolver.cover({'cover_cached_url': cCached, 'coverUrl': cOrig}), cCached);
+      expect(ArtworkResolver.cover({'cover_original_url': cOrig}), cOrig);
     });
   });
 
   group('ArtworkResolver.pick', () {
     test('returns the first valid candidate', () {
-      expect(ArtworkResolver.pick([null, '', 'null', 'real', 'x']), 'real');
+      const real = 'https://x/real.jpg';
+      expect(ArtworkResolver.pick([null, '', 'null', 'not-a-url', real, 'x']), real);
       expect(ArtworkResolver.pick([null, '']), '');
     });
   });

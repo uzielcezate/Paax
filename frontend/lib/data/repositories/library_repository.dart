@@ -268,14 +268,28 @@ class LibraryRepository {
           // Skip un-navigable rows (no Deezer id → the artist screen can't open).
           if (dz == null || dz.isEmpty) continue;
           if (removedFollows.contains(dz)) continue;
-          if (HiveStorage.isArtistFollowed(dz)) continue;
-          await HiveStorage.toggleFollowArtist(Artist(
+
+          // Canonical resolver: cached → original → …; never blanks when a
+          // valid image exists on the row (Phase 3.3 §7/§13).
+          final resolved = ArtworkResolver.artist(row);
+          final existing = HiveStorage.getFollowedArtist(dz);
+
+          // Phase 3.3.1 §1: UPSERT (not skip) so an already-followed artist whose
+          // stored picture is empty gets backfilled once the catalog row has an
+          // image. Never regress a good stored picture to empty.
+          final picture = resolved.isNotEmpty
+              ? resolved
+              : (existing?.picture ?? '');
+          if (existing != null &&
+              existing.picture == picture &&
+              existing.uuid == (row['id']?.toString())) {
+            continue; // nothing changed
+          }
+          await HiveStorage.putFollowedArtist(Artist(
             id: dz,
-            name: (row['name'] ?? '').toString(),
-            // Canonical resolver: cached → original → …; never blanks when a
-            // valid image exists on the row (Phase 3.3 §7/§13).
-            picture: ArtworkResolver.artist(row),
-            nbFans: 0,
+            name: (row['name'] ?? existing?.name ?? '').toString(),
+            picture: picture,
+            nbFans: existing?.nbFans ?? 0,
             uuid: row['id']?.toString(),
           ));
         }

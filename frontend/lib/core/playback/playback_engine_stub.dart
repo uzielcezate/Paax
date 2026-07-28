@@ -15,6 +15,12 @@ class PlaybackEngineImpl implements PlaybackEngine {
   Stream<void> get completionStream => throw UnimplementedError();
 
   @override
+  Stream<int> get playerStateStream => throw UnimplementedError();
+
+  @override
+  Stream<int> get errorStream => throw UnimplementedError();
+
+  @override
   Future<void> initialize() async {
     throw UnimplementedError();
   }

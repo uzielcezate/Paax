@@ -19,13 +19,15 @@
 class ArtworkResolver {
   ArtworkResolver._();
 
-  /// Ordered artist-image keys, cached first then original/remote.
+  /// Ordered artist-image keys (Phase 3.3.1 §1): cached → original → Deezer
+  /// picture_xl → picture_big → picture_medium → generic picture.
   static const List<String> _artistKeys = [
     'image_cached_url', 'imageCachedUrl',
-    'imageUrl', 'image_url',
     'image_original_url', 'imageOriginalUrl',
+    'imageUrl', 'image_url',
     'pictureXl', 'picture_xl',
     'pictureBig', 'picture_big',
+    'pictureMedium', 'picture_medium',
     'picture',
     'image',
   ];
@@ -44,7 +46,14 @@ class ArtworkResolver {
   static bool _valid(Object? v) {
     if (v is! String) return false;
     final s = v.trim();
-    return s.isNotEmpty && s.toLowerCase() != 'null';
+    if (s.isEmpty || s.toLowerCase() == 'null') return false;
+    // Treat a malformed value as absent so it never suppresses a valid
+    // lower-priority URL (Phase 3.3.1 §1). Accept http(s), protocol-relative
+    // (//host/...), and data: URIs.
+    return s.startsWith('http://') ||
+        s.startsWith('https://') ||
+        s.startsWith('//') ||
+        s.startsWith('data:');
   }
 
   static String _firstValid(Map<dynamic, dynamic> json, List<String> keys) {

@@ -32,6 +32,16 @@ class PlaybackController extends ChangeNotifier {
   /// Non-null when the last load attempt failed. UI should show a snackbar.
   String? _errorMessage;
 
+  // ── Play transaction (Phase 3.3.1 §4) ────────────────────────────────────
+  // A monotonically increasing token identifies the current play request so a
+  // late iframe callback or a superseded selection can never confirm the wrong
+  // track. `_confirmed*` snapshots the last state that actually started playing,
+  // so a failed load can restore truthful state instead of leaving new metadata
+  // over the previous (still-playing) audio.
+  int _playGeneration = 0;
+  List<Track> _confirmedQueue = [];
+  int _confirmedIndex = -1;
+
   // Getters
   List<Track> get queue => _queue;
   int get currentIndex => _currentIndex;
@@ -60,10 +70,15 @@ class PlaybackController extends ChangeNotifier {
   final positionNotifier = ValueNotifier<Duration>(Duration.zero);
   final durationNotifier = ValueNotifier<Duration>(Duration.zero);
 
-  PlaybackController() {
-    _engine = getPlaybackEngine();
-    _initEngine();
+  /// [engine] is injectable for tests; production uses the platform engine.
+  PlaybackController({PlaybackEngine? engine}) {
+    _engine = engine ?? getPlaybackEngine();
+    _initialized = _initEngine();
   }
+
+  /// Completes once engine init + stream wiring is done (test synchronization).
+  late final Future<void> _initialized;
+  Future<void> get initialized => _initialized;
 
   // Scrubbing state to prevent UI jitter
   bool _isScrubbing = false;
@@ -127,6 +142,9 @@ class PlaybackController extends ChangeNotifier {
     });
 
     _engine.playingStream.listen((playing) {
+      // While a new track is loading, ignore a stale "playing" event from the
+      // previous video so we never show the not-yet-confirmed track as playing.
+      if (playing && _isLoadingTrack) return;
       if (_isPlaying != playing) {
         _isPlaying = playing;
         // Pass current position so the notification doesn't reset to 00:00 on pause
@@ -167,25 +185,41 @@ class PlaybackController extends ChangeNotifier {
     }
   }
 
+  /// True when the track at [i] has a usable (non-empty) playable id.
+  bool _isPlayableIndex(int i) =>
+      i >= 0 && i < _queue.length && _queue[i].id.trim().isNotEmpty;
+
   Future<void> playNext() async {
     if (_queue.isEmpty) return;
 
     int nextIndex = -1;
 
     if (_isShuffle) {
+      // Skip un-playable tracks: try a bounded number of random picks.
       if (_queue.length > 1) {
         final r = Random();
-        do {
-          nextIndex = r.nextInt(_queue.length);
-        } while (nextIndex == _currentIndex);
-      } else {
+        for (var attempt = 0; attempt < _queue.length * 2; attempt++) {
+          final candidate = r.nextInt(_queue.length);
+          if (candidate != _currentIndex && _isPlayableIndex(candidate)) {
+            nextIndex = candidate;
+            break;
+          }
+        }
+      } else if (_isPlayableIndex(0)) {
         nextIndex = 0;
       }
     } else {
-      if (_currentIndex < _queue.length - 1) {
-        nextIndex = _currentIndex + 1;
-      } else if (_loopMode == LoopMode.all) {
-        nextIndex = 0;
+      // Sequential: advance to the next PLAYABLE track (§4/M3) so an unplayable
+      // (empty-id) track never stalls autoplay; honor loop-all wraparound once.
+      var i = _currentIndex + 1;
+      final end = _loopMode == LoopMode.all ? _currentIndex + _queue.length : _queue.length - 1;
+      while (i <= end) {
+        final idx = i % _queue.length;
+        if (idx != _currentIndex && _isPlayableIndex(idx)) {
+          nextIndex = idx;
+          break;
+        }
+        i++;
       }
     }
 
@@ -204,63 +238,177 @@ class PlaybackController extends ChangeNotifier {
       return;
     }
 
-    if (_currentIndex > 0) {
-      _currentIndex--;
-      await _playCurrent();
-    } else if (_loopMode == LoopMode.all) {
-      _currentIndex = _queue.length - 1;
-      await _playCurrent();
+    // Step back to the previous PLAYABLE track (skip unplayable ones).
+    var i = _currentIndex - 1;
+    final floor = _loopMode == LoopMode.all ? _currentIndex - _queue.length : 0;
+    while (i >= floor) {
+      final idx = ((i % _queue.length) + _queue.length) % _queue.length;
+      if (idx != _currentIndex && _isPlayableIndex(idx)) {
+        _currentIndex = idx;
+        await _playCurrent();
+        return;
+      }
+      i--;
     }
   }
 
+  /// Play-transaction state machine (Phase 3.3.1 §4).
+  ///
+  /// Truthfulness invariant: the visible current track is never presented as
+  /// playing until we have a non-empty videoId AND the iframe accepts the new
+  /// media (buffering/playing/cued). An empty/invalid id or a load
+  /// failure/timeout keeps or restores the previously-confirmed track and shows
+  /// the safe error — it never leaves new metadata over the prior audio.
   Future<void> _playCurrent() async {
     if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
 
+    final myGen = ++_playGeneration;
     final track = _queue[_currentIndex];
+    final videoId = track.id.trim();
 
-    // Immediately notify so UI shows title/artwork/track info
     _errorMessage    = null;
-    _isLoadingTrack  = true;
     _position        = Duration.zero;
     _duration        = Duration.zero;
     positionNotifier.value = Duration.zero;
     durationNotifier.value = Duration.zero;
+
+    // Eager legacy path: Track.id IS the videoId. An empty id means this track
+    // has no playable match — do NOT switch to it (the previous track's audio
+    // is still playing); restore the confirmed track and surface the error.
+    if (videoId.isEmpty) {
+      _failPlayback(myGen, track, loadIssued: false);
+      return;
+    }
+
+    // Show the pending track as LOADING (not playing) — responsive but truthful.
+    _isLoadingTrack = true;
+    _isPlaying      = false;
     notifyListeners();
 
-    bool loadFailed = false;
+    bool started;
     try {
-      await _engine.load(track.id);
-      // Kick off background prefetch for the next track (best-effort,
-      // fire-and-forget via the engine — no-op if backend handles caching).
-      final upcoming = _upcomingTrackIds(count: 1);
-      for (final id in upcoming) {
-        _engine.prefetchNext(id);
-      }
-    } catch (e) {
-      loadFailed = true;
-      _errorMessage   = 'Playback unavailable: ${e.toString().replaceFirst('Exception: ', '')}';
-      _isLoadingTrack = false;
-      _isPlaying      = false;
-      notifyListeners();
-    } finally {
-      if (!loadFailed) {
-        _isLoadingTrack = false;
-        // Don't call notifyListeners — playingStream/durationStream will
-
-        // Update the Web Media Session with track metadata + wire up
-        // lock-screen / notification controls.
-        // Important: onPlay/onPause use dedicated handlers (not toggle)
-        // so they are idempotent — calling play when already playing
-        // or pause when already paused is safe and won't invert state.
-        setMediaSession(
-          track: track,
-          onPlay: _handleRemotePlay,
-          onPause: _handleRemotePause,
-          onNext: () => playNext(),
-          onPrevious: () => playPrevious(),
-        );
-      }
+      await _engine.load(videoId);
+      started = await _awaitPlaybackStart(myGen);
+    } catch (_) {
+      started = false;
     }
+
+    // A newer selection superseded this one — abandon; the newer call owns state.
+    if (myGen != _playGeneration) return;
+
+    if (!started) {
+      // The load WAS issued (engine now holds this failed video), so restoring
+      // must also re-cue the confirmed track's audio, not just its metadata.
+      _failPlayback(myGen, track, loadIssued: true);
+      return;
+    }
+
+    // Confirmed: the iframe accepted and started the new video. Commit it.
+    _confirmedQueue = List.from(_queue);
+    _confirmedIndex = _currentIndex;
+    _isLoadingTrack = false;
+
+    for (final id in _upcomingTrackIds(count: 1)) {
+      _engine.prefetchNext(id);
+    }
+    // Media session (lock-screen / notification). Idempotent handlers.
+    setMediaSession(
+      track: track,
+      onPlay: _handleRemotePlay,
+      onPause: _handleRemotePause,
+      onNext: () => playNext(),
+      onPrevious: () => playPrevious(),
+    );
+    notifyListeners();
+  }
+
+  /// Waits for the iframe to accept the just-issued load: resolves true on the
+  /// new video buffering/playing/cued, false on error/immediate-end/timeout.
+  /// Guards against a stale "playing" from the PREVIOUS video by requiring a
+  /// fresh load-begin (unstarted/buffering) before accepting a `playing` event.
+  Future<bool> _awaitPlaybackStart(int gen) async {
+    final completer = Completer<bool>();
+    var loadBegan = false;
+    StreamSubscription<int>? stateSub;
+    StreamSubscription<int>? errorSub;
+    Timer? timeout;
+
+    void done(bool ok) {
+      if (completer.isCompleted) return;
+      stateSub?.cancel();
+      errorSub?.cancel();
+      timeout?.cancel();
+      completer.complete(ok);
+    }
+
+    stateSub = _engine.playerStateStream.listen((st) {
+      if (gen != _playGeneration) return done(false);
+      switch (st) {
+        case -1: // unstarted (a fresh load began)
+          loadBegan = true;
+          break;
+        case 3: // buffering the new video → accepted
+        case 5: // cued
+          done(true);
+          break;
+        case 1: // playing — only trust it after a fresh load began
+          if (loadBegan) done(true);
+          break;
+        case 0: // ended after a fresh load → treat as failure
+          if (loadBegan) done(false);
+          break;
+      }
+    });
+    errorSub = _engine.errorStream.listen((_) {
+      if (gen != _playGeneration) return done(false);
+      done(false);
+    });
+    // Explicit bound — never rely on an upstream 40s timeout.
+    timeout = Timer(const Duration(seconds: 12), () => done(false));
+
+    return completer.future;
+  }
+
+  /// Playback failed for [track]: never present it as playing; restore the last
+  /// confirmed track state (its audio may still be running) and show the safe
+  /// retryable message. Best-effort failure report.
+  void _failPlayback(int myGen, Track track, {required bool loadIssued}) {
+    if (myGen != _playGeneration) return;
+    _isLoadingTrack = false;
+    _isPlaying      = false;
+    _errorMessage   = 'Unable to play this track';
+    if (_confirmedIndex >= 0 && _confirmedIndex < _confirmedQueue.length) {
+      // Restore the previously-confirmed track.
+      _queue        = List.from(_confirmedQueue);
+      _currentIndex = _confirmedIndex;
+      // If a load was actually issued for the failed track, the engine now holds
+      // that video (the confirmed track's audio was interrupted). Re-cue the
+      // confirmed track so the engine matches the restored metadata instead of
+      // silently holding the failed video. (Empty-id path never loaded, so the
+      // confirmed track is still playing and needs no reload.)
+      if (loadIssued) {
+        final restored = _confirmedQueue[_confirmedIndex];
+        if (restored.id.trim().isNotEmpty) {
+          _engine.load(restored.id.trim());
+        }
+      }
+    } else {
+      // Nothing was ever confirmed — don't leave a non-playing track in the
+      // mini-player; clear it so only the error surfaces.
+      _queue        = [];
+      _currentIndex = -1;
+    }
+    notifyListeners();
+    _reportPlaybackFailure(track);
+  }
+
+  /// Best-effort playback-failure signal (existing reporting path). Safe no-op
+  /// when there is nothing resolvable to report.
+  void _reportPlaybackFailure(Track track) {
+    debugPrint('[PlaybackCtrl] Playback failure for "${track.title}" '
+        '(videoId="${track.id}", deezerTrackId=${track.deezerTrackId})');
+    // Eager legacy tracks carry no catalog UUID here, so there is no normalized
+    // report endpoint to call without a resolve; kept as a safe extension point.
   }
 
   Future<void> playQueue(List<Track> tracks, {int index = 0}) async {
