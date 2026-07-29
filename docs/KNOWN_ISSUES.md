@@ -411,6 +411,26 @@
 
 ---
 
+### ISSUE-035 — Cross-user follower count can lag when the API cache is stale (>0 case)
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Artist / Follow · **First Observed**: 2026-07-29 (Phase 3.3.2)
+
+**Description**: The follower pill reconciles against local follow state (`max(base+delta, isFollowing?1:0)`), which fixes the user's own follow showing "0 Followers" while followed (the Drake case). But if the paax-api cached count is stale at a value **> 0** that excludes the user (e.g. cache 1000, real 1001) and the follow happened in a prior session (no in-session delta), the pill shows 1000, not 1001 — off by one until the API cache refreshes. Invisible at scale. Related to ISSUE-031.
+
+**Workaround**: None needed for the reported symptom; self-corrects when the paax-api artist cache refreshes/expires.
+
+---
+
+### ISSUE-036 — Re-cuing a *paused* confirmed track after a failed valid video may briefly blip
+
+**Status**: 🟡 Workaround Available · **Severity**: Low · **Affected Area**: Player · **First Observed**: 2026-07-29 (Phase 3.3.2)
+
+**Description**: On the rare error path where the confirmed track was **paused** and the user taps a **valid-but-unavailable** video, the rollback re-cues the confirmed track via the engine's `load()` (which auto-plays), then immediately pauses — so the paused track may audibly blip for a moment. The common case (empty-id track, e.g. JACKBOYS "CHAMPAIN & VAC…") does **not** re-cue at all (the engine is never touched), so it has no blip. Avoiding the blip would require a non-autoplay `cue` path in the engine, which is out of scope for this patch ("do not change the playback engine").
+
+**Workaround**: None; brief and rare. A `cue`-based re-cue is a possible future enhancement. **Needs on-device confirmation** (audio).
+
+---
+
 ## ✅ Resolved Issues
 
 *(None resolved yet — this log was seeded on 2026-07-16.)*

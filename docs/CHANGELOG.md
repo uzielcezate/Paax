@@ -26,6 +26,43 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.3.2 — Player rollback + Drake follower consistency (2026-07-29)
+
+A small, focused stabilization patch for two remaining device-confirmed issues.
+No new features / UI / engine / schema changes. **Frontend only — no backend
+change, no Railway redeploy.** No DB mutation (verified read-only).
+
+- **Fixed — player UI inconsistent after a failed track (issue 1).** After the
+  3.3.1 rollback, tapping an invalid track (JACKBOYS 2 "CHAMPAIN & VAC…", empty
+  videoId) correctly showed the error and kept the previous track, but the
+  play/pause icon and progress became incoherent (Play shown while the previous
+  audio was still sounding). Root cause: the rollback restored track **identity**
+  only — `_playCurrent` reset `isPlaying/position/duration` and `_failPlayback`
+  left `isPlaying=false`, and `playingStream` never re-asserted (no state change).
+  Fix: an **atomic confirmed-playback snapshot** (queue, index, isPlaying,
+  position, duration) captured from a dedicated confirmed store (updated only
+  while not loading, so a superseded in-flight transaction can't corrupt it) and
+  restored fully on failure; the empty-id path never touches the engine or the
+  confirmed track's state, and the error path re-cues it (reload + seek + restore
+  play/pause). Persistent engine listeners are gated during a transaction so a
+  stale event from the failing video can't overwrite the restored state; the
+  generation token still discards superseded transactions. +6 playback tests.
+- **Fixed — Drake follower count stuck at 0 (issue 2).** Read-only production
+  inspection found the DB is **correct** — the canonical Drake row
+  (`deezer_id 246791`) has `platform_followers_count = 1 = COUNT(user_followed_artists)`
+  (trigger agrees); the four other "Drake" rows are distinct Deezer artists (no
+  merge). The bug is a **stale paax-api Redis response**: `/v2/artists/deezer/246791`
+  returns `platformFollowersCount = 0` (`X-Cache: hit`) because follows are
+  written Flutter→Supabase and never invalidate the API cache (24h TTL), and
+  Drake was followed in a prior session so no in-session delta masked the stale
+  0. No data mutation needed. Fix: the header pill reconciles the count against
+  the live local follow state — `max((base + delta) clamped ≥ 0, isFollowing ? 1 : 0)`
+  — so a stale cached 0 never shows "0 Followers" while the user follows, without
+  double-counting a fresh count that already includes them. +6 tests.
+- **Tests** — `flutter analyze` 0 errors; **66 unit tests** (playback rollback +
+  follower reconciliation). Adversarial review; H1 (confirmed-store) + M2
+  (duration) fixed. **Audible playback still requires manual on-device QA.**
+
 ### Phase 3.3.1 — Catalog integration stabilization (2026-07-27)
 
 Regression-fix phase after Phase 3.3, addressing **four defects confirmed on a
