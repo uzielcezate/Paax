@@ -98,6 +98,36 @@ void main() {
     });
   });
 
+  group('reconcileFollowerCount (3.3.2 issue 2 — Drake stale-cache)', () {
+    test('stale base 0 while following shows 1, not 0 (Drake)', () {
+      // DB=1 but paax-api cache returned 0; user follows, no in-session toggle.
+      expect(reconcileFollowerCount(0, 0, isFollowing: true), 1);
+    });
+
+    test('not following, base 0 → 0', () {
+      expect(reconcileFollowerCount(0, 0, isFollowing: false), 0);
+    });
+
+    test('follow moves 0 → 1 exactly once (delta +1)', () {
+      expect(reconcileFollowerCount(0, 1, isFollowing: true), 1);
+    });
+
+    test('fresh count already includes the user → no double count', () {
+      expect(reconcileFollowerCount(1, 0, isFollowing: true), 1);
+      expect(reconcileFollowerCount(100, 0, isFollowing: true), 100);
+    });
+
+    test('unfollow decrements once, never below zero', () {
+      expect(reconcileFollowerCount(1, -1, isFollowing: false), 0);
+      expect(reconcileFollowerCount(0, -1, isFollowing: false), 0);
+      expect(reconcileFollowerCount(100, -1, isFollowing: false), 99);
+    });
+
+    test('re-follow after unfollow returns to floor', () {
+      expect(reconcileFollowerCount(0, 0, isFollowing: true), 1);
+    });
+  });
+
   group('formatFollowers (§6 singular/plural)', () {
     test('zero / one / many', () {
       expect(formatFollowers(0), '0 Followers');

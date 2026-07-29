@@ -418,14 +418,24 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                   ),
                                 );
                                 // Baseline = server-truth platform count when
-                                // known, else 0 (the delta still reflects the
-                                // user's own follow). Never the Deezer fan count.
+                                // known, else 0. Never the Deezer fan count.
                                 final base = _followBaselineCount ??
                                     artist.platformFollowers ??
                                     0;
-                                final count =
-                                    (base + _sessionFollowDelta).clamp(0, 1 << 31);
-                                return pill(formatFollowers(count));
+                                // Phase 3.3.2 issue 2: reconcile against the live
+                                // local follow state so a STALE cached count of 0
+                                // (Drake: DB=1 but paax-api cache=0) can never show
+                                // "0 Followers" while the user follows the artist.
+                                return Consumer<LibraryController>(
+                                  builder: (context, lib, _) {
+                                    final following =
+                                        lib.isArtistFollowed(_resolvedArtistId);
+                                    final count = reconcileFollowerCount(
+                                        base, _sessionFollowDelta,
+                                        isFollowing: following);
+                                    return pill(formatFollowers(count));
+                                  },
+                                );
                               },
                             ),
                           ],
