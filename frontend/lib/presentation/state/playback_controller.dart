@@ -109,6 +109,9 @@ class PlaybackController extends ChangeNotifier {
     Duration lastEmittedPosition = Duration.zero;
 
     _engine.completionStream.listen((_) {
+      // Ignore completion while a new-track transaction is resolving — a failing
+      // load's stray "ended" must not advance the queue (Phase 3.3.2 issue 1).
+      if (_isLoadingTrack) return;
       if (_loopMode == LoopMode.one) {
         seek(Duration.zero);
         _engine.play();
@@ -119,6 +122,9 @@ class PlaybackController extends ChangeNotifier {
 
     _engine.positionStream.listen((p) {
       if (_isScrubbing) return;
+      // During a transaction the engine is loading/failing a DIFFERENT video;
+      // its position must not overwrite the confirmed track's (issue 1).
+      if (_isLoadingTrack) return;
       final now = DateTime.now();
       if (now.difference(lastUpdate).inMilliseconds < 250) return;
       if (p < lastEmittedPosition && (lastEmittedPosition - p).inSeconds < 2) return;
@@ -129,6 +135,7 @@ class PlaybackController extends ChangeNotifier {
     });
 
     _engine.durationStream.listen((d) {
+      if (_isLoadingTrack) return; // transaction-owned; don't clobber confirmed
       if (_duration != d) {
         _duration = d;
         durationNotifier.value = d;
@@ -142,9 +149,11 @@ class PlaybackController extends ChangeNotifier {
     });
 
     _engine.playingStream.listen((playing) {
-      // While a new track is loading, ignore a stale "playing" event from the
-      // previous video so we never show the not-yet-confirmed track as playing.
-      if (playing && _isLoadingTrack) return;
+      // While a new-track transaction is resolving, ignore ALL playing/paused
+      // events — they belong to the loading/failing video, not the confirmed
+      // track. Once the transaction confirms or rolls back, events flow again
+      // and reflect the confirmed track (Phase 3.3.2 issue 1).
+      if (_isLoadingTrack) return;
       if (_isPlaying != playing) {
         _isPlaying = playing;
         // Pass current position so the notification doesn't reset to 00:00 on pause
@@ -266,21 +275,34 @@ class PlaybackController extends ChangeNotifier {
     final track = _queue[_currentIndex];
     final videoId = track.id.trim();
 
-    _errorMessage    = null;
-    _position        = Duration.zero;
-    _duration        = Duration.zero;
-    positionNotifier.value = Duration.zero;
-    durationNotifier.value = Duration.zero;
+    // Atomic snapshot of the CURRENT confirmed playback state, captured BEFORE
+    // any mutation so a failed attempt restores it exactly (Phase 3.3.2 issue 1).
+    final snap = _PlaybackSnapshot(
+      queue: List<Track>.from(_confirmedQueue),
+      index: _confirmedIndex,
+      isPlaying: _isPlaying,
+      position: _position,
+      duration: _duration,
+    );
+
+    _errorMessage = null;
 
     // Eager legacy path: Track.id IS the videoId. An empty id means this track
-    // has no playable match — do NOT switch to it (the previous track's audio
-    // is still playing); restore the confirmed track and surface the error.
+    // has no playable match — do NOT touch the engine or the confirmed track's
+    // state (its audio keeps playing); restore the full snapshot and show error.
     if (videoId.isEmpty) {
-      _failPlayback(myGen, track, loadIssued: false);
+      _failPlayback(myGen, track, snap, loadIssued: false);
       return;
     }
 
-    // Show the pending track as LOADING (not playing) — responsive but truthful.
+    // Non-empty: a new video will be loaded. Reset transient progress and show
+    // the pending track as LOADING (not playing). While _isLoadingTrack is true
+    // the persistent engine listeners are gated, so the failing video's events
+    // can't corrupt the confirmed state.
+    _position = Duration.zero;
+    _duration = Duration.zero;
+    positionNotifier.value = Duration.zero;
+    durationNotifier.value = Duration.zero;
     _isLoadingTrack = true;
     _isPlaying      = false;
     notifyListeners();
@@ -299,7 +321,7 @@ class PlaybackController extends ChangeNotifier {
     if (!started) {
       // The load WAS issued (engine now holds this failed video), so restoring
       // must also re-cue the confirmed track's audio, not just its metadata.
-      _failPlayback(myGen, track, loadIssued: true);
+      _failPlayback(myGen, track, snap, loadIssued: true);
       return;
     }
 
@@ -369,37 +391,71 @@ class PlaybackController extends ChangeNotifier {
     return completer.future;
   }
 
-  /// Playback failed for [track]: never present it as playing; restore the last
-  /// confirmed track state (its audio may still be running) and show the safe
-  /// retryable message. Best-effort failure report.
-  void _failPlayback(int myGen, Track track, {required bool loadIssued}) {
+  /// Playback failed for [failed]: never present it as playing. Restore the FULL
+  /// confirmed playback snapshot ([snap]) — track identity, play/pause state,
+  /// position and duration — so a failed attempt has no observable effect on the
+  /// confirmed track except the error message (Phase 3.3.2 issue 1). Best-effort
+  /// failure report.
+  void _failPlayback(int myGen, Track failed, _PlaybackSnapshot snap,
+      {required bool loadIssued}) {
     if (myGen != _playGeneration) return;
     _isLoadingTrack = false;
-    _isPlaying      = false;
     _errorMessage   = 'Unable to play this track';
-    if (_confirmedIndex >= 0 && _confirmedIndex < _confirmedQueue.length) {
-      // Restore the previously-confirmed track.
-      _queue        = List.from(_confirmedQueue);
-      _currentIndex = _confirmedIndex;
-      // If a load was actually issued for the failed track, the engine now holds
-      // that video (the confirmed track's audio was interrupted). Re-cue the
-      // confirmed track so the engine matches the restored metadata instead of
-      // silently holding the failed video. (Empty-id path never loaded, so the
-      // confirmed track is still playing and needs no reload.)
+
+    if (snap.index >= 0 && snap.index < snap.queue.length) {
+      // Atomic restore of the confirmed state.
+      _queue         = List.from(snap.queue);
+      _currentIndex  = snap.index;
+      _confirmedQueue = List.from(snap.queue);
+      _confirmedIndex = snap.index;
+      _isPlaying     = snap.isPlaying;
+      _position      = snap.position;
+      _duration      = snap.duration;
+      positionNotifier.value = snap.position;
+      durationNotifier.value = snap.duration;
+
       if (loadIssued) {
-        final restored = _confirmedQueue[_confirmedIndex];
-        if (restored.id.trim().isNotEmpty) {
-          _engine.load(restored.id.trim());
+        // A load was issued for the failed track, so the engine replaced the
+        // confirmed track's video. Re-cue it and restore position + play state
+        // so engine and controller agree (empty-id path never loaded, so the
+        // confirmed track is still playing untouched and needs no reload).
+        final restored = snap.queue[snap.index];
+        final rid = restored.id.trim();
+        if (rid.isNotEmpty) {
+          // ignore: discarded_futures
+          _recueConfirmed(rid, snap.position, snap.isPlaying);
         }
       }
     } else {
-      // Nothing was ever confirmed — don't leave a non-playing track in the
-      // mini-player; clear it so only the error surfaces.
+      // Nothing was ever confirmed — clear so only the error surfaces.
       _queue        = [];
       _currentIndex = -1;
+      _confirmedQueue = [];
+      _confirmedIndex = -1;
+      _isPlaying    = false;
+      _position     = Duration.zero;
+      _duration     = Duration.zero;
+      positionNotifier.value = Duration.zero;
+      durationNotifier.value = Duration.zero;
     }
     notifyListeners();
-    _reportPlaybackFailure(track);
+    _reportPlaybackFailure(failed);
+  }
+
+  /// Re-cue the confirmed track after its video was interrupted by a failed
+  /// load: reload, seek to the prior position, and restore the play/pause state.
+  Future<void> _recueConfirmed(String videoId, Duration position, bool wasPlaying) async {
+    try {
+      await _engine.load(videoId);
+      if (position > Duration.zero) {
+        await _engine.seek(position);
+      }
+      if (!wasPlaying) {
+        await _engine.pause();
+      }
+    } catch (_) {
+      // Best-effort — the persistent listeners will reconcile from engine events.
+    }
   }
 
   /// Best-effort playback-failure signal (existing reporting path). Safe no-op
@@ -534,5 +590,22 @@ class PlaybackController extends ChangeNotifier {
     _engine.dispose();
     super.dispose();
   }
+}
+
+/// An atomic snapshot of the confirmed playback state, used to roll back after a
+/// failed play attempt (Phase 3.3.2 issue 1).
+class _PlaybackSnapshot {
+  final List<Track> queue;
+  final int index;
+  final bool isPlaying;
+  final Duration position;
+  final Duration duration;
+  const _PlaybackSnapshot({
+    required this.queue,
+    required this.index,
+    required this.isPlaying,
+    required this.position,
+    required this.duration,
+  });
 }
 
