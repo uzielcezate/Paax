@@ -127,7 +127,8 @@ void main() {
     expect(e.loads, ['vidA']); // B never issued a load
     expect(c.currentTrack?.id, 'vidA'); // restored to the still-playing track
     expect(c.currentTrack?.title, 'A');
-    expect(c.isPlaying, isFalse);
+    // A was confirmed (load autoplays) → restored as PLAYING, not paused (H1).
+    expect(c.isPlaying, isTrue);
     expect(c.errorMessage, 'Unable to play this track');
   });
 
@@ -278,6 +279,30 @@ void main() {
     await cc;
     expect(c.currentTrack?.id, 'vidC');
     expect(c.errorMessage, isNull);
+  });
+
+  test('rapid A → slow B → C-fail restores A at its CONFIRMED playing state (H1)',
+      () async {
+    // Regression for the review H1: the rollback snapshot must come from the
+    // confirmed store, not the live fields that an in-flight B already zeroed.
+    final e = FakeEngine();
+    final c = await _playing(e, _track('vidA', title: 'A'));
+    expect(c.isPlaying, isTrue);
+
+    // B starts loading (zeroes live isPlaying/position) but never confirms…
+    final bFut = c.playQueue([_track('vidB', title: 'B')]);
+    await _pump();
+    // …then C supersedes B and fails.
+    final cFut = c.playQueue([_track('vidC', title: 'C')]);
+    await _pump();
+    e.emitError(150);
+    await Future.wait([bFut, cFut]);
+
+    // A restored as the confirmed PLAYING track (not paused at 0:00).
+    expect(c.currentTrack?.id, 'vidA');
+    expect(c.isPlaying, isTrue);
+    expect(c.errorMessage, 'Unable to play this track');
+    expect(e.loads.last, 'vidA'); // re-cued
   });
 
   test('auto-advance skips an unplayable (empty-id) track mid-queue', () async {

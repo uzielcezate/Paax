@@ -41,6 +41,12 @@ class PlaybackController extends ChangeNotifier {
   int _playGeneration = 0;
   List<Track> _confirmedQueue = [];
   int _confirmedIndex = -1;
+  // Confirmed playback state, updated by the engine listeners only while NOT in
+  // a transaction, so the rollback snapshot never captures a loading track's
+  // zeroed transient state (Phase 3.3.2 issue 1 / review H1).
+  bool _confirmedIsPlaying = false;
+  Duration _confirmedPosition = Duration.zero;
+  Duration _confirmedDuration = Duration.zero;
 
   // Getters
   List<Track> get queue => _queue;
@@ -132,20 +138,23 @@ class PlaybackController extends ChangeNotifier {
       lastEmittedPosition = p;
       positionNotifier.value = p;
       _position = p;
+      _confirmedPosition = p; // keep the confirmed snapshot source current
     });
 
     _engine.durationStream.listen((d) {
-      if (_isLoadingTrack) return; // transaction-owned; don't clobber confirmed
+      // NOT gated (review M2): duration is emitted once, on the playing state;
+      // gating could drop it forever if it lands during a load. A duration for
+      // the loading video is harmless (overwritten on confirm/rollback), but we
+      // only advance the CONFIRMED store when not in a transaction.
       if (_duration != d) {
         _duration = d;
         durationNotifier.value = d;
-        // Dynamically update the notification's MediaItem with the real duration
-        // reported by the WebView (fixes static progress bar when track.duration was 0)
         if (d > Duration.zero) {
           updateMediaSessionDuration(d);
         }
         notifyListeners();
       }
+      if (!_isLoadingTrack) _confirmedDuration = d;
     });
 
     _engine.playingStream.listen((playing) {
@@ -154,6 +163,7 @@ class PlaybackController extends ChangeNotifier {
       // track. Once the transaction confirms or rolls back, events flow again
       // and reflect the confirmed track (Phase 3.3.2 issue 1).
       if (_isLoadingTrack) return;
+      _confirmedIsPlaying = playing; // keep the confirmed snapshot source current
       if (_isPlaying != playing) {
         _isPlaying = playing;
         // Pass current position so the notification doesn't reset to 00:00 on pause
@@ -275,14 +285,15 @@ class PlaybackController extends ChangeNotifier {
     final track = _queue[_currentIndex];
     final videoId = track.id.trim();
 
-    // Atomic snapshot of the CURRENT confirmed playback state, captured BEFORE
-    // any mutation so a failed attempt restores it exactly (Phase 3.3.2 issue 1).
+    // Atomic snapshot of the CONFIRMED playback state (NOT the live fields — a
+    // superseded in-flight transaction may have already zeroed those; review H1)
+    // so a failed attempt restores the confirmed track exactly (issue 1).
     final snap = _PlaybackSnapshot(
       queue: List<Track>.from(_confirmedQueue),
       index: _confirmedIndex,
-      isPlaying: _isPlaying,
-      position: _position,
-      duration: _duration,
+      isPlaying: _confirmedIsPlaying,
+      position: _confirmedPosition,
+      duration: _confirmedDuration,
     );
 
     _errorMessage = null;
@@ -325,9 +336,13 @@ class PlaybackController extends ChangeNotifier {
       return;
     }
 
-    // Confirmed: the iframe accepted and started the new video. Commit it.
+    // Confirmed: the iframe accepted and started the new video. Commit it and
+    // seed the confirmed store (load() autoplays; duration fills in shortly).
     _confirmedQueue = List.from(_queue);
     _confirmedIndex = _currentIndex;
+    _confirmedIsPlaying = true;
+    _confirmedPosition = Duration.zero;
+    _confirmedDuration = _duration;
     _isLoadingTrack = false;
 
     for (final id in _upcomingTrackIds(count: 1)) {
@@ -403,7 +418,7 @@ class PlaybackController extends ChangeNotifier {
     _errorMessage   = 'Unable to play this track';
 
     if (snap.index >= 0 && snap.index < snap.queue.length) {
-      // Atomic restore of the confirmed state.
+      // Atomic restore of the confirmed state (live + confirmed store).
       _queue         = List.from(snap.queue);
       _currentIndex  = snap.index;
       _confirmedQueue = List.from(snap.queue);
@@ -411,6 +426,9 @@ class PlaybackController extends ChangeNotifier {
       _isPlaying     = snap.isPlaying;
       _position      = snap.position;
       _duration      = snap.duration;
+      _confirmedIsPlaying = snap.isPlaying;
+      _confirmedPosition  = snap.position;
+      _confirmedDuration  = snap.duration;
       positionNotifier.value = snap.position;
       durationNotifier.value = snap.duration;
 
@@ -435,6 +453,9 @@ class PlaybackController extends ChangeNotifier {
       _isPlaying    = false;
       _position     = Duration.zero;
       _duration     = Duration.zero;
+      _confirmedIsPlaying = false;
+      _confirmedPosition  = Duration.zero;
+      _confirmedDuration  = Duration.zero;
       positionNotifier.value = Duration.zero;
       durationNotifier.value = Duration.zero;
     }
