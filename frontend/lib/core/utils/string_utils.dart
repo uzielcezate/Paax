@@ -124,6 +124,24 @@ String formatFans(int fans) {
   return '$m M Fans';
 }
 
+/// Reconciles the displayed Paax follower count (Phase 3.3.2 issue 2).
+///
+/// `base` is the server-truth count (may be stale in the paax-api cache — e.g.
+/// cached at 0 before the user's follow, which is written Flutter→Supabase and
+/// never invalidates the API cache). `delta` is the in-session follow/unfollow
+/// adjustment. `isFollowing` is the authoritative local follow state.
+///
+/// The result is `max((base + delta) clamped ≥ 0, isFollowing ? 1 : 0)`: it can
+/// never drop below the user's own follow, so a stale cached `0` while the user
+/// follows shows **1**, not 0 — while never double-counting a fresh count that
+/// already includes the user.
+int reconcileFollowerCount(int base, int delta, {required bool isFollowing}) {
+  final adjusted = base + delta;
+  final floor = isFollowing ? 1 : 0;
+  final clamped = adjusted < 0 ? 0 : adjusted;
+  return clamped < floor ? floor : clamped;
+}
+
 /// Formats a Paax **platform follower** count with correct singular/plural
 /// (Phase 3.3 §6). Unlike [formatFans] (external Deezer fans), this represents
 /// real Paax users who follow the artist.
