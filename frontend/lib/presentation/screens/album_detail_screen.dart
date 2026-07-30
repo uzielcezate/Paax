@@ -102,6 +102,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             _resolvedArtists = enriched.artists;
           });
         }
+        // Phase 3.3.4: load authoritative per-track credits from the normalized
+        // catalog PROGRESSIVELY (off the album-open path) and update the track
+        // subtitles when they arrive — so every album (not just played ones)
+        // shows real collaborators, reliably, without slowing the album open.
+        _enrichCreditsFromCatalog(enriched);
         return enriched;
       });
     }
@@ -120,6 +125,27 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Background progressive credit enrichment (Phase 3.3.4). Fetches the
+  /// authoritative per-track credits from the normalized catalog (one batched
+  /// request; keeps each track's playback videoId) and updates the visible
+  /// subtitles when they arrive. The repository owns the coverage-aware retry
+  /// (it retries only a partially-ingested album, never a not-in-catalog one),
+  /// so the screen just awaits one result and applies it once.
+  Future<void> _enrichCreditsFromCatalog(SavedAlbum album) async {
+    SavedAlbum next;
+    try {
+      next = await _repository.enrichAlbumCredits(album);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    if (identical(next, album)) return; // no credits to apply
+    setState(() {
+      _detailsFuture = Future.value(next);
+      _resolvedArtists = next.artists;
+    });
   }
 
   /// Cross-reference album tracks with the playback queue to get richer artist
