@@ -773,28 +773,62 @@ class MusicRepositoryImpl implements MusicRepository {
     final deezerId = int.tryParse(album.albumId);
     if (deezerId == null) return album;
 
-    final creditMap = await _fetchAlbumTrackCredits(deezerId);
-    if (creditMap.isEmpty) return album;
+    var currentTracks = tracks;
+    var changedOverall = false;
 
-    var changed = false;
-    final enriched = tracks.map((t) {
-      final next = _applyTrackCredits(t, creditMap);
-      if (!identical(next, t)) changed = true;
-      return next;
-    }).toList();
-    return changed ? album.copyWith(tracks: enriched) : album;
+    // Up to 2 passes. A partial-ingest album may finish normalizing just after
+    // the first read, so we retry ONLY when (a) the catalog returned a payload —
+    // the album IS normalized, so more track_artists rows may still land — AND
+    // (b) some tracks remain uncovered. We never pay a second pass for a
+    // not-in-catalog album (a retry can't help) nor for a fully-resolved one
+    // (nothing left to gain), which is why not-in-catalog albums no longer cost
+    // two full normalized round-trips.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final result = await _fetchAlbumTrackCredits(deezerId);
+      if (result.credits.isNotEmpty) {
+        var changed = false;
+        final enriched = currentTracks.map((t) {
+          final next = _applyTrackCredits(t, result.credits);
+          if (!identical(next, t)) changed = true;
+          return next;
+        }).toList();
+        if (changed) {
+          currentTracks = enriched;
+          changedOverall = true;
+        }
+      }
+
+      // Is every track represented in the normalized graph yet?
+      final covered = currentTracks.where((t) {
+        final dz = _asInt(t.deezerTrackId);
+        return dz != null && result.credits.containsKey(dz);
+      }).length;
+      final fullyCovered = covered >= currentTracks.length;
+
+      if (attempt == 0 && result.hadPayload && !fullyCovered) {
+        await Future.delayed(const Duration(seconds: 2));
+        continue;
+      }
+      break;
+    }
+    return changedOverall ? album.copyWith(tracks: currentTracks) : album;
   }
 
   /// Per-track visible credits from the normalized album (Supabase
-  /// track_artists), keyed by Deezer track id. Best-effort — empty on failure.
-  /// Generously bounded because it runs off the album-open critical path.
-  Future<Map<int, List<Map<String, String>>>> _fetchAlbumTrackCredits(int deezerId) async {
+  /// track_artists), keyed by Deezer track id. Best-effort. `hadPayload`
+  /// distinguishes "album is in the normalized catalog but a track's credits
+  /// aren't ingested yet" (retry may help) from "album not normalized at all"
+  /// (retry is pointless). Generously bounded — runs off the album-open path.
+  Future<({Map<int, List<Map<String, String>>> credits, bool hadPayload})>
+      _fetchAlbumTrackCredits(int deezerId) async {
     final out = <int, List<Map<String, String>>>{};
+    var hadPayload = false;
     try {
       final norm = await _dataSource
           .getAlbumNormalizedByDeezerId(deezerId)
           .timeout(const Duration(seconds: 12));
-      if (norm == null) return out;
+      if (norm == null) return (credits: out, hadPayload: false);
+      hadPayload = true;
       for (final t in (norm['tracks'] as List? ?? [])) {
         if (t is! Map) continue;
         final tm = t.cast<String, dynamic>();
@@ -806,7 +840,7 @@ class MusicRepositoryImpl implements MusicRepository {
     } catch (err) {
       debugPrint('[Repo] normalized album credits error: $err');
     }
-    return out;
+    return (credits: out, hadPayload: hadPayload);
   }
 
   /// Overlay resolved per-track credits onto a legacy track (keeps its videoId).
@@ -815,6 +849,12 @@ class MusicRepositoryImpl implements MusicRepository {
     if (dz == null) return track;
     final credits = creditMap[dz];
     if (credits == null || credits.isEmpty) return track;
+    // Max-wins: never DOWNGRADE a track that already carries richer credits —
+    // e.g. play-queue enrichment from a YouTube search result that listed every
+    // collaborator. Only overlay when the normalized graph is at least as
+    // complete, so a partial ingest can't drop a collaborator we already show.
+    final existing = track.artists?.length ?? 0;
+    if (credits.length < existing) return track;
     return track.copyWith(
       artists: credits,
       artistName: credits.map((a) => a['name']).whereType<String>().join(', '),

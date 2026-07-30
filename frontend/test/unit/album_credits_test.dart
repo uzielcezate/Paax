@@ -24,6 +24,23 @@ class _FakeDS extends YouTubeMusicDataSource {
   }
 }
 
+/// Fake that returns a different payload per call (to simulate a partial album
+/// whose ingest completes between the first and second normalized read).
+class _SequenceDS extends YouTubeMusicDataSource {
+  final Map<int, List<Map<String, dynamic>?>> responses;
+  int normalizedCalls = 0;
+  _SequenceDS(this.responses);
+
+  @override
+  Future<Map<String, dynamic>?> getAlbumNormalizedByDeezerId(int deezerId) async {
+    normalizedCalls++;
+    final seq = responses[deezerId];
+    if (seq == null || seq.isEmpty) return null;
+    // Dequeue; the last entry repeats for any further calls.
+    return seq.length == 1 ? seq.first : seq.removeAt(0);
+  }
+}
+
 Track _legacyTrack(String title, int deezerTrackId, String videoId) => Track(
       id: videoId, // playback videoId
       title: title,
@@ -114,8 +131,8 @@ void main() {
     expect(byTitle['collab']!.displayArtist, 'Bad Bunny, Dei V');
   });
 
-  test('no normalized data → album unchanged (graceful fallback)', () async {
-    final ds = _FakeDS({}); // no normalized album
+  test('no normalized data → album unchanged, and NOT retried', () async {
+    final ds = _FakeDS({}); // no normalized album (not in catalog)
     final repo = MusicRepositoryImpl(dataSource: ds);
     final album = SavedAlbum(
       albumId: '999', title: 'x', artistName: 'A', artworkUrl: '',
@@ -123,5 +140,76 @@ void main() {
     );
     final out = await repo.enrichAlbumCredits(album);
     expect(identical(out, album), isTrue); // unchanged
+    // A not-in-catalog album must not pay a second wasteful normalized fetch.
+    expect(ds.normalizedCalls, 1);
+  });
+
+  test('does NOT downgrade a track that already has richer credits', () async {
+    // Normalized graph is LESS complete (2) than what the play queue already
+    // gave the track (3). Max-wins: the 3rd collaborator must survive.
+    final ds = _FakeDS({
+      42: {
+        'tracks': [
+          _normTrack(500, [_artist('Skrillex', 1), _artist('Young Miko', 2)]),
+        ],
+      },
+    });
+    final repo = MusicRepositoryImpl(dataSource: ds);
+    final album = SavedAlbum(
+      albumId: '42', title: 'SOMA', artistName: 'Skrillex', artworkUrl: '',
+      tracks: [
+        Track(
+          id: 'vid1', title: 'played', artistName: 'Skrillex, Young Miko, Zedd',
+          albumId: '42', albumTitle: 'SOMA', artworkUrl: '', duration: 1,
+          deezerTrackId: '500',
+          artists: const [
+            {'name': 'Skrillex', 'id': '1'},
+            {'name': 'Young Miko', 'id': '2'},
+            {'name': 'Zedd', 'id': '3'},
+          ],
+        ),
+      ],
+    );
+    final out = await repo.enrichAlbumCredits(album);
+    // No downgrade → album is returned unchanged (the richer queue credits win).
+    expect(identical(out, album), isTrue);
+    expect(out.tracks!.first.displayArtist, 'Skrillex, Young Miko, Zedd');
+  });
+
+  test('partial ingest resolves on the coverage-aware retry', () async {
+    // First read covers only 1 of 2 tracks; the second (post-ingest) covers both.
+    final ds = _SequenceDS({
+      77: [
+        {
+          'tracks': [
+            _normTrack(801, [_artist('A', 1), _artist('B', 2)]), // track 1 ready
+            // track 2 (802) not ingested yet
+          ],
+        },
+        {
+          'tracks': [
+            _normTrack(801, [_artist('A', 1), _artist('B', 2)]),
+            _normTrack(802, [_artist('A', 1), _artist('C', 2)]), // now ready
+          ],
+        },
+      ],
+    });
+    final repo = MusicRepositoryImpl(dataSource: ds);
+    final album = SavedAlbum(
+      albumId: '77', title: 'p', artistName: 'A', artworkUrl: '',
+      tracks: [
+        Track(id: 'v1', title: 't1', artistName: 'A', albumId: '77',
+            albumTitle: '', artworkUrl: '', duration: 1, deezerTrackId: '801',
+            artists: const [{'name': 'A', 'id': '0'}]),
+        Track(id: 'v2', title: 't2', artistName: 'A', albumId: '77',
+            albumTitle: '', artworkUrl: '', duration: 1, deezerTrackId: '802',
+            artists: const [{'name': 'A', 'id': '0'}]),
+      ],
+    );
+    final out = await repo.enrichAlbumCredits(album);
+    final byTitle = {for (final t in out.tracks!) t.title: t};
+    expect(byTitle['t1']!.displayArtist, 'A, B');
+    expect(byTitle['t2']!.displayArtist, 'A, C'); // filled in by the retry
+    expect(ds.normalizedCalls, 2); // exactly one retry
   });
 }

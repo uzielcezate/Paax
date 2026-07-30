@@ -130,33 +130,22 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   /// Background progressive credit enrichment (Phase 3.3.4). Fetches the
   /// authoritative per-track credits from the normalized catalog (one batched
   /// request; keeps each track's playback videoId) and updates the visible
-  /// subtitles when they arrive. A single delayed retry catches an album whose
-  /// backend normalization refresh completes just after the first read.
+  /// subtitles when they arrive. The repository owns the coverage-aware retry
+  /// (it retries only a partially-ingested album, never a not-in-catalog one),
+  /// so the screen just awaits one result and applies it once.
   Future<void> _enrichCreditsFromCatalog(SavedAlbum album) async {
-    var current = album;
-    for (var attempt = 0; attempt < 2; attempt++) {
-      SavedAlbum next;
-      try {
-        next = await _repository.enrichAlbumCredits(current);
-      } catch (_) {
-        return;
-      }
-      if (!mounted) return;
-      if (!identical(next, current)) {
-        current = next;
-        setState(() {
-          _detailsFuture = Future.value(next);
-          _resolvedArtists = next.artists;
-        });
-        return; // credits applied — done
-      }
-      // No change (e.g. a partial album whose refresh is still ingesting) —
-      // wait briefly and try once more before giving up.
-      if (attempt == 0) {
-        await Future.delayed(const Duration(milliseconds: 2500));
-        if (!mounted) return;
-      }
+    SavedAlbum next;
+    try {
+      next = await _repository.enrichAlbumCredits(album);
+    } catch (_) {
+      return;
     }
+    if (!mounted) return;
+    if (identical(next, album)) return; // no credits to apply
+    setState(() {
+      _detailsFuture = Future.value(next);
+      _resolvedArtists = next.artists;
+    });
   }
 
   /// Cross-reference album tracks with the playback queue to get richer artist
