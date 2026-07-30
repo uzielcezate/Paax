@@ -26,6 +26,39 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.3.4 — Universal per-track artist credits across all albums (2026-07-30)
+
+Phase 3.3.3 fixed per-track credits for **SOMA** only because that album had been
+*played* (the play-queue enrichment carried its collaborators). Every unplayed
+album (att., DeBÍ TiRAR MáS FOToS) still collapsed each row to the album's primary
+artist. **Frontend only — no backend change, no Railway redeploy, no DB/schema
+change, no data repair** (verified read-only: att. 16/16, DeBÍ TiRAR MáS FOToS
+17/17, SOMA 13/13 tracks fully credited in Supabase, zero missing/duplicate rows).
+
+- **Fixed — per-track credits now resolve for every album, not just played ones.**
+  Root cause was *not* data or key mismatch: the 3.3.3 credit overlay ran inline on
+  the album-open path with a **2.5s timeout**, but the normalized
+  `/v2/albums/deezer/{id}` response for a 16-track album is ~3.2s even warm → it
+  timed out → empty credits → legacy album-primary fallback. SOMA escaped only via
+  play-queue enrichment. The overlay now runs **progressively, off the critical
+  path** (`enrichAlbumCredits`, 12s bound), so the album opens fast and subtitles
+  fill in shortly after — one batched normalized request per album (no N+1), keyed
+  by Deezer track id, keeping each track's legacy playback videoId.
+- **Fixed — normalized overlay could downgrade richer credits (max-wins).**
+  `_applyTrackCredits` now overlays only when the normalized graph is at least as
+  complete as the track's existing artists, so a partial ingest can't drop a
+  collaborator a played track already shows.
+- **Changed — coverage-aware retry moved into the repository.** A second normalized
+  read fires only when the catalog returned a payload *and* some tracks are still
+  uncovered (partial ingest); never for a not-in-catalog album nor a fully-resolved
+  one. Not-in-catalog albums no longer pay two wasteful 12s round-trips. Screen
+  enrichment collapsed to a single `mounted`-guarded `setState`.
+- **Unchanged:** album header still uses `album_artists`; playback path,
+  3.3.2 failed-track rollback, UI/typography untouched.
+- Tests: `test/unit/album_credits_test.dart` — generic att./Bad Bunny fixtures
+  (not SOMA), videoId preservation, batch=1, no-downgrade, partial-ingest retry.
+  97 unit tests pass (PR #74 → `1a08e57`).
+
 ### Phase 3.3.3 — Search relevance, progressive rendering, per-track credits (2026-07-30)
 
 Focused stabilization based on real Android QA. **Frontend only — no backend
