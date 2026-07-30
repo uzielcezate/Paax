@@ -689,15 +689,19 @@ class MusicRepositoryImpl implements MusicRepository {
   Future<SavedAlbum> getAlbum(String id) async {
     try {
       final deezerId = int.parse(id);
-      final e = await _dataSource.getAlbumV2(deezerId);
 
       // Phase 3.3.3 (issue 3/4): the legacy /v2/album payload only carries the
       // album's primary artist per track (Deezer's album tracklist omits
       // contributors), so every row collapsed to the album artist. Overlay the
       // real per-track credits from the normalized album (Supabase track_artists)
       // — keyed by Deezer track id — while KEEPING the legacy videoId for
-      // playback (Track.id). Best-effort: falls back to legacy on any error.
-      final creditMap = await _fetchAlbumTrackCredits(deezerId);
+      // playback (Track.id). Fetch both in PARALLEL so the credit overlay never
+      // adds serial latency to the album open (review H1); the overlay is
+      // best-effort and short-bounded, falling back to legacy on any error.
+      final legacyFuture = _dataSource.getAlbumV2(deezerId);
+      final creditFuture = _fetchAlbumTrackCredits(deezerId);
+      final e = await legacyFuture;
+      final creditMap = await creditFuture;
 
       // Map tracks from the album detail response
       final tracks = (e['tracks'] as List? ?? []).map((t) {
@@ -747,8 +751,10 @@ class MusicRepositoryImpl implements MusicRepository {
   Future<List<Track>> getAlbumTracks(String id) async {
     try {
       final deezerId = int.parse(id);
-      final e = await _dataSource.getAlbumV2(deezerId);
-      final creditMap = await _fetchAlbumTrackCredits(deezerId);
+      final legacyFuture = _dataSource.getAlbumV2(deezerId);
+      final creditFuture = _fetchAlbumTrackCredits(deezerId);
+      final e = await legacyFuture;
+      final creditMap = await creditFuture;
       return (e['tracks'] as List? ?? []).map((t) {
         try {
           return _applyTrackCredits(_mapTrackV2(t as Map<String, dynamic>), creditMap);
@@ -765,9 +771,11 @@ class MusicRepositoryImpl implements MusicRepository {
   Future<Map<int, List<Map<String, String>>>> _fetchAlbumTrackCredits(int deezerId) async {
     final out = <int, List<Map<String, String>>>{};
     try {
+      // Short bound: credits are an overlay, not the core content — never let a
+      // cold-ingest normalized fetch stall the album open (review H1).
       final norm = await _dataSource
           .getAlbumNormalizedByDeezerId(deezerId)
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(milliseconds: 2500));
       if (norm == null) return out;
       for (final t in (norm['tracks'] as List? ?? [])) {
         if (t is! Map) continue;

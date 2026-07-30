@@ -74,6 +74,17 @@ void main() {
       expect(_names(c), ['Skrillex']);
     });
 
+    test('unknown/unexpected role stays visible (denylist, review H2)', () {
+      // A role the backend might emit that is not on any allowlist must still
+      // show the artist — only known non-performing roles are hidden.
+      final c = TrackCredits.resolve([
+        {'name': 'Skrillex', 'role': 'main_artist', 'position': 1},
+        {'name': 'Guest', 'role': 'contributor', 'position': 2},
+        {'name': 'A Producer', 'role': 'producer', 'position': 3},
+      ]);
+      expect(_names(c), ['Skrillex', 'Guest']); // producer hidden; unknowns shown
+    });
+
     test('empty / malformed input → empty', () {
       expect(TrackCredits.resolve(const []), isEmpty);
       expect(TrackCredits.resolve([{'role': 'primary'}]), isEmpty); // no name

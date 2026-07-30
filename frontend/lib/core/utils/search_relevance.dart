@@ -74,9 +74,13 @@ class SearchRelevance {
       // Primary artist of exact-matching tracks/releases → high (capped).
       score += _capped(s.exactTracks, 3) * 50.0;
       score += _capped(s.exactAlbums, 3) * 45.0;
-      // Name match: high with context, medium without (context already added).
+      // Name match: an EXACT artist-name match is a strong identity signal (60)
+      // — enough that a single incidental same-titled song (one exact track = 50)
+      // does not override an artist literally named the query, while a major
+      // artist who is the primary of SEVERAL exact-matching tracks/releases
+      // (≥2 → ≥100) still wins (review M2). Prefix/token are weaker.
       if (exactName) {
-        score += 40;
+        score += 60;
       } else if (prefix) {
         score += 15;
       } else if (tokenCoverage) {

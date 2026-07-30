@@ -380,9 +380,9 @@ class _SearchScreenState extends State<SearchScreen> {
   List<Widget> _buildAllResultsSlivers(app_search.SearchController search) {
     // Phase 3.3.3 issue 1: the Top Result is the relevance-ranked artist (may be
     // derived from the primary artist of the strongest exact matches, e.g.
-    // Shakira for "Dai Dai"), falling back to the first artist result.
-    final topArtist = search.topResult ??
-        (search.artistResults.isNotEmpty ? search.artistResults.first : null);
+    // Shakira for "Dai Dai"). The controller owns the fallback, so the tile only
+    // ever shows a resolved artist (no wrong-artist flicker; review M3).
+    final topArtist = search.topResult;
     final railArtists = topArtist == null
         ? search.artistResults
         : search.artistResults.where((a) => a.id != topArtist.id).toList();

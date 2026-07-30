@@ -305,7 +305,13 @@ class SearchController extends ChangeNotifier {
           return;
         }
       }
-    } catch (_) {/* keep the screen's first-artist fallback */}
+    } catch (_) {/* fall through to the fallback */}
+    // Couldn't resolve the derived winner — fall back to the best available
+    // artist result so the Top Result slot isn't left empty (no wrong-artist
+    // flicker: the tile only ever shows a resolved artist; review M3).
+    if (gen == _gen && _topResult == null && _artistResults.isNotEmpty) {
+      _setTopResult(_artistResults.first, gen);
+    }
   }
 
   void _setTopResult(Artist artist, int gen) {

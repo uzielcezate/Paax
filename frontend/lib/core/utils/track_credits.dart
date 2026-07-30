@@ -18,10 +18,17 @@
 class TrackCredits {
   TrackCredits._();
 
-  // Roles considered visible performing credits.
-  static const Set<String> _performingRoles = {
-    'primary', 'main', 'featured', 'feat', 'performer', 'vocalist', 'artist', '',
+  // Roles that are NOT visible performing credits and must be hidden. Use a
+  // DENYLIST (not an allowlist) so an unexpected/new role from the backend
+  // degrades to "show the artist" rather than silently hiding everyone
+  // (review H2). The normalized track_artists vocabulary is
+  // primary/featured/producer/composer/remixer/performer/vocalist/other.
+  static const Set<String> _hiddenRoles = {
+    'producer', 'composer', 'writer', 'songwriter', 'lyricist',
+    'remixer', 'mixer', 'engineer', 'arranger', 'programmer',
   };
+
+  static bool _isPerforming(String role) => !_hiddenRoles.contains(role);
 
   static bool _isFeatured(String role) =>
       role == 'featured' || role == 'feat';
@@ -45,7 +52,7 @@ class TrackCredits {
       final name = (m['name']?.toString() ?? '').trim();
       if (name.isEmpty) continue;
       final role = (m['role']?.toString() ?? 'primary').toLowerCase().trim();
-      if (!_performingRoles.contains(role)) continue; // hide producers/etc.
+      if (!_isPerforming(role)) continue; // hide producers/composers/etc.
       final position = _asInt(m['position']) ?? (i + 1);
       final deezerId = _asInt(m['deezerId'] ?? m['deezer_id']);
       // A non-numeric `id` is a Supabase UUID; a numeric one is a Deezer id.

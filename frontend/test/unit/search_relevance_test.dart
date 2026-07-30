@@ -81,6 +81,32 @@ void main() {
       expect(ranked.first.name, 'Real Artist');
     });
 
+    test('exact artist name is not overridden by a single incidental song '
+        '(review M2)', () {
+      // Query "Stay": an artist literally named "Stay" (no context) beats an
+      // artist who happens to have ONE exact-titled song…
+      final one = SearchRelevance.rankArtists(
+        query: 'Stay',
+        tracks: [(title: 'Stay', artist: 'The Kid LAROI')],
+        albums: const [],
+        artists: [(name: 'Stay', followers: 100)],
+      );
+      expect(one.first.name, 'Stay'); // exact name (60) > 1 exact track (50)
+
+      // …but a major artist with SEVERAL exact-matching tracks still wins.
+      final many = SearchRelevance.rankArtists(
+        query: 'Stay',
+        tracks: [
+          (title: 'Stay', artist: 'Rihanna'),
+          (title: 'Stay', artist: 'Rihanna'),
+          (title: 'Stay', artist: 'Rihanna'),
+        ],
+        albums: const [],
+        artists: [(name: 'Stay', followers: 100)],
+      );
+      expect(many.first.name, 'Rihanna'); // 3 exact tracks (150) > exact name (60)
+    });
+
     test('empty query → no candidates', () {
       expect(
         SearchRelevance.rankArtists(query: '', tracks: const [], albums: const [], artists: const []),
