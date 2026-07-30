@@ -8,8 +8,10 @@
 ## Project Status
 
 **Status**: **Alpha** — feature-rich and demoable end-to-end, but not production-hardened (no CI, debug signing, streaming not consolidated). **Real Supabase auth landed in Phase 3.1**; **Phase 3.2A** added real artist onboarding, a real Supabase-backed profile + avatar upload, and offline-first cloud library sync; **Phase 3.2B** added **followed genres** and a **personalized Home** from real Supabase catalog sections; **Phase 3.3** migrated the browsing **display** (artist detail, search artists/albums, Home hydration) onto the normalized Supabase-first `/v2` catalog, fixed artist artwork/follower-count/discography-ordering, parallelized cold-artist ingestion, extracted a replaceable onboarding discovery source, and aligned the auth top bars — **playback left exactly as-is** (eager legacy YouTube path).
-**Last Updated**: 2026-07-29
-**Updated By**: Phase 3.3.2 player rollback + Drake follower fix (AI agent)
+**Last Updated**: 2026-07-30
+**Updated By**: Phase 3.3.3 search relevance + per-track credits (AI agent)
+
+> **Phase 3.3.3 (2026-07-30)** — frontend-only stabilization (no backend/DB change): album track rows now show real per-track credits (e.g. Duro → "Skrillex, Young Miko") overlaid from the normalized `/v2/albums/deezer/{id}` graph while keeping the legacy playback videoId; Search Top Result is relevance-ranked (Shakira for "Dai Dai", not the obscure "DAIDAI") via a tested `SearchRelevance.rankArtists`; the first uncached search no longer flashes a blank/"No results" state (loading clears only on a non-empty category); and search results dedupe exact duplicate rows while keeping legitimate editions. On-device visual QA recommended.
 
 > **Phase 3.3.2 (2026-07-29)** — small stabilization patch (frontend only, no backend/DB change): (1) failed-track rollback now restores the **full** confirmed playback snapshot (isPlaying/position/duration), not just track identity, so the player is no longer left in an incoherent play/paused state after tapping an invalid track; (2) the artist header follower pill reconciles against the live local follow state so a **stale paax-api cached count of 0** (Drake: DB=1 but cache=0) never shows "0 Followers" while the user follows. DB verified correct (canonical Drake deezer_id 246791: count=1=follow_rows). **On-device audio still needs manual QA.**
 
