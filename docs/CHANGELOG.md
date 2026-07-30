@@ -26,6 +26,45 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.3.3 — Search relevance, progressive rendering, per-track credits (2026-07-30)
+
+Focused stabilization based on real Android QA. **Frontend only — no backend
+change, no Railway redeploy, no DB/schema change** (verified read-only: SOMA's
+`track_artists` are correct in Supabase). No UI redesign; playback unchanged.
+
+- **Fixed — album track rows showed only the album primary artist (issue 3/4).**
+  SOMA rows all read "Skrillex". Root cause was UI/mapping: album detail used the
+  legacy `/v2/album/{id}`, whose per-track `artists` only carry the album primary
+  artist (Deezer's album tracklist omits contributors). Album detail now overlays
+  the real per-track credits from the normalized `/v2/albums/deezer/{id}`
+  (Supabase `track_artists`), keyed by Deezer track id, while keeping the legacy
+  videoId for playback (playback path unchanged). One canonical
+  `TrackCredits.resolve()` orders by position (primary before featured), dedupes
+  by UUID → Deezer id → name, and hides non-performing roles. Duro →
+  "Skrillex, Young Miko", Noche Without You → "Skrillex, Feid", Thistle →
+  "Skrillex, Randomer, Blawan, Mc Dricka". The credit fetch runs in parallel with
+  the legacy album call (short-bounded) so it adds no serial latency.
+- **Fixed — Search Top Result relevance (issue 1).** The Top Result was
+  unconditionally the first name-matching artist, so "Dai Dai" surfaced the
+  obscure "DAIDAI" instead of Shakira (the primary artist of the strongest exact
+  track/album matches). A new central, tested `SearchRelevance.rankArtists()`
+  scores candidates generically (no hardcoded names): primary-of-exact-matching
+  tracks/albums and exact/prefix/token name matches, with popularity as a pure
+  tie-breaker. Candidates combine the name-match artists with the primary artists
+  of exact matches; a derived winner (Shakira) is resolved to a navigable artist.
+- **Fixed — blank/"No results" flash on the first uncached search (issue 2).**
+  The global loading state was cleared by the first category to return even when
+  it was empty, briefly flashing "No results found" while other categories were
+  still pending. It now clears only when a non-empty category arrives (or all
+  settle). Per-category progressive painting, generation cancellation,
+  cache-first and coalescing are preserved.
+- **Search result dedup.** Collapse exact duplicate rows (same id, or an id-less
+  title+artist+duration match) while preserving legitimate alternate editions
+  (distinct ids).
+- **Tests** — `flutter analyze` 0 errors; **88 unit tests** (credits, relevance,
+  dedup, Top-Result + progressive integration). Adversarial review; H1 (album
+  latency), H2 (role denylist), M2 (exact-name weight), M3 (no flicker) fixed.
+
 ### Phase 3.3.2 — Player rollback + Drake follower consistency (2026-07-29)
 
 A small, focused stabilization patch for two remaining device-confirmed issues.

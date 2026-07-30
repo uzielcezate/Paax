@@ -6,6 +6,8 @@ import '../../domain/entities/artist.dart';
 import '../api/youtube_music_data_source.dart';
 import '../../core/utils/string_utils.dart';
 import '../../core/utils/artwork_resolver.dart';
+import '../../core/utils/track_credits.dart';
+import '../../core/utils/search_dedupe.dart';
 
 class MusicRepositoryImpl implements MusicRepository {
   final YouTubeMusicDataSource _dataSource;
@@ -38,14 +40,31 @@ class MusicRepositoryImpl implements MusicRepository {
   @override
   Future<List<Track>> searchTracks(String query) async {
     final result = await _dataSource.searchV2(query, 'tracks');
-    return (result['data'] as List? ?? [])
+    final mapped = (result['data'] as List? ?? [])
         .map((e) {
           try { return _mapTrackV2(e as Map<String, dynamic>); }
           catch (err) { debugPrint('[Repo] searchTracks v2 skip: $err'); return null; }
         })
         .whereType<Track>()
         .toList();
+    return _dedupeTracks(mapped);
   }
+
+  // Phase 3.3.3: collapse exact duplicate rows (same Deezer track id, or an
+  // id-less title+artist+duration match) while keeping legitimate versions.
+  List<Track> _dedupeTracks(List<Track> tracks) => dedupeBy<Track>(
+        tracks,
+        id: (t) => t.deezerTrackId,
+        fallbackKey: (t) => '${normalizeForDedupe(t.title)}|'
+            '${normalizeForDedupe(t.artistName)}|${(t.duration / 3).round()}',
+      );
+
+  List<SavedAlbum> _dedupeAlbums(List<SavedAlbum> albums) => dedupeBy<SavedAlbum>(
+        albums,
+        id: (a) => a.albumId,
+        fallbackKey: (a) => '${normalizeForDedupe(a.title)}|'
+            '${normalizeForDedupe(a.artistName)}|${a.releaseType}|${a.releaseDate ?? ''}',
+      );
 
   @override
   Future<List<SavedAlbum>> searchAlbums(String query) async {
@@ -62,18 +81,19 @@ class MusicRepositoryImpl implements MusicRepository {
           .whereType<SavedAlbum>()
           .where((a) => a.albumId.isNotEmpty)
           .toList();
-      if (mapped.isNotEmpty) return mapped;
+      if (mapped.isNotEmpty) return _dedupeAlbums(mapped);
     } catch (err) {
       debugPrint('[Repo] searchAlbums find error, falling back to legacy: $err');
     }
     final result = await _dataSource.searchV2(query, 'albums');
-    return (result['data'] as List? ?? [])
+    final mapped = (result['data'] as List? ?? [])
         .map((e) {
           try { return _mapAlbumV2(e as Map<String, dynamic>); }
           catch (err) { debugPrint('[Repo] searchAlbums v2 skip: $err'); return null; }
         })
         .whereType<SavedAlbum>()
         .toList();
+    return _dedupeAlbums(mapped);
   }
 
   @override
@@ -669,12 +689,26 @@ class MusicRepositoryImpl implements MusicRepository {
   Future<SavedAlbum> getAlbum(String id) async {
     try {
       final deezerId = int.parse(id);
-      final e = await _dataSource.getAlbumV2(deezerId);
+
+      // Phase 3.3.3 (issue 3/4): the legacy /v2/album payload only carries the
+      // album's primary artist per track (Deezer's album tracklist omits
+      // contributors), so every row collapsed to the album artist. Overlay the
+      // real per-track credits from the normalized album (Supabase track_artists)
+      // — keyed by Deezer track id — while KEEPING the legacy videoId for
+      // playback (Track.id). Fetch both in PARALLEL so the credit overlay never
+      // adds serial latency to the album open (review H1); the overlay is
+      // best-effort and short-bounded, falling back to legacy on any error.
+      final legacyFuture = _dataSource.getAlbumV2(deezerId);
+      final creditFuture = _fetchAlbumTrackCredits(deezerId);
+      final e = await legacyFuture;
+      final creditMap = await creditFuture;
 
       // Map tracks from the album detail response
       final tracks = (e['tracks'] as List? ?? []).map((t) {
-        try { return _mapTrackV2(t as Map<String, dynamic>); }
-        catch (_) { return null; }
+        try {
+          final track = _mapTrackV2(t as Map<String, dynamic>);
+          return _applyTrackCredits(track, creditMap);
+        } catch (_) { return null; }
       }).whereType<Track>().toList();
 
       // Build artist info
@@ -717,15 +751,56 @@ class MusicRepositoryImpl implements MusicRepository {
   Future<List<Track>> getAlbumTracks(String id) async {
     try {
       final deezerId = int.parse(id);
-      final e = await _dataSource.getAlbumV2(deezerId);
+      final legacyFuture = _dataSource.getAlbumV2(deezerId);
+      final creditFuture = _fetchAlbumTrackCredits(deezerId);
+      final e = await legacyFuture;
+      final creditMap = await creditFuture;
       return (e['tracks'] as List? ?? []).map((t) {
-        try { return _mapTrackV2(t as Map<String, dynamic>); }
-        catch (_) { return null; }
+        try {
+          return _applyTrackCredits(_mapTrackV2(t as Map<String, dynamic>), creditMap);
+        } catch (_) { return null; }
       }).whereType<Track>().toList();
     } catch (e) {
       debugPrint('[Repo] getAlbumTracks v2 error: $e');
       return [];
     }
+  }
+
+  /// Per-track visible credits from the normalized album (Supabase
+  /// track_artists), keyed by Deezer track id. Best-effort — empty on failure.
+  Future<Map<int, List<Map<String, String>>>> _fetchAlbumTrackCredits(int deezerId) async {
+    final out = <int, List<Map<String, String>>>{};
+    try {
+      // Short bound: credits are an overlay, not the core content — never let a
+      // cold-ingest normalized fetch stall the album open (review H1).
+      final norm = await _dataSource
+          .getAlbumNormalizedByDeezerId(deezerId)
+          .timeout(const Duration(milliseconds: 2500));
+      if (norm == null) return out;
+      for (final t in (norm['tracks'] as List? ?? [])) {
+        if (t is! Map) continue;
+        final tm = t.cast<String, dynamic>();
+        final dz = _asInt(tm['deezerId']);
+        if (dz == null) continue;
+        final credits = TrackCredits.resolve((tm['artists'] as List?) ?? const []);
+        if (credits.isNotEmpty) out[dz] = credits;
+      }
+    } catch (err) {
+      debugPrint('[Repo] normalized album credits error: $err');
+    }
+    return out;
+  }
+
+  /// Overlay resolved per-track credits onto a legacy track (keeps its videoId).
+  Track _applyTrackCredits(Track track, Map<int, List<Map<String, String>>> creditMap) {
+    final dz = _asInt(track.deezerTrackId);
+    if (dz == null) return track;
+    final credits = creditMap[dz];
+    if (credits == null || credits.isEmpty) return track;
+    return track.copyWith(
+      artists: credits,
+      artistName: credits.map((a) => a['name']).whereType<String>().join(', '),
+    );
   }
 
   @override

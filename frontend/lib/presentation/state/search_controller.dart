@@ -6,6 +6,7 @@ import '../../domain/repositories/music_repository.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
+import '../../core/utils/search_relevance.dart';
 
 /// Immutable bundle of one query's results, stored in the LRU cache.
 class _SearchResults {
@@ -46,6 +47,15 @@ class SearchController extends ChangeNotifier {
   List<Artist> _artistResults = [];
   bool _isLoading = false;
   String? _error;
+
+  /// Relevance-ranked Top Result (Phase 3.3.3 issue 1). May be an artist derived
+  /// from the primary artists of the strongest exact track/album matches (e.g.
+  /// Shakira for "Dai Dai"), resolved to a navigable entity. Null → the screen
+  /// falls back to the first artist result.
+  Artist? _topResult;
+  Artist? get topResult => _topResult;
+  // '<gen>:<normalized name>' currently being resolved, to avoid re-resolving.
+  String? _topResolveKey;
 
   Timer? _debounceTimer;
 
@@ -88,6 +98,8 @@ class SearchController extends ChangeNotifier {
     // Invalidate any in-flight/pending search immediately — their responses are
     // discarded the moment the query changes (proper request cancellation).
     _gen++;
+    _topResult = null; // relevance recomputed for the new query
+    _topResolveKey = null;
 
     final normalized = _normalize(newQuery);
 
@@ -108,6 +120,7 @@ class SearchController extends ChangeNotifier {
       _isLoading = false;
       _error = null;
       _notify();
+      _recomputeTopResult(_gen);
       final gen = _gen;
       _debounceTimer =
           Timer(_debounce, () => _fetch(newQuery, normalized, gen, revalidate: true));
@@ -132,6 +145,8 @@ class SearchController extends ChangeNotifier {
     _trackResults = [];
     _albumResults = [];
     _artistResults = [];
+    _topResult = null;
+    _topResolveKey = null;
     _isLoading = false;
     _error = null;
     _notify();
@@ -178,6 +193,7 @@ class SearchController extends ChangeNotifier {
           _error = "Couldn't load results";
         }
         _notify();
+        _recomputeTopResult(gen);
       } else if (anySuccess &&
           _normalize(_query) == normalized &&
           !_inFlight.contains(normalized)) {
@@ -202,8 +218,9 @@ class SearchController extends ChangeNotifier {
         tracks = r;
         if (gen == _gen) {
           _trackResults = r;
-          clearLoadingOnFirst();
+          if (r.isNotEmpty) clearLoadingOnFirst(); // §2: don't clear on empty
           _notify();
+          _recomputeTopResult(gen);
         }
       } catch (_) {/* category failed — stays null */} finally {
         onSettled();
@@ -216,8 +233,9 @@ class SearchController extends ChangeNotifier {
         albums = r;
         if (gen == _gen) {
           _albumResults = r;
-          clearLoadingOnFirst();
+          if (r.isNotEmpty) clearLoadingOnFirst();
           _notify();
+          _recomputeTopResult(gen);
         }
       } catch (_) {} finally {
         onSettled();
@@ -230,13 +248,77 @@ class SearchController extends ChangeNotifier {
         artists = r;
         if (gen == _gen) {
           _artistResults = r;
-          clearLoadingOnFirst();
+          if (r.isNotEmpty) clearLoadingOnFirst();
           _notify();
+          _recomputeTopResult(gen);
         }
       } catch (_) {} finally {
         onSettled();
       }
     }();
+  }
+
+  /// Recompute the relevance-ranked Top Result from the current results
+  /// (Phase 3.3.3 issue 1). Sync when the winner is already an artist result;
+  /// otherwise resolve the derived winner (e.g. Shakira) to a navigable entity.
+  void _recomputeTopResult(int gen) {
+    if (gen != _gen) return;
+    final ranked = SearchRelevance.rankArtists(
+      query: _query,
+      tracks: _trackResults.map((t) => (title: t.title, artist: t.artistName)).toList(),
+      albums: _albumResults.map((a) => (title: a.title, artist: a.artistName)).toList(),
+      artists: _artistResults
+          .map((a) => (name: a.name, followers: a.platformFollowers ?? 0))
+          .toList(),
+    );
+    if (ranked.isEmpty) return;
+    final top = ranked.first;
+    final key = SearchRelevance.norm(top.name);
+
+    if (top.inArtistResults) {
+      Artist? match;
+      for (final a in _artistResults) {
+        if (SearchRelevance.norm(a.name) == key) { match = a; break; }
+      }
+      if (match != null) {
+        _topResolveKey = '$gen:$key';
+        _setTopResult(match, gen);
+        return;
+      }
+    }
+    // Derived winner not in the artist results — resolve it once per gen+name.
+    if (_topResolveKey == '$gen:$key') return;
+    _topResolveKey = '$gen:$key';
+    // ignore: discarded_futures
+    _resolveDerivedTop(top.name, key, gen);
+  }
+
+  Future<void> _resolveDerivedTop(String name, String key, int gen) async {
+    try {
+      final artists = await _repository
+          .searchArtists(name)
+          .timeout(const Duration(seconds: 6));
+      if (gen != _gen) return;
+      for (final a in artists) {
+        if (SearchRelevance.norm(a.name) == key) {
+          _setTopResult(a, gen);
+          return;
+        }
+      }
+    } catch (_) {/* fall through to the fallback */}
+    // Couldn't resolve the derived winner — fall back to the best available
+    // artist result so the Top Result slot isn't left empty (no wrong-artist
+    // flicker: the tile only ever shows a resolved artist; review M3).
+    if (gen == _gen && _topResult == null && _artistResults.isNotEmpty) {
+      _setTopResult(_artistResults.first, gen);
+    }
+  }
+
+  void _setTopResult(Artist artist, int gen) {
+    if (gen != _gen) return;
+    if (identical(_topResult, artist)) return;
+    _topResult = artist;
+    _notify();
   }
 
   // ── LRU cache helpers ───────────────────────────────────────────────────

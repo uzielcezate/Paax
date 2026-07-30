@@ -378,16 +378,24 @@ class _SearchScreenState extends State<SearchScreen> {
   // ... (Rest of build methods _buildAllResultsSlivers, etc. remain unchanged)
 
   List<Widget> _buildAllResultsSlivers(app_search.SearchController search) {
+    // Phase 3.3.3 issue 1: the Top Result is the relevance-ranked artist (may be
+    // derived from the primary artist of the strongest exact matches, e.g.
+    // Shakira for "Dai Dai"). The controller owns the fallback, so the tile only
+    // ever shows a resolved artist (no wrong-artist flicker; review M3).
+    final topArtist = search.topResult;
+    final railArtists = topArtist == null
+        ? search.artistResults
+        : search.artistResults.where((a) => a.id != topArtist.id).toList();
     return [
       SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         sliver: SliverList(
           delegate: SliverChildListDelegate([
-            // Best Match (Artist)
-            if (search.artistResults.isNotEmpty) ...[
+            // Top Result (relevance-ranked artist)
+            if (topArtist != null) ...[
               const Text("Top Result", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 12),
-              _buildArtistTile(search.artistResults.first, large: true),
+              _buildArtistTile(topArtist, large: true),
               const SizedBox(height: 24),
             ],
 
@@ -396,8 +404,8 @@ class _SearchScreenState extends State<SearchScreen> {
               const Text("Songs", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 12),
               // Track tiles use same TrackListTile as Tracks tab â€” identical fit
-              ...search.trackResults.take(4).map((t) => _buildTrackTile(t)).toList(),
-              if (search.trackResults.length > 4)
+              ...search.trackResults.take(5).map((t) => _buildTrackTile(t)).toList(),
+              if (search.trackResults.length > 5)
                  Align(
                    alignment: Alignment.centerLeft,
                    child: TextButton(
@@ -412,15 +420,15 @@ class _SearchScreenState extends State<SearchScreen> {
             if (search.albumResults.isNotEmpty) ...[
               const Text("Albums", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
               const SizedBox(height: 12),
-              _buildAlbumsRail(search.albumResults),
+              _buildAlbumsRail(search.albumResults.take(5).toList()),
               const SizedBox(height: 24),
             ],
             
-            // Artists 
-            if (search.artistResults.length > 1) ...[ 
+            // Artists (excluding the one shown as Top Result)
+            if (railArtists.isNotEmpty) ...[
                const Text("Artists", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
                const SizedBox(height: 12),
-               _buildArtistsRail(search.artistResults.skip(1).toList()),
+               _buildArtistsRail(railArtists.take(5).toList()),
             ],
             
             const BottomContentPadding(),
