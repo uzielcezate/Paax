@@ -44,6 +44,10 @@ abstract class MusicRepository {
 
   Future<SavedAlbum> getAlbum(String id);
   Future<List<Track>> getAlbumTracks(String id);
+  /// Overlay real per-track credits from the normalized catalog (Supabase
+  /// track_artists) onto an album's tracks, keeping each track's playback
+  /// videoId. Runs off the album-open critical path (progressive, §3.3.4).
+  Future<SavedAlbum> enrichAlbumCredits(SavedAlbum album);
 
   Future<Track> getTrack(String id);
   

@@ -102,6 +102,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             _resolvedArtists = enriched.artists;
           });
         }
+        // Phase 3.3.4: load authoritative per-track credits from the normalized
+        // catalog PROGRESSIVELY (off the album-open path) and update the track
+        // subtitles when they arrive — so every album (not just played ones)
+        // shows real collaborators, reliably, without slowing the album open.
+        _enrichCreditsFromCatalog(enriched);
         return enriched;
       });
     }
@@ -120,6 +125,38 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Background progressive credit enrichment (Phase 3.3.4). Fetches the
+  /// authoritative per-track credits from the normalized catalog (one batched
+  /// request; keeps each track's playback videoId) and updates the visible
+  /// subtitles when they arrive. A single delayed retry catches an album whose
+  /// backend normalization refresh completes just after the first read.
+  Future<void> _enrichCreditsFromCatalog(SavedAlbum album) async {
+    var current = album;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      SavedAlbum next;
+      try {
+        next = await _repository.enrichAlbumCredits(current);
+      } catch (_) {
+        return;
+      }
+      if (!mounted) return;
+      if (!identical(next, current)) {
+        current = next;
+        setState(() {
+          _detailsFuture = Future.value(next);
+          _resolvedArtists = next.artists;
+        });
+        return; // credits applied — done
+      }
+      // No change (e.g. a partial album whose refresh is still ingesting) —
+      // wait briefly and try once more before giving up.
+      if (attempt == 0) {
+        await Future.delayed(const Duration(milliseconds: 2500));
+        if (!mounted) return;
+      }
+    }
   }
 
   /// Cross-reference album tracks with the playback queue to get richer artist

@@ -690,25 +690,21 @@ class MusicRepositoryImpl implements MusicRepository {
     try {
       final deezerId = int.parse(id);
 
-      // Phase 3.3.3 (issue 3/4): the legacy /v2/album payload only carries the
-      // album's primary artist per track (Deezer's album tracklist omits
-      // contributors), so every row collapsed to the album artist. Overlay the
-      // real per-track credits from the normalized album (Supabase track_artists)
-      // — keyed by Deezer track id — while KEEPING the legacy videoId for
-      // playback (Track.id). Fetch both in PARALLEL so the credit overlay never
-      // adds serial latency to the album open (review H1); the overlay is
-      // best-effort and short-bounded, falling back to legacy on any error.
-      final legacyFuture = _dataSource.getAlbumV2(deezerId);
-      final creditFuture = _fetchAlbumTrackCredits(deezerId);
-      final e = await legacyFuture;
-      final creditMap = await creditFuture;
+      // Phase 3.3.4: the legacy /v2/album payload only carries the album's
+      // primary artist per track (Deezer's album tracklist omits contributors).
+      // Real per-track credits are overlaid from the normalized album
+      // (`enrichAlbumCredits`, driven by the album screen) so the album opens
+      // FAST here and credits arrive progressively — the earlier inline overlay
+      // with a 2.5s bound silently dropped credits on larger albums (att.'s
+      // normalized response is ~3s even warm), which is why att./Bad Bunny still
+      // collapsed to the album artist while the played SOMA was saved by the
+      // play-queue enrichment.
+      final e = await _dataSource.getAlbumV2(deezerId);
 
-      // Map tracks from the album detail response
+      // Map tracks from the album detail response (legacy videoIds → playback).
       final tracks = (e['tracks'] as List? ?? []).map((t) {
-        try {
-          final track = _mapTrackV2(t as Map<String, dynamic>);
-          return _applyTrackCredits(track, creditMap);
-        } catch (_) { return null; }
+        try { return _mapTrackV2(t as Map<String, dynamic>); }
+        catch (_) { return null; }
       }).whereType<Track>().toList();
 
       // Build artist info
@@ -751,14 +747,10 @@ class MusicRepositoryImpl implements MusicRepository {
   Future<List<Track>> getAlbumTracks(String id) async {
     try {
       final deezerId = int.parse(id);
-      final legacyFuture = _dataSource.getAlbumV2(deezerId);
-      final creditFuture = _fetchAlbumTrackCredits(deezerId);
-      final e = await legacyFuture;
-      final creditMap = await creditFuture;
+      final e = await _dataSource.getAlbumV2(deezerId);
       return (e['tracks'] as List? ?? []).map((t) {
-        try {
-          return _applyTrackCredits(_mapTrackV2(t as Map<String, dynamic>), creditMap);
-        } catch (_) { return null; }
+        try { return _mapTrackV2(t as Map<String, dynamic>); }
+        catch (_) { return null; }
       }).whereType<Track>().toList();
     } catch (e) {
       debugPrint('[Repo] getAlbumTracks v2 error: $e');
@@ -766,16 +758,42 @@ class MusicRepositoryImpl implements MusicRepository {
     }
   }
 
+  @override
+  Future<SavedAlbum> enrichAlbumCredits(SavedAlbum album) async {
+    // Phase 3.3.4: overlay real per-track credits from the normalized album
+    // (Supabase track_artists — ONE batched request for all tracks, no N+1, no
+    // Deezer fan-out) onto the (legacy) album tracks, keyed by Deezer track id,
+    // while KEEPING each track's legacy videoId for playback. Runs OFF the
+    // album-open critical path (the screen calls it after first paint), so it is
+    // generously bounded and never drops credits on a slow/large response. The
+    // normalized graph is merged live on every open, so a stale legacy response
+    // can never permanently hide credits.
+    final tracks = album.tracks;
+    if (tracks == null || tracks.isEmpty) return album;
+    final deezerId = int.tryParse(album.albumId);
+    if (deezerId == null) return album;
+
+    final creditMap = await _fetchAlbumTrackCredits(deezerId);
+    if (creditMap.isEmpty) return album;
+
+    var changed = false;
+    final enriched = tracks.map((t) {
+      final next = _applyTrackCredits(t, creditMap);
+      if (!identical(next, t)) changed = true;
+      return next;
+    }).toList();
+    return changed ? album.copyWith(tracks: enriched) : album;
+  }
+
   /// Per-track visible credits from the normalized album (Supabase
   /// track_artists), keyed by Deezer track id. Best-effort — empty on failure.
+  /// Generously bounded because it runs off the album-open critical path.
   Future<Map<int, List<Map<String, String>>>> _fetchAlbumTrackCredits(int deezerId) async {
     final out = <int, List<Map<String, String>>>{};
     try {
-      // Short bound: credits are an overlay, not the core content — never let a
-      // cold-ingest normalized fetch stall the album open (review H1).
       final norm = await _dataSource
           .getAlbumNormalizedByDeezerId(deezerId)
-          .timeout(const Duration(milliseconds: 2500));
+          .timeout(const Duration(seconds: 12));
       if (norm == null) return out;
       for (final t in (norm['tracks'] as List? ?? [])) {
         if (t is! Map) continue;
