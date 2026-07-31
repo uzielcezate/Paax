@@ -7,6 +7,7 @@ import 'core/theme/app_theme.dart';
 import 'core/config/api_config.dart';
 import 'core/config/supabase_config.dart';
 import 'data/local/hive_storage.dart';
+import 'data/remote/follower_count_service.dart';
 import 'data/repositories/library_repository.dart';
 import 'presentation/state/auth_controller.dart';
 import 'presentation/state/home_controller.dart';
@@ -119,6 +120,23 @@ class PaaxApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),
         ChangeNotifierProvider(create: (_) => PlaybackController()),
         ChangeNotifierProvider(create: (_) => ThemeState()),
+        // Phase 3.3.5: authoritative, realtime-synced global follower counts.
+        // App-scoped singleton so multiple ArtistDetailScreen instances (e.g.
+        // via Related Artists) share one realtime channel per artist. Driven by
+        // the auth session so an account switch drops all channels/cached counts
+        // (multi-account isolation); the global count itself is user-independent.
+        ProxyProvider<AuthController, FollowerCountService>(
+          create: (_) => FollowerCountService(SupabaseFollowerCountBackend()),
+          update: (_, auth, service) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            // ignore: discarded_futures
+            service!.onUserSession(uid);
+            return service;
+          },
+          dispose: (_, service) => service.dispose(),
+        ),
         // Phase 3.2.5: personalized Home feed (real Supabase catalog sections).
         // Driven by the auth session so a persistent Home tab drops the previous
         // user's personalized content on an account switch (idempotent per id).
