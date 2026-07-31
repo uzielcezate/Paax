@@ -26,6 +26,46 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.3.5 — Real-time global artist follower counts (2026-07-31)
+
+Fixes a multi-user consistency bug: the artist follower pill combined a stale
+24h-cached API baseline with the current user's local follow delta
+(`reconcileFollowerCount`) instead of the authoritative global count. So after
+another user followed/unfollowed, the number was wrong (e.g. showed 1 or 0 when
+the DB total was 2/1). **Frontend + one small DB migration; no `paax-api`
+change, no Railway redeploy** (verified read-only + a controlled 0→1→2→1→0
+follow-cycle simulation: the trigger-maintained `platform_followers_count` is
+authoritative and consistent for every artist; no duplicate-UUID identity bug).
+
+- **Added — `FollowerCountService` (`data/remote`).** Renders the AUTHORITATIVE
+  global count from `artists.platform_followers_count` via a direct read + a
+  Supabase **Realtime** UPDATE subscription on the public `artists` row
+  (aggregate only — no user identity; RLS-safe). `user_followed_artists` is
+  own-rows-only under RLS, so it can't be a global-count source. Backend-agnostic
+  for headless tests.
+- **Changed — the follower pill** now binds to the authoritative count (live via
+  realtime), not `cachedBase + sessionDelta`. `isFollowing` (the checkmark)
+  stays the current user's; the number is the community's. Singular/plural
+  unchanged. `reconcileFollowerCount` is retired from the UI.
+- **Added — source-priority guard.** A cached API value only *seeds*; it can
+  never overwrite an authoritative realtime/server value (a stale
+  `/v2/artists/deezer/{id}` can't clobber a newer count).
+- **Added — optimistic + realtime reconciliation.** Optimistic +1/-1 on the
+  user's own toggle, reconciled by the realtime UPDATE their own write triggers;
+  a monotonic optimistic-sequence guard discards a `refresh()` that raced the
+  optimistic action, so the pill never jumps backward (2→1→2). Never shows 0
+  while another user still follows.
+- **Added — lifecycle.** `ArtistDetailScreen` subscribes (ref-counted — one
+  channel per artist shared across Related-Artist navigation), disposes on
+  leave, refreshes on app resume; keyed strictly by the canonical Supabase UUID.
+  Driven by the auth session for multi-account isolation.
+- **Migration** `20260731090000_phase3_3_5_realtime_artist_followers.sql` — adds
+  `public.artists` to the `supabase_realtime` publication (idempotent; default
+  replica identity suffices). No new security advisor.
+- Tests: `test/unit/follower_count_service_test.dart` (14) — all 12 required
+  scenarios + raced-refresh guard + optimistic floor. 111 suite pass.
+  Multi-device realtime delivery is on-device QA (fake backend can't prove it).
+
 ### Phase 3.3.4 — Universal per-track artist credits across all albums (2026-07-30)
 
 Phase 3.3.3 fixed per-track credits for **SOMA** only because that album had been
