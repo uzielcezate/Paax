@@ -63,6 +63,11 @@ class FollowerCountService {
   // uuid -> live subscription (one shared channel per artist, ref-counted)
   final Map<String, FollowerSubscription> _subs = {};
   final Map<String, int> _refCounts = {};
+  // uuid -> monotonic counter bumped on each optimistic action. A [refresh]
+  // whose read raced an optimistic follow/unfollow (seq changed mid-flight) is
+  // discarded, so a pre-write authoritative value can't jump the pill backward
+  // before the user's own realtime UPDATE lands.
+  final Map<String, int> _optimisticSeq = {};
 
   String? _sessionUid;
   bool _sessionSet = false;
@@ -102,15 +107,24 @@ class FollowerCountService {
   /// triggers (artists UPDATE), or by [refresh] on the next screen entry/resume.
   /// Deliberately NOT marked authoritative, so realtime can correct it.
   void applyOptimistic(String uuid, int delta) {
+    _optimisticSeq[uuid] = (_optimisticSeq[uuid] ?? 0) + 1;
     final next = (_counts[uuid] ?? 0) + delta;
     _emit(uuid, next < 0 ? 0 : next);
   }
 
   /// Authoritative one-shot reconciliation. Safe to call any time; fills gaps
   /// left by a dropped realtime connection (reconnect / app resume / entry).
+  ///
+  /// If an optimistic follow/unfollow happens WHILE this read is in flight, the
+  /// read may predate the user's write and would jump the pill backward
+  /// (2→1→2). In that case we return the value but do NOT apply it — the
+  /// realtime UPDATE the user's own write triggers delivers the true count.
   Future<int?> refresh(String uuid) async {
+    final seqBefore = _optimisticSeq[uuid] ?? 0;
     final c = await _backend.fetchCount(uuid);
-    if (c != null) _applyAuthoritative(uuid, c);
+    if (c == null) return null;
+    if ((_optimisticSeq[uuid] ?? 0) != seqBefore) return c; // raced — discard
+    _applyAuthoritative(uuid, c);
     return c;
   }
 
@@ -144,6 +158,12 @@ class FollowerCountService {
   /// real account switch we drop every channel and all cached/optimistic state
   /// so the new session re-reads authoritative values cleanly (multi-account
   /// isolation). Idempotent per uid.
+  ///
+  /// Assumes a switch tears down the previous session's widget subtree (Paax's
+  /// AuthGate swaps MainWrapper out on sign-out before the new session mounts),
+  /// so an ArtistDetailScreen never straddles two identities. If the auth flow
+  /// ever gains a direct `ready→ready` uid change, a still-mounted screen would
+  /// keep its stale `_artistUuid` and not re-subscribe.
   Future<void> onUserSession(String? uid) async {
     if (_sessionSet && uid == _sessionUid) return;
     _sessionSet = true;
@@ -157,6 +177,7 @@ class FollowerCountService {
     _refCounts.clear();
     _authoritative.clear();
     _counts.clear();
+    _optimisticSeq.clear();
     for (final n in _notifiers.values) {
       n.value = null;
     }

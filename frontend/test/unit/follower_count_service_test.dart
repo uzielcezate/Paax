@@ -10,6 +10,8 @@
 // subscription prevention, disposal/reconnect, multi-account isolation, and
 // singular/plural formatting.
 
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:beaty/data/remote/follower_count_service.dart';
 import 'package:beaty/core/utils/string_utils.dart';
@@ -34,11 +36,16 @@ class _FakeBackend implements FollowerCountBackend {
   final Map<String, void Function(int)> _callbacks = {};
   final List<_FakeSub> subs = [];
 
+  /// When set, fetchCount awaits this before returning — lets a test hold a
+  /// read "in flight" to exercise the optimistic-vs-refresh race guard.
+  Completer<void>? gate;
+
   _FakeBackend([Map<String, int>? initial]) : server = initial ?? {};
 
   @override
   Future<int?> fetchCount(String uuid) async {
     fetchCalls++;
+    if (gate != null) await gate!.future;
     return server[uuid];
   }
 
@@ -193,6 +200,29 @@ void main() {
     expect(formatFollowers(0), '0 Followers');
     expect(formatFollowers(1), '1 Follower');
     expect(formatFollowers(2), '2 Followers');
+  });
+
+  test('bonus: a refresh that raced an optimistic follow is discarded (no 2→1→2)',
+      () async {
+    final be = _FakeBackend({a: 1});
+    final s = FollowerCountService(be);
+    await s.subscribe(a); // count 1 (gate was null)
+    final emissions = <int?>[];
+    s.listenable(a).addListener(() => emissions.add(s.listenable(a).value));
+
+    // Hold an authoritative read in flight, then follow before it resolves.
+    be.gate = Completer<void>();
+    final inFlight = s.refresh(a); // reads the PRE-insert value (1)
+    s.applyOptimistic(a, 1); // user taps Follow → optimistic 2
+    expect(s.countOf(a), 2);
+    be.gate!.complete(); // stale read (1) resolves...
+    await inFlight;
+    expect(s.countOf(a), 2, reason: 'stale in-flight read must not clobber to 1');
+    expect(emissions.contains(1), isFalse, reason: 'never jumps back to 1');
+
+    // The user's own write then delivers the true count via realtime.
+    be.pushRemote(a, 2);
+    expect(s.countOf(a), 2);
   });
 
   test('bonus: optimistic unfollow floors at 0 (never negative)', () async {
