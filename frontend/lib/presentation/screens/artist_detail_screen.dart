@@ -11,6 +11,8 @@ import '../../domain/entities/track.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../data/repositories/music_repository_impl.dart';
 import '../../domain/repositories/music_repository.dart';
+import '../../data/remote/follower_count_service.dart';
+import '../../data/remote/catalog_resolver.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
 import '../widgets/music_card.dart';
@@ -50,10 +52,12 @@ import '../../core/utils/string_utils.dart';
   State<ArtistDetailScreen> createState() => _ArtistDetailScreenState();
 }
 
-class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
+class _ArtistDetailScreenState extends State<ArtistDetailScreen>
+    with WidgetsBindingObserver {
   // ... (unchanged state)
   final MusicRepository _repository = MusicRepositoryImpl();
   final ScrollController _scrollController = ScrollController();
+  final CatalogResolver _resolver = CatalogResolver();
   
   late Future<Artist> _artistInfoFuture;
   // ... (other futures)
@@ -64,14 +68,15 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   bool _isEnriching = false;
   String _resolvedArtistId = '';
 
-  // Phase 3.3 §6: Paax follower count reconciliation. The API count is server
-  // truth at fetch time (already reflects the user's persisted follow state);
-  // the displayed count is that baseline plus the net follow/unfollow toggles
-  // the user makes on THIS screen. This is independent of library-load timing,
-  // so it never double-counts on a cold/cross-device open.
-  int? _followBaselineCount;
-  int _sessionFollowDelta = 0;
-  
+  // Phase 3.3.5: the follower pill renders the AUTHORITATIVE global count from
+  // FollowerCountService (direct DB read + Supabase Realtime), keyed by the
+  // canonical artist UUID — never a stale cached base + local delta. Captured
+  // in didChangeDependencies so it's available in dispose(). `_artistUuid` is
+  // the canonical Supabase UUID (resolved from the Deezer nav id) we subscribe
+  // to; null until resolved (or when the artist isn't in the catalog).
+  FollowerCountService? _followers;
+  String? _artistUuid;
+
   ThumbnailPrefetcher? _prefetcher;
   Artist? _cachedArtist;
   // Stash raw songs for background enrichment
@@ -84,10 +89,11 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _resolvedArtistId = widget.artistId;
     _resolvedPictureUrl = widget.pictureUrl;
     _loadData();
-    
+
     _prefetcher = ThumbnailPrefetcher(context);
 
     _scrollController.addListener(() {
@@ -117,7 +123,27 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     });
   }
 
-  // ... (_loadData, dispose unchanged)
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Capture the app-scoped service so dispose() (which runs after this element
+    // is deactivated and can't call context.read) can still unsubscribe.
+    _followers ??= context.read<FollowerCountService>();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // On resume, reconcile with an authoritative read to fill any gap left while
+    // the realtime socket was disconnected/backgrounded.
+    if (state == AppLifecycleState.resumed) {
+      final uuid = _artistUuid;
+      if (uuid != null) {
+        // ignore: discarded_futures
+        _followers?.refresh(uuid);
+      }
+    }
+  }
+
   Future<void> _loadData() async {
     final loadStopwatch = Stopwatch()..start();
     setState(() {
@@ -149,17 +175,16 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
         if (artist.picture.isNotEmpty && artist.picture != _resolvedPictureUrl) {
           _resolvedPictureUrl = artist.picture;
         }
-        // Capture the follower baseline and reset the per-screen toggle delta.
-        // Prefer the server-truth Paax count; when it's unavailable (legacy
-        // fallback / null column) seed from the local follow state so an
-        // already-followed artist reads at least "1 Follower" instead of 0.
-        _followBaselineCount = artist.platformFollowers ??
-            (context.read<LibraryController>().isArtistFollowed(_resolvedArtistId) ? 1 : 0);
-        _sessionFollowDelta = 0;
         setState(() {
           _isLoading = false;
         });
       }
+
+      // Phase 3.3.5: bind the follower pill to the authoritative global count
+      // and open a realtime subscription (off the render path). The cached API
+      // value only seeds; it never overwrites a realtime/server value.
+      // ignore: discarded_futures
+      _subscribeFollowers(artist);
 
       // Precache key images in background
       _precacheImages(artist);
@@ -221,6 +246,26 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
     }
   }
 
+  /// Resolve the canonical artist UUID, seed the pill from the (possibly stale)
+  /// API count, then subscribe to the authoritative realtime count. Keyed by the
+  /// canonical Supabase UUID only — never the Deezer nav id.
+  Future<void> _subscribeFollowers(Artist artist) async {
+    var uuid = artist.uuid;
+    if (uuid == null || uuid.isEmpty) {
+      // Legacy/partial profile: resolve the Deezer nav id → canonical UUID.
+      uuid = await _resolver.resolveArtist(_resolvedArtistId);
+    }
+    if (uuid == null || uuid.isEmpty || !mounted) return;
+    final service = _followers;
+    if (service == null) return;
+    _artistUuid = uuid;
+    // Low-priority seed (never clobbers an authoritative value already known).
+    service.seedFromApi(uuid, artist.platformFollowers);
+    // Ref-counted realtime channel + authoritative refresh on entry.
+    await service.subscribe(uuid);
+    if (mounted) setState(() {}); // rebind the pill to the live listenable
+  }
+
   /// Precache key images so back-navigation feels instant.
   void _precacheImages(Artist artist) {
     if (kIsWeb) return;
@@ -239,6 +284,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
   
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    final uuid = _artistUuid;
+    if (uuid != null) {
+      // ignore: discarded_futures
+      _followers?.unsubscribe(uuid); // ref-counted; closes the last channel
+    }
     _scrollController.dispose();
     _prefetcher?.dispose();
     super.dispose();
@@ -394,13 +445,12 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                               builder: (context, snapshot) {
                                 if (!snapshot.hasData) return const SizedBox.shrink();
                                 final artist = snapshot.data!;
-                                // Phase 3.3.1 §3/§6: ALWAYS show the Paax platform
-                                // follower count (never the external Deezer fan
-                                // count) with correct singular/plural, plus the
-                                // in-session follow/unfollow delta — so following
-                                // an artist opened from Related Artists moves the
-                                // count 0→1 even when the normalized profile isn't
-                                // available and platformFollowers is unknown.
+                                // Phase 3.3.5: ALWAYS show the AUTHORITATIVE global
+                                // Paax follower count (never the external Deezer
+                                // fan count) with correct singular/plural. The
+                                // number is the community total from
+                                // FollowerCountService (direct DB read + realtime),
+                                // decoupled from the current user's follow state.
                                 Widget pill(String label) => Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                                   decoration: BoxDecoration(
@@ -417,23 +467,40 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                     ),
                                   ),
                                 );
-                                // Baseline = server-truth platform count when
-                                // known, else 0. Never the Deezer fan count.
-                                final base = _followBaselineCount ??
-                                    artist.platformFollowers ??
-                                    0;
-                                // Phase 3.3.2 issue 2: reconcile against the live
-                                // local follow state so a STALE cached count of 0
-                                // (Drake: DB=1 but paax-api cache=0) can never show
-                                // "0 Followers" while the user follows the artist.
-                                return Consumer<LibraryController>(
-                                  builder: (context, lib, _) {
-                                    final following =
-                                        lib.isArtistFollowed(_resolvedArtistId);
-                                    final count = reconcileFollowerCount(
-                                        base, _sessionFollowDelta,
-                                        isFollowing: following);
-                                    return pill(formatFollowers(count));
+                                final uuid = _artistUuid;
+                                final service = _followers;
+                                // Fallback before the canonical UUID resolves (or
+                                // an artist not in the catalog): show the API seed,
+                                // or the local-follow floor so an already-followed
+                                // artist never reads "0 Followers".
+                                if (uuid == null || service == null) {
+                                  return Consumer<LibraryController>(
+                                    builder: (context, lib, _) {
+                                      final following = lib
+                                          .isArtistFollowed(_resolvedArtistId);
+                                      final seed = artist.platformFollowers ??
+                                          (following ? 1 : 0);
+                                      return pill(formatFollowers(seed));
+                                    },
+                                  );
+                                }
+                                // Authoritative global count, live via realtime.
+                                return ValueListenableBuilder<int?>(
+                                  valueListenable: service.listenable(uuid),
+                                  builder: (context, count, _) {
+                                    return Consumer<LibraryController>(
+                                      builder: (context, lib, __) {
+                                        final following = lib
+                                            .isArtistFollowed(_resolvedArtistId);
+                                        // Prefer the authoritative count; before
+                                        // it lands, fall back to the API seed /
+                                        // local floor (never 0 while following).
+                                        final display = count ??
+                                            artist.platformFollowers ??
+                                            (following ? 1 : 0);
+                                        return pill(formatFollowers(display));
+                                      },
+                                    );
                                   },
                                 );
                               },
@@ -509,12 +576,18 @@ class _ArtistDetailScreenState extends State<ArtistDetailScreen> {
                                     icon: isFollowed ? Icons.check_rounded : Icons.person_add_rounded,
                                     onTap: () {
                                       if (artistObj != null) {
-                                        // Track the count change for this screen
-                                        // session so the follower pill reflects it
-                                        // without depending on library-load timing.
-                                        final willFollow = !lib.isArtistFollowed(_resolvedArtistId);
-                                        setState(() =>
-                                            _sessionFollowDelta += willFollow ? 1 : -1);
+                                        // Optimistic global-count nudge shown
+                                        // immediately; the realtime UPDATE that our
+                                        // own write triggers reconciles it to the
+                                        // authoritative value (no stale backward
+                                        // jump). No-op if the UUID isn't resolved.
+                                        final willFollow = !lib
+                                            .isArtistFollowed(_resolvedArtistId);
+                                        final uuid = _artistUuid;
+                                        if (uuid != null) {
+                                          _followers?.applyOptimistic(
+                                              uuid, willFollow ? 1 : -1);
+                                        }
                                         lib.toggleFollowArtist(artistObj);
                                       }
                                     },
