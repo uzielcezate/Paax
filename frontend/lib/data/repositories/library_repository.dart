@@ -32,6 +32,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/utils/artwork_resolver.dart';
 import '../../domain/entities/artist.dart';
 import '../../domain/entities/genre.dart';
+import '../../domain/entities/playlist_contributors.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/track.dart';
 import '../local/hive_storage.dart';
@@ -164,6 +165,25 @@ class LibraryRepository {
       kind: kind,
       deezerId: deezerId.trim(),
     ));
+  }
+
+  // ── PLAYLIST TRACK ORDER (cloud-ready seam, Phase 3.3.6) ──────────
+  //
+  // Manual playlist ordering is persisted LOCALLY (Hive) by LibraryController;
+  // this is the contract Phase 3.4 will implement to push explicit, normalized
+  // positions to Supabase `playlist_tracks`. NO Supabase call is made yet.
+  //
+  //   updatePlaylistTrackPositions(playlistId, [{playlistTrackId, position}, …])
+  //
+  // Positions are zero-based, contiguous and de-duplicated by the caller.
+  Future<void> updatePlaylistTrackPositions(
+    String playlistId,
+    List<PlaylistTrackPosition> positions,
+  ) async {
+    _log('updatePlaylistTrackPositions(playlist=$playlistId, '
+        '${positions.length} tracks) — local-only this phase (Phase 3.4 cloud).');
+    // Intentionally no cloud call yet — the seam exists so the UI/controller
+    // contract is stable before Supabase playlist sync lands.
   }
 
   // ── FLUSH pending journal ─────────────────────────────────────────
