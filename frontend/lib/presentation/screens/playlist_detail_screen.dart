@@ -181,7 +181,15 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     // Processed Tracks
     final displayTracks = _getFilteredTracks(tracks);
 
-    return Scaffold(
+    return PopScope(
+      // In Edit Order mode, a hardware/gesture back cancels editing (discarding
+      // the staged order — committed order retained) instead of leaving the
+      // screen, matching the on-screen back button.
+      canPop: !_isEditMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _isEditMode) _exitEditMode();
+      },
+      child: Scaffold(
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
@@ -310,10 +318,15 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                 // Dynamic spacer to enforce exact Y alignment for the buttons
                                 SizedBox(height: dynamicGap),
 
-                                // Fixed Text Block (Title, Artist, Metadata)
-                                SizedBox(
-                                  height: textBlockHeight,
+                                // Text Block (Title, Contributors, Metadata).
+                                // minHeight (not fixed height) so the 3 lines can
+                                // GROW at large system text scale instead of
+                                // overflowing the box (accessibility, ui.md).
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                      minHeight: textBlockHeight),
                                   child: Column(
+                                    mainAxisSize: MainAxisSize.min,
                                     mainAxisAlignment: MainAxisAlignment.end,
                                     crossAxisAlignment: CrossAxisAlignment.center,
                                     children: [
@@ -733,7 +746,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           ),
         ],
       ),
-    );
+      ), // Scaffold
+    ); // PopScope
   }
 
   /// High-contrast solid circular action button.

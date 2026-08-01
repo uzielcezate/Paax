@@ -47,6 +47,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final h = _headerKey.currentContext?.size?.height;
     if (h != null && (h - _headerHeight.value).abs() > 0.5) {
       _headerHeight.value = h;
+      // Rebuild so the tabs (which read headerHeight.value in build) re-pad to
+      // the measured height — otherwise at large text scale / after rotation the
+      // first item can underlap the header until an unrelated rebuild.
+      if (mounted) setState(() {});
     }
   }
 

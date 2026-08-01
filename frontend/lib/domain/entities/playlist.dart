@@ -167,14 +167,19 @@ class Playlist extends HiveObject {
         position: 0,
         source: ContributorSource.owner,
       ));
-      if (oId.isNotEmpty) seen.add(oId);
+      if (oId.isNotEmpty) seen.add('id:$oId');
     }
     for (final c in acceptedCollaborators) {
-      // Never repeat the owner (by canonical id), dedupe by id, skip blanks.
-      if (c.userId.isNotEmpty && oId.isNotEmpty && c.userId == oId) continue;
-      if (c.userId.isNotEmpty && !seen.add(c.userId)) continue;
       final n = (c.username ?? '').trim();
-      if (n.isEmpty) continue;
+      if (n.isEmpty) continue; // never render a blank name
+      // Dedup key: canonical id when present, else a name fallback so a missing
+      // id (Phase 3.4 seam) can't duplicate the owner or another collaborator.
+      final key = c.userId.isNotEmpty ? 'id:${c.userId}' : 'name:${n.toLowerCase()}';
+      final ownerKey = oId.isNotEmpty
+          ? 'id:$oId'
+          : (ownerName.isNotEmpty ? 'name:${ownerName.toLowerCase()}' : null);
+      if (ownerKey != null && key == ownerKey) continue; // never repeat the owner
+      if (!seen.add(key)) continue; // dedupe
       out.add(DisplayedContributor(
         userId: c.userId,
         username: n,

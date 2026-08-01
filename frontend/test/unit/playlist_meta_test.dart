@@ -185,6 +185,21 @@ void main() {
       expect(PlaylistMeta.contributorLine(p), '');
     });
 
+    test('empty-id collaborator cannot duplicate the owner (name fallback)', () {
+      // Phase 3.4 seam: a collaborator with a missing canonical id must still be
+      // deduped against the owner by name, never rendered twice.
+      final p = _playlist(
+        ownerId: '',
+        ownerUsername: 'iamleizu',
+        isCollaborative: true,
+        collaborators: [
+          {'userId': '', 'username': 'iamleizu', 'status': 'accepted', 'position': 0},
+          {'userId': '', 'username': 'bren_arteaga', 'status': 'accepted', 'position': 1},
+        ],
+      );
+      expect(PlaylistMeta.contributorLine(p), 'iamleizu, bren_arteaga');
+    });
+
     test('collaborative with no accepted collaborators → owner only, no label',
         () {
       final p = _playlist(
