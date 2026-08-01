@@ -476,4 +476,25 @@ reliably carry an artist) — tracked in TECH_DEBT.
 
 ---
 
-*Last updated: 2026-07-17*
+## Phase 3.3.6 — known limitations (2026-08-01)
+
+- **Playlists are still device-local.** They are not yet cloud-synced (Phase 3.4).
+  The Phase 3.3.6 model is cloud-*ready* but no Supabase writes occur; playlists
+  and their order live in Hive only.
+- **Owner username is the live profile name.** Legacy playlists store no owner
+  username; the header derives it from the current signed-in profile
+  (`AuthController.profile.username`). If signed out with no stored owner, the
+  contributor line is hidden (only Line 3 shows).
+- **Per-account pins reset on first upgrade for signed-in accounts.** Legacy flat
+  pins migrate to the `_local` scope; a signed-in account starts with an empty
+  per-account pin set (re-pin as needed). This is intentional to guarantee no
+  cross-account leak; pins are a trivial device-local convenience.
+- **Collaborators are always empty locally.** The collaborator/role/status model
+  exists for Phase 3.4; there is no invitation or permission flow yet.
+- **Library header inset uses a one-frame fallback.** Before the header is
+  measured (`GlobalKey`), tabs use a composed fallback (`safeTop + 158 + 8`); the
+  measured value refines it. The difference is sub-visible in practice.
+
+---
+
+*Last updated: 2026-08-01*

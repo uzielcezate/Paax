@@ -26,6 +26,49 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.3.6 — Playlist metadata, cloud-ready ordering, cover collage, Library spacing (2026-08-01)
+
+Focused stabilization before Phase 3.4 cloud sync. **Frontend only — no backend
+change, no Railway redeploy, no Supabase migration** (local Hive model + UI). No
+playback change. UI preserved (no redesign).
+
+- **Changed — Playlist Detail metadata is now 3 semantic lines:** title / owner +
+  accepted collaborators (comma-separated) / `Visibility · N songs · duration`
+  (e.g. `Private · 6 songs · 22 min`). Replaces the old single line that
+  concatenated a hardcoded `iamleizu` with the track count. Owner falls back to
+  the live profile username; the contributor line is deduped by canonical user
+  id (owner first, never repeated), never blank, ellipsized. Singular/plural and
+  duration (`22 min` / `1 hr 18 min`, omitted when zero) via a tested
+  `PlaylistMeta` formatter. **No "Collaborative" label** — collaboration is shown
+  by the participant line; visibility (Public/Private) is independent.
+- **Added — cloud-ready playlist model:** `owner`, `collaborators` (accepted-only
+  for display), `visibility`, `isCollaborative`, and **explicit zero-based track
+  positions** (normalized: contiguous, no duplicates). All additive + nullable
+  (legacy Hive records upgrade idempotently). Repository seam
+  `updatePlaylistTrackPositions(playlistId, [{trackId, position}])` — local-only
+  this phase (Phase 3.4 will push to Supabase).
+- **Changed — reorder is committed only on Save.** Edit Order stages changes in a
+  buffer; cancel/back retains the previously committed order; Save normalizes
+  positions and persists to Hive (survives restart). New tracks append after the
+  max position; removal never corrupts ordering.
+- **Fixed — generated cover collage alignment.** The collage now fills its parent
+  square via `AspectRatio(1)` + `Expanded` quadrants (each exactly half the
+  actual box) with one outer clip and center-crop; deduped + invalid-URL-filtered
+  inputs; balanced 1/2/3/4 layouts. Root cause was a rigid `size:240` grid
+  clipped inside a `screenWidth*0.54` box.
+- **Fixed — large blank gap in Library.** All tabs hardcoded `safeTop + 230`,
+  ~80px more than the real ~150px header. Now the header is measured and every
+  tab pads to it via one shared helper (`LibraryLayout.listTopInset`) — no per-tab
+  magic number. Non-empty lists start shortly below the search row; the
+  mini-player never affects the top inset.
+- **Changed — pinned playlists are device-local AND per-account.** Pin state is
+  namespaced by account scope so it never leaks across accounts on the same
+  device; excluded from any future cloud payload. Legacy flat pins migrate to the
+  local scope.
+- Tests: `playlist_meta`, `playlist_order`, `playlist_persistence` (real Hive
+  restart + idempotent migration), `library_layout`, `playlist_cover` widget
+  (square/quadrant proof) — 60+ new assertions, 151 suite pass.
+
 ### Phase 3.3.5 — Real-time global artist follower counts (2026-07-31)
 
 Fixes a multi-user consistency bug: the artist follower pill combined a stale
