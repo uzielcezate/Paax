@@ -49,6 +49,9 @@ class HiveStorage {
     // Run one-time migration to fix duplicates from old .add() calls
     await _deduplicateLikedTracks();
     await _deduplicateRecentlyPlayed();
+    // Phase 3.3.6 — idempotent upgrades (safe to run every launch).
+    await _migratePinnedScopes();
+    await migratePlaylists();
   }
 
   /// Removes duplicate liked tracks caused by old `.add()` (auto-key) saves.
@@ -327,19 +330,58 @@ class HiveStorage {
     return getHiddenTrackIds().contains(trackId);
   }
 
-  // Pinned Playlists — stored as Map<playlistId, pinnedAtMillis> in settings box
-  static const String _pinnedPlaylistsKey = 'pinned_playlist_map';
+  // ── Current account scope (Phase 3.3.6) ───────────────────────────
+  //
+  // The canonical id of the signed-in user, or null when signed out. Used to
+  // stamp playlist owners AND to namespace DEVICE-LOCAL pin state per account so
+  // one account's pins never leak into another on the same device. Set by
+  // LibraryController.onUserSession.
+  static String? _currentAccountId;
+  static String? get currentAccountId => _currentAccountId;
+
+  /// The pin namespace: the current account id, or '_local' when signed out.
+  static String get _pinScope => _currentAccountId ?? '_local';
+
+  static void setCurrentAccount(String? userId) {
+    _currentAccountId = (userId != null && userId.trim().isNotEmpty) ? userId : null;
+  }
+
+  // Pinned Playlists — DEVICE-LOCAL preference, NEVER part of any cloud payload.
+  // Stored per account scope as {scope: {playlistId: pinnedAtMillis}} so pins
+  // are isolated across accounts on the same device.
+  static const String _pinnedScopesKey = 'pinned_playlist_scopes';
+  static const String _legacyPinnedKey = 'pinned_playlist_map';
   static const int maxPinnedPlaylists = 5;
 
-  /// Returns {playlistId: pinnedAtMillisecondsSinceEpoch}
-  static Map<String, int> getPinnedPlaylistMap() {
-    final raw = _settings.get(_pinnedPlaylistsKey);
+  static Map<String, Map<String, int>> _allPinnedScopes() {
+    final raw = _settings.get(_pinnedScopesKey);
+    final out = <String, Map<String, int>>{};
     if (raw is Map) {
-      return Map<String, int>.from(
-        raw.map((k, v) => MapEntry(k.toString(), v is int ? v : 0)),
-      );
+      raw.forEach((scope, inner) {
+        if (inner is Map) {
+          out[scope.toString()] = Map<String, int>.from(
+            inner.map((k, v) => MapEntry(k.toString(), v is int ? v : 0)),
+          );
+        }
+      });
     }
-    return {};
+    return out;
+  }
+
+  static Future<void> _writePinnedScope(
+      String scope, Map<String, int> map) async {
+    final all = _allPinnedScopes();
+    if (map.isEmpty) {
+      all.remove(scope);
+    } else {
+      all[scope] = map;
+    }
+    await _settings.put(_pinnedScopesKey, all);
+  }
+
+  /// Returns {playlistId: pinnedAtMillisecondsSinceEpoch} for the CURRENT account.
+  static Map<String, int> getPinnedPlaylistMap() {
+    return _allPinnedScopes()[_pinScope] ?? <String, int>{};
   }
 
   static bool isPlaylistPinned(String playlistId) {
@@ -354,7 +396,7 @@ class HiveStorage {
     if (map.containsKey(playlistId)) return true; // already pinned
     if (map.length >= maxPinnedPlaylists) return false; // limit
     map[playlistId] = DateTime.now().millisecondsSinceEpoch;
-    await _settings.put(_pinnedPlaylistsKey, map);
+    await _writePinnedScope(_pinScope, map);
     return true;
   }
 
@@ -362,7 +404,7 @@ class HiveStorage {
   static Future<void> unpinPlaylist(String playlistId) async {
     final map = getPinnedPlaylistMap();
     map.remove(playlistId);
-    await _settings.put(_pinnedPlaylistsKey, map);
+    await _writePinnedScope(_pinScope, map);
   }
 
   /// Toggle pin state. Returns true if now pinned, false if unpinned, null if limit.
@@ -376,13 +418,71 @@ class HiveStorage {
     }
   }
 
-  /// Clean up pinned entries for playlists that no longer exist.
+  /// Clean up pinned entries for playlists that no longer exist (current scope).
   static Future<void> cleanPinnedPlaylists(Set<String> existingIds) async {
     final map = getPinnedPlaylistMap();
     final cleaned = Map<String, int>.from(map)
       ..removeWhere((id, _) => !existingIds.contains(id));
     if (cleaned.length != map.length) {
-      await _settings.put(_pinnedPlaylistsKey, cleaned);
+      await _writePinnedScope(_pinScope, cleaned);
+    }
+  }
+
+  /// One-time move of legacy flat pins → the '_local' scope. Idempotent: the
+  /// legacy key is deleted after the move, so subsequent runs are no-ops.
+  static Future<void> _migratePinnedScopes() async {
+    final legacy = _settings.get(_legacyPinnedKey);
+    if (legacy is Map && legacy.isNotEmpty) {
+      final all = _allPinnedScopes();
+      final localMap = all['_local'] ?? <String, int>{};
+      legacy.forEach((k, v) {
+        localMap.putIfAbsent(k.toString(), () => v is int ? v : 0);
+      });
+      all['_local'] = localMap;
+      await _settings.put(_pinnedScopesKey, all);
+    }
+    if (_settings.containsKey(_legacyPinnedKey)) {
+      await _settings.delete(_legacyPinnedKey);
+    }
+  }
+
+  /// Idempotent upgrade of pre-3.3.6 playlists: fill missing owner id, default
+  /// visibility (private) + isCollaborative (false), empty collaborators, and
+  /// derive explicit zero-based positions from the current committed track order
+  /// when absent. Preserves ids/tracks/title/cover/videoIds; never duplicates or
+  /// deletes. Running twice with the same inputs yields exactly the same state.
+  static Future<void> migratePlaylists({String? ownerId}) async {
+    final box = _playlists;
+    for (final key in box.keys.toList()) {
+      final p = box.get(key);
+      if (p == null) continue;
+
+      final needsOwner = (p.ownerId == null || p.ownerId!.isEmpty) &&
+          (ownerId != null && ownerId.isNotEmpty);
+      final needsVisibility = p.visibility == null;
+      final needsCollab = p.isCollaborative == null;
+      final needsCollabJson = p.collaboratorsJson == null;
+      final needsPositions = p.trackPositions == null ||
+          p.trackPositions!.length != p.tracks.length;
+
+      if (!needsOwner &&
+          !needsVisibility &&
+          !needsCollab &&
+          !needsCollabJson &&
+          !needsPositions) {
+        continue; // already upgraded — no-op
+      }
+
+      final updated = p.copyWith(
+        ownerId: needsOwner ? ownerId : null, // copyWith keeps old when null
+        visibility: p.visibility ?? PlaylistVisibility.private,
+        isCollaborative: p.isCollaborative ?? false,
+        collaboratorsJson: p.collaboratorsJson ?? '[]',
+        trackPositions: needsPositions
+            ? List<int>.generate(p.tracks.length, (i) => i)
+            : p.trackPositions,
+      );
+      await box.put(key, updated);
     }
   }
 }
