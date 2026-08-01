@@ -1,9 +1,13 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
+import '../state/auth_controller.dart';
+import '../../core/utils/playlist_meta.dart';
+import '../../core/utils/library_layout.dart';
 import 'track_detail_screen.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
@@ -31,6 +35,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
   int _selectedIndex = 0;
   final ValueNotifier<double> _scrollOffset = ValueNotifier(0.0);
 
+  // Phase 3.3.6: the floating header's MEASURED height (title + chips + search,
+  // incl. safe area). Content tabs pad their lists by this exact value instead
+  // of the old hardcoded `padding.top + 230`, which over-reserved ~80px and left
+  // a large blank gap before the first result. Shared across every tab — one
+  // source of truth, not a per-tab magic number.
+  final GlobalKey _headerKey = GlobalKey();
+  final ValueNotifier<double> _headerHeight = ValueNotifier<double>(0.0);
+
+  void _measureHeader() {
+    final h = _headerKey.currentContext?.size?.height;
+    if (h != null && (h - _headerHeight.value).abs() > 0.5) {
+      _headerHeight.value = h;
+    }
+  }
+
   // Per-tab search/sort state (lifted from tabs)
   final List<String> _searchQueries = ["", "", "", ""];
   final List<int> _sortOptions = [0, 0, 0, 0];
@@ -53,6 +72,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void dispose() {
     _scrollOffset.dispose();
+    _headerHeight.dispose();
     super.dispose();
   }
 
@@ -119,6 +139,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Measure the floating header after layout so tabs pad to its real height.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureHeader());
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -136,10 +158,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
               child: IndexedStack(
                 index: _selectedIndex,
                 children: [
-                  _LikedSongsTab(searchQuery: _searchQueries[0], sortOption: _sortOptions[0]),
-                  _PlaylistsTab(searchQuery: _searchQueries[1], sortOption: _sortOptions[1]),
-                  _SavedAlbumsTab(searchQuery: _searchQueries[2], sortOption: _sortOptions[2]),
-                  _FollowedArtistsTab(searchQuery: _searchQueries[3], sortOption: _sortOptions[3]),
+                  _LikedSongsTab(searchQuery: _searchQueries[0], sortOption: _sortOptions[0], headerHeight: _headerHeight),
+                  _PlaylistsTab(searchQuery: _searchQueries[1], sortOption: _sortOptions[1], headerHeight: _headerHeight),
+                  _SavedAlbumsTab(searchQuery: _searchQueries[2], sortOption: _sortOptions[2], headerHeight: _headerHeight),
+                  _FollowedArtistsTab(searchQuery: _searchQueries[3], sortOption: _sortOptions[3], headerHeight: _headerHeight),
                 ],
               ),
             ),
@@ -180,6 +202,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Container(
+                  key: _headerKey,
                   color: AppColors.background,
                   child: SafeArea(
                     bottom: false,
@@ -280,13 +303,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
 }
 
 
+/// Shared top inset for every Library content list (one source of truth — not a
+/// per-tab magic number). Delegates to [LibraryLayout.listTopInset].
+double _libraryListTop(BuildContext ctx, double measured) {
+  return LibraryLayout.listTopInset(
+    safeTop: MediaQuery.of(ctx).padding.top,
+    measuredHeader: measured,
+  );
+}
+
 // -----------------------------------------------------------------------------
 // LIKED SONGS TAB
 // -----------------------------------------------------------------------------
 class _LikedSongsTab extends StatefulWidget {
   final String searchQuery;
   final int sortOption;
-  const _LikedSongsTab({required this.searchQuery, required this.sortOption});
+  final ValueListenable<double> headerHeight;
+  const _LikedSongsTab({required this.searchQuery, required this.sortOption, required this.headerHeight});
 
   @override
   State<_LikedSongsTab> createState() => _LikedSongsTabState();
@@ -322,7 +355,7 @@ class _LikedSongsTabState extends State<_LikedSongsTab> with AutomaticKeepAliveC
       : ListView.builder(
           key: const PageStorageKey("LikedSongsList"),
           padding: EdgeInsets.only(
-            top: MediaQuery.of(context).padding.top + 230,
+            top: _libraryListTop(context, widget.headerHeight.value),
             bottom: BottomContentPadding.bottomHeight(context),
           ),
           itemCount: displayedTracks.length,
@@ -364,7 +397,8 @@ class _LikedSongsTabState extends State<_LikedSongsTab> with AutomaticKeepAliveC
 class _PlaylistsTab extends StatefulWidget {
   final String searchQuery;
   final int sortOption;
-  const _PlaylistsTab({required this.searchQuery, required this.sortOption});
+  final ValueListenable<double> headerHeight;
+  const _PlaylistsTab({required this.searchQuery, required this.sortOption, required this.headerHeight});
 
   @override
   State<_PlaylistsTab> createState() => _PlaylistsTabState();
@@ -404,7 +438,7 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
       : ListView.builder(
           key: const PageStorageKey("PlaylistsList"),
           padding: EdgeInsets.only(
-            top: MediaQuery.of(context).padding.top + 230,
+            top: _libraryListTop(context, widget.headerHeight.value),
             bottom: BottomContentPadding.bottomHeight(context),
           ),
           itemCount: displayed.length,
@@ -431,7 +465,14 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
                   ),
                 ],
               ),
-              subtitle: Text("iamleizu • ${pl.tracks.length} tracks", style: const TextStyle(color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Builder(builder: (context) {
+                final fallback = context.watch<AuthController>().profile?.username ??
+                    context.read<AuthController>().profile?.displayName;
+                final owner = PlaylistMeta.contributorLine(pl, fallbackUsername: fallback);
+                final count = PlaylistMeta.songCount(pl.tracks.length);
+                final text = owner.isEmpty ? count : "$owner${PlaylistMeta.separator}$count";
+                return Text(text, style: const TextStyle(color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis);
+              }),
               trailing: OverflowMenu(
                 type: MenuType.playlist,
                 playlist: pl,
@@ -528,7 +569,8 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
 class _SavedAlbumsTab extends StatefulWidget {
   final String searchQuery;
   final int sortOption;
-  const _SavedAlbumsTab({required this.searchQuery, required this.sortOption});
+  final ValueListenable<double> headerHeight;
+  const _SavedAlbumsTab({required this.searchQuery, required this.sortOption, required this.headerHeight});
 
   @override
   State<_SavedAlbumsTab> createState() => _SavedAlbumsTabState();
@@ -561,7 +603,7 @@ class _SavedAlbumsTabState extends State<_SavedAlbumsTab> with AutomaticKeepAliv
       : GridView.builder(
           key: const PageStorageKey("AlbumsGrid"),
           padding: EdgeInsets.fromLTRB(
-            16, MediaQuery.of(context).padding.top + 230, 16, BottomContentPadding.bottomHeight(context),
+            16, _libraryListTop(context, widget.headerHeight.value), 16, BottomContentPadding.bottomHeight(context),
           ),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
              crossAxisCount: 2,
@@ -605,7 +647,8 @@ class _SavedAlbumsTabState extends State<_SavedAlbumsTab> with AutomaticKeepAliv
 class _FollowedArtistsTab extends StatefulWidget {
   final String searchQuery;
   final int sortOption;
-  const _FollowedArtistsTab({required this.searchQuery, required this.sortOption});
+  final ValueListenable<double> headerHeight;
+  const _FollowedArtistsTab({required this.searchQuery, required this.sortOption, required this.headerHeight});
 
   @override
   State<_FollowedArtistsTab> createState() => _FollowedArtistsTabState();
@@ -633,7 +676,7 @@ class _FollowedArtistsTabState extends State<_FollowedArtistsTab> with Automatic
      : GridView.builder(
         key: const PageStorageKey("ArtistsGrid"),
         padding: EdgeInsets.fromLTRB(
-           16, MediaQuery.of(context).padding.top + 230, 16, BottomContentPadding.bottomHeight(context),
+           16, _libraryListTop(context, widget.headerHeight.value), 16, BottomContentPadding.bottomHeight(context),
         ),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
            crossAxisCount: 3,
