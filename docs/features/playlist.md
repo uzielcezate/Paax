@@ -123,4 +123,61 @@ Every user-facing surface must handle the five UI states (see [ui rules](../../.
 
 ---
 
-*Last updated: 2026-07-16*
+## Phase 3.3.6 — cloud-ready model (2026-08-01)
+
+The local `Playlist` entity was extended (additive, backward-compatible) to
+prepare for Phase 3.4 Supabase sync **without another UI rewrite**. Nothing here
+calls Supabase yet.
+
+**Domain**
+- `owner` (`PlaylistOwner{userId, username}`) — the single creator/administrator;
+  the authorization source for ownership. Canonical **user id** keyed (usernames
+  may change). Ownership never changes implicitly.
+- `collaborators` (`PlaylistCollaborator{userId, username, role, status, position}`)
+  — authorization source for shared editing. Only `status == accepted` grants
+  edit rights or appears in the UI. Empty on all local playlists this phase.
+- `visibility` (`private` | `public`) and `isCollaborative` (bool) are
+  **independent** explicit fields. A playlist may be private+collaborative, etc.
+  `isCollaborative` is NOT inferred from the contributor count.
+- `displayedContributors` — a **presentation projection** (owner first, then
+  accepted collaborators, deduped by user id, owner never repeated). Never an
+  authorization source; safely recomputable from owner + accepted collaborators.
+- **Explicit track positions** — zero-based, normalized (contiguous, no dupes) on
+  every add/remove/commit. The committed `tracks` list order is the source of
+  truth; `normalizedPositions()` yields the cloud payload `{trackId, position}`.
+
+**Header UI** (unchanged look): Line 1 title · Line 2 `owner[, collaborators]` ·
+Line 3 `Visibility · N songs · duration`. **No** Collaborative/Owner/Contributor
+labels — collaboration is communicated by the participant line alone.
+
+**Ordering**: reorder is staged in Edit Order mode and committed **only on Save**
+(`LibraryController.commitPlaylistOrder`); cancel/back retains the committed
+order; the order persists to Hive and survives restart. Repository seam:
+`updatePlaylistTrackPositions(playlistId, [{trackId, position}])` (local-only).
+
+**Field mapping → future Supabase (Phase 3.4):**
+
+| Local (`Playlist`) | `playlists` | `playlist_collaborators` | `playlist_tracks` |
+|---|---|---|---|
+| `id` | `id` | — | — |
+| `ownerId` | `owner_id` | — | — |
+| `name` | `title` | — | — |
+| `visibility` | `visibility` | — | — |
+| `isCollaborative` | `is_collaborative` | — | — |
+| `collaborators[]` | — | `playlist_id, user_id, role, status, position, created_at` | — |
+| `tracks[]` + positions | — | — | `playlist_id, track_id, position, added_at, added_by` |
+| `createdAt` | `created_at` | — | — |
+
+**Device-local only (NEVER in the cloud payload):** pinned playlist ids —
+stored in the settings box, namespaced **per account** so pins don't leak across
+accounts on a device, and never synced across devices.
+
+> **Cloud-ready vs device-local:** playlist content + order = cloud-ready;
+> pinned status = device-local preference.
+
+Not implemented this phase: collaborative editing permissions, invitations,
+real-time playlist editing (Phase 3.4+).
+
+---
+
+*Last updated: 2026-08-01*

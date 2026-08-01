@@ -36,7 +36,13 @@ class LibraryController extends ChangeNotifier {
   /// no repository was injected. Idempotent per identity — repeated calls with
   /// the same user id are ignored. Never throws to the UI.
   Future<void> onUserSession(String? userId) async {
-    if (_repo == null) return;
+    // Scope DEVICE-LOCAL pin state to this account so pins never leak across
+    // accounts on the same device (Phase 3.3.6). Safe to set even without a repo.
+    HiveStorage.setCurrentAccount(userId);
+    if (_repo == null) {
+      _loadData();
+      return;
+    }
     if (_sessionUidSet && userId == _sessionUid) return; // same identity — skip
     final isAccountSwitch = _sessionUidSet && _sessionUid != null && userId != _sessionUid;
     _sessionUid = userId;
@@ -56,6 +62,11 @@ class LibraryController extends ChangeNotifier {
       await _repo.onUserSession(userId);
     } catch (_) {
       // Cloud sync is best-effort; local library is already authoritative.
+    }
+    // Stamp the canonical owner on any playlist that predates ownership (derive
+    // owner from the current profile when missing — Phase 3.3.6). Idempotent.
+    if (userId != null) {
+      await HiveStorage.migratePlaylists(ownerId: userId);
     }
     _loadData();
   }
@@ -144,6 +155,13 @@ class LibraryController extends ChangeNotifier {
       tracks: [],
       createdAt: DateTime.now(),
       coverColor: 0xFF2A2A2E, // Default neutral dark gray
+      // Phase 3.3.6: stamp the canonical owner + cloud-ready defaults. Username
+      // is display-only (the pill falls back to the live profile); the id is the
+      // durable ownership identity.
+      ownerId: HiveStorage.currentAccountId,
+      visibility: PlaylistVisibility.private,
+      isCollaborative: false,
+      trackPositions: const [],
     );
     await HiveStorage.savePlaylist(newPlaylist);
     _loadData();
@@ -152,9 +170,10 @@ class LibraryController extends ChangeNotifier {
   Future<void> addToPlaylist(Playlist playlist, Track track) async {
     // Check for duplicates
     if (!playlist.tracks.any((t) => t.id == track.id)) {
+      // Appended after the current maximum position (list end); positions are
+      // re-normalized on persist so they stay contiguous with no duplicates.
       playlist.tracks.add(track);
-      await playlist.save(); 
-      notifyListeners();
+      await _persistPlaylist(playlist);
     }
   }
 
@@ -167,24 +186,37 @@ class LibraryController extends ChangeNotifier {
       }
     }
     if (changed) {
-      await playlist.save();
-      notifyListeners();
+      await _persistPlaylist(playlist);
     }
   }
 
   Future<void> removeFromPlaylist(Playlist playlist, Track track) async {
+    // Removal never corrupts the remaining order — positions are re-normalized.
     playlist.tracks.removeWhere((t) => t.id == track.id);
-    await playlist.save();
-    notifyListeners();
+    await _persistPlaylist(playlist);
   }
 
-  /// Reorder a track within a playlist. Persists new order immediately.
-  Future<void> reorderPlaylistTrack(Playlist playlist, int oldIndex, int newIndex) async {
-    if (newIndex > oldIndex) newIndex--;
-    final track = playlist.tracks.removeAt(oldIndex);
-    playlist.tracks.insert(newIndex, track);
-    await playlist.save();
-    notifyListeners();
+  /// Commit a manually-reordered track list (Phase 3.3.6). Called ONLY when the
+  /// user presses Save in Edit Order mode — reordering is staged locally in the
+  /// screen until then, so cancelling/back retains the previously committed
+  /// order. Explicit positions are normalized (0-based, contiguous, no dupes)
+  /// and persisted to Hive; the cloud seam is invoked for Phase 3.4.
+  Future<void> commitPlaylistOrder(Playlist playlist, List<Track> newOrder) async {
+    playlist.tracks
+      ..clear()
+      ..addAll(newOrder);
+    await _persistPlaylist(playlist);
+    // Cloud-ready seam — local only in this phase (no Supabase call yet).
+    await _repo?.updatePlaylistTrackPositions(
+        playlist.id, playlist.normalizedPositions());
+  }
+
+  /// Persist a playlist with normalized explicit track positions, then reload so
+  /// the in-memory list reflects the stored object.
+  Future<void> _persistPlaylist(Playlist playlist) async {
+    final normalized = playlist.withNormalizedPositions();
+    await HiveStorage.savePlaylist(normalized);
+    _loadData();
   }
   
   Future<void> deletePlaylist(Playlist playlist) async {
@@ -193,16 +225,8 @@ class LibraryController extends ChangeNotifier {
   }
 
   Future<void> renamePlaylist(Playlist playlist, String newName) async {
-    // Create copy with new name
-    final updated = Playlist(
-      id: playlist.id,
-      name: newName,
-      tracks: playlist.tracks,
-      createdAt: playlist.createdAt,
-      coverColor: playlist.coverColor
-    );
-    // Overwrite using ID (assuming ID is key)
-    await HiveStorage.savePlaylist(updated);
+    // copyWith preserves owner/collaborators/visibility/positions (Phase 3.3.6).
+    await HiveStorage.savePlaylist(playlist.copyWith(name: newName));
     _loadData();
   }
   

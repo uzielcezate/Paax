@@ -93,7 +93,11 @@ class _AddToPlaylistContent extends StatelessWidget {
                 final bool isSingle = tracks.length == 1;
                 final alreadyAdded = isSingle && pl.tracks.any((t) => t.id == tracks.first.id);
                 return ListTile(
-                  leading: PlaylistCover(playlist: pl, size: 48),
+                  leading: SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: PlaylistCover(playlist: pl, size: 48),
+                  ),
                   title: Text(pl.name, style: TextStyle(color: sheetFg)),
                   subtitle: Text("${pl.tracks.length} tracks", style: const TextStyle(color: Color(0xFF888888), fontSize: 12)),
                   trailing: alreadyAdded 

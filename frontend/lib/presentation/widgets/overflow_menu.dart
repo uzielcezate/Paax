@@ -206,7 +206,11 @@ class _MenuContent extends StatelessWidget {
     // For playlists, use PlaylistCover widget; for others, use imageUrl
     Widget? leadingWidget;
     if (type == MenuType.playlist && playlist != null) {
-      leadingWidget = PlaylistCover(playlist: playlist!, size: 48, borderRadius: 4);
+      leadingWidget = SizedBox(
+        width: 48,
+        height: 48,
+        child: PlaylistCover(playlist: playlist!, size: 48, borderRadius: 4),
+      );
     } else if (imageUrl != null) {
       leadingWidget = ClipRRect(
         borderRadius: BorderRadius.circular(4),
