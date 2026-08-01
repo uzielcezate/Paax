@@ -7,6 +7,8 @@ import '../../domain/entities/track.dart';
 import '../../core/theme/app_colors.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
+import '../state/auth_controller.dart';
+import '../../core/utils/playlist_meta.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/bottom_content_padding.dart';
@@ -38,6 +40,12 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   /// Edit Order mode â€” shows drag handles and remove icons.
   bool _isEditMode = false;
+
+  /// Phase 3.3.6: staged track order while in Edit Order mode. Reordering and
+  /// removals mutate ONLY this buffer; nothing is persisted until the user
+  /// presses Save (check). Cancelling / back discards it, retaining the last
+  /// committed order. Null when not editing.
+  List<Track>? _editOrder;
 
   // Accent color from artwork
   Color _dominantColor = DominantColorService.fallback;
@@ -122,12 +130,33 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     );
   }
 
-  void _enterEditMode() {
-    setState(() => _isEditMode = true);
+  void _enterEditMode(List<Track> current) {
+    setState(() {
+      _isEditMode = true;
+      _editOrder = List<Track>.from(current); // staged copy
+    });
   }
 
+  /// Cancel / back — discard the staged order, keeping the committed one.
   void _exitEditMode() {
-    setState(() => _isEditMode = false);
+    setState(() {
+      _isEditMode = false;
+      _editOrder = null;
+    });
+  }
+
+  /// Save — commit the staged order (normalizes explicit positions + persists).
+  Future<void> _saveOrder(LibraryController library, Playlist playlist) async {
+    final staged = _editOrder;
+    if (staged != null) {
+      await library.commitPlaylistOrder(playlist, staged);
+    }
+    if (mounted) {
+      setState(() {
+        _isEditMode = false;
+        _editOrder = null;
+      });
+    }
   }
 
   @override
@@ -148,13 +177,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     }
 
     final tracks = currentPlaylist.tracks;
-    
-    // Calculate duration
-    int totalDuration = 0;
-    for(var t in tracks) {
-      totalDuration += t.duration;
-    }
-    
+
     // Processed Tracks
     final displayTracks = _getFilteredTracks(tracks);
 
@@ -224,7 +247,23 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                             final double screenWidth = MediaQuery.of(context).size.width;
                             final double topSafeArea = MediaQuery.of(context).padding.top;
                             final double coverSize = screenWidth * 0.54;
-                            const double textBlockHeight = 84; 
+                            // Phase 3.3.6: 3-line metadata (title / contributors /
+                            // visibility·songs·duration) needs a bit more height.
+                            const double textBlockHeight = 100;
+                            // Owner fallback: legacy playlists have no stored
+                            // owner username → use the current profile.
+                            final String? fallbackUsername =
+                                context.watch<AuthController>().profile?.username ??
+                                    context.read<AuthController>().profile?.displayName;
+                            final String contributorLine = PlaylistMeta
+                                .contributorLine(currentPlaylist!,
+                                    fallbackUsername: fallbackUsername);
+                            final String detailLine = PlaylistMeta.detailLine(
+                              visibility: currentPlaylist.visibility,
+                              trackCount: currentPlaylist.trackCount,
+                              totalDurationSeconds:
+                                  currentPlaylist.totalDurationSeconds,
+                            );
                             final double targetButtonY = screenWidth + 16;
                             final double currentY = topSafeArea + 16 + coverSize + textBlockHeight + 16; // 16 is bottom gap
                             final double gap = targetButtonY - currentY;
@@ -255,13 +294,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                           ),
                                         ],
                                       ),
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: PlaylistCover(
-                                          playlist: currentPlaylist!,
-                                          size: 240,
-                                          borderRadius: 12,
-                                        ),
+                                      // PlaylistCover fills this box and applies
+                                      // its own single clip (Phase 3.3.6) — no
+                                      // redundant outer ClipRRect, no size/parent
+                                      // mismatch that used to crop the collage.
+                                      child: PlaylistCover(
+                                        playlist: currentPlaylist!,
+                                        size: coverSize,
+                                        borderRadius: 12,
                                       ),
                                     ),
                                   ),
@@ -291,11 +331,29 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                           height: 1.2,
                                         ),
                                       ),
-                                      const SizedBox(height: 6),
+                                      const SizedBox(height: 4),
 
-                                      // Creator & Metadata: iamleizu • songs • duration
+                                      // Line 2: owner + accepted collaborators.
+                                      // Hidden entirely when no name is available
+                                      // (never a blank line). Truncates safely.
+                                      if (contributorLine.isNotEmpty) ...[
+                                        Text(
+                                          contributorLine,
+                                          textAlign: TextAlign.center,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                      ],
+
+                                      // Line 3: visibility · songs · duration.
                                       Text(
-                                        "iamleizu • ${tracks.length} ${tracks.length == 1 ? 'song' : 'songs'} • ${_formatTotalDuration(totalDuration)}",
+                                        detailLine,
                                         textAlign: TextAlign.center,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
@@ -376,7 +434,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                     // Edit Order
                                     _buildActionButton(
                                       icon: Icons.swap_vert_rounded,
-                                      onTap: tracks.isNotEmpty ? _enterEditMode : () {},
+                                      onTap: tracks.isNotEmpty ? () => _enterEditMode(tracks) : () {},
                                     ),
                                     // Download
                                     _buildActionButton(
@@ -448,9 +506,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                       physics: const NeverScrollableScrollPhysics(),
                       buildDefaultDragHandles: false,
                       onReorder: (oldIndex, newIndex) {
-                        library.reorderPlaylistTrack(currentPlaylist!, oldIndex, newIndex);
+                        // Staged only — nothing persists until Save.
+                        setState(() {
+                          if (newIndex > oldIndex) newIndex--;
+                          final t = _editOrder!.removeAt(oldIndex);
+                          _editOrder!.insert(newIndex, t);
+                        });
                       },
-                      itemCount: displayTracks.length,
+                      itemCount: (_editOrder ?? const <Track>[]).length,
                       proxyDecorator: (child, index, animation) {
                         return Material(
                           color: Colors.transparent,
@@ -460,13 +523,13 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                         );
                       },
                       itemBuilder: (context, index) {
-                        final track = displayTracks[index];
+                        final track = _editOrder![index];
                         return Container(
                           key: ValueKey('edit_${track.id}_$index'),
                           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                           child: Row(
                             children: [
-                              // Remove button
+                              // Remove button (staged — commits on Save)
                               IconButton(
                                 icon: const Icon(
                                   Icons.remove_circle_outline_rounded,
@@ -474,10 +537,12 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                   size: 22,
                                 ),
                                 onPressed: () {
-                                  library.removeFromPlaylist(currentPlaylist!, track);
+                                  setState(() {
+                                    _editOrder!.removeWhere((t) => t.id == track.id);
+                                  });
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
-                                      content: Text('Removed "${track.title}" from playlist'),
+                                      content: Text('Removed "${track.title}" — Save to confirm'),
                                       duration: const Duration(seconds: 2),
                                     ),
                                   );
@@ -626,7 +691,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                             child: _isEditMode
                                 ? IconButton(
                                     icon: const Icon(Icons.check_rounded, color: Colors.white, size: 26),
-                                    onPressed: _exitEditMode,
+                                    onPressed: () => _saveOrder(library, currentPlaylist!),
                                   )
                                 : SizedBox(
                                     width: 48,
@@ -638,7 +703,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                         iconColor: Colors.white,
                                         onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
                                         onDelete: () => _confirmDelete(context, library, currentPlaylist!),
-                                        onEditOrder: tracks.isNotEmpty ? _enterEditMode : null,
+                                        onEditOrder: tracks.isNotEmpty ? () => _enterEditMode(tracks) : null,
                                       ),
                                     ),
                                   ),
@@ -698,13 +763,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         ),
       ),
     );
-  }
-
-  String _formatTotalDuration(int totalSeconds) {
-    if (totalSeconds < 3600) return "${totalSeconds ~/ 60} min";
-    final hours = totalSeconds ~/ 3600;
-    final mins = (totalSeconds % 3600) ~/ 60;
-    return "$hours hr $mins min";
   }
 
   void _showRenameDialog(BuildContext context, LibraryController library, Playlist playlist) {
