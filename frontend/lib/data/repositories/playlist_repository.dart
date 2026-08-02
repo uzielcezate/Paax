@@ -339,6 +339,13 @@ class PlaylistRepository {
       return OpOutcome.conflict;
     } on PlaylistForbiddenException {
       return OpOutcome.forbidden;
+    } on PlaylistRemoteException catch (e) {
+      // Permanent, non-retryable failures — drop so they can't block the queue.
+      const permanent = ['NOT_FOUND', 'ORDER_SET_MISMATCH', 'EMPTY_RESULT',
+        'INVALID', 'NAME_REQUIRED', 'MISMATCH', 'CANNOT_', 'ALREADY_', 'USER_NOT_FOUND'];
+      final msg = e.message;
+      if (permanent.any(msg.contains)) return OpOutcome.drop;
+      return OpOutcome.retry; // transient (network)
     } catch (_) {
       return OpOutcome.retry;
     }

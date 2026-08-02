@@ -95,6 +95,38 @@ void main() {
     expect(r.remaining, 1);
   });
 
+  test('flush: permanent DROP removes op and KEEPS GOING (no poison pill)', () async {
+    final j = PlaylistOpsJournal();
+    final s = PlaylistSyncService(j);
+    await s.enqueue(_op('u1', 'p', 'op1', PlaylistOpType.saveOrder)); // will drop
+    await s.enqueue(_op('u1', 'p', 'op2', PlaylistOpType.addTracks)); // must still run
+    var ran = <String>[];
+    final r = await s.flush('u1', (op) async {
+      ran.add(op.opId);
+      return op.opId == 'op1' ? OpOutcome.drop : OpOutcome.success;
+    });
+    expect(ran, ['op1', 'op2']); // did NOT stop at the dropped op
+    expect(r.dropped.map((o) => o.opId), ['op1']);
+    expect(r.remaining, 0);
+    expect(j.hasPending('u1'), isFalse);
+  });
+
+  test('flush: an op past the retry cap is dropped (never blocks forever)', () async {
+    final j = PlaylistOpsJournal();
+    final s = PlaylistSyncService(j);
+    await j.enqueue(PlaylistOp(
+      opId: 'stuck', userId: 'u1', playlistId: 'p',
+      type: PlaylistOpType.saveOrder, createdAt: DateTime(2026, 1, 1),
+      retryCount: PlaylistSyncService.maxRetries,
+    ));
+    await s.enqueue(_op('u1', 'p', 'op2', PlaylistOpType.addTracks, at: DateTime(2026, 1, 2)));
+    var ran = <String>[];
+    final r = await s.flush('u1', (op) async { ran.add(op.opId); return OpOutcome.success; });
+    expect(ran, ['op2']); // 'stuck' was dropped without executing
+    expect(r.dropped.map((o) => o.opId), ['stuck']);
+    expect(j.hasPending('u1'), isFalse);
+  });
+
   test('flush only touches the given user (account isolation)', () async {
     final j = PlaylistOpsJournal();
     final s = PlaylistSyncService(j);

@@ -60,7 +60,7 @@ void main() {
     expect(log.first['tracks'], ['uuid-100', 'uuid-200']);
     expect(s.isMigrated('userA'), isTrue);
     // stable cloud id recorded for local id
-    expect(s.cloudIdFor('l1'), isNotNull);
+    expect(s.cloudIdFor('userA', 'l1'), isNotNull);
   });
 
   test('idempotent: a second run does nothing', () async {
@@ -86,7 +86,7 @@ void main() {
     final r1 = await failing.migrateForUser('userB', [_p('l1', [_t('100')])]);
     expect(r1.failed, 1);
     expect(failing.isMigrated('userB'), isFalse); // not marked
-    final firstCloudId = failing.cloudIdFor('l1');
+    final firstCloudId = failing.cloudIdFor('userB', 'l1');
     expect(firstCloudId, isNotNull); // id persisted before create (retry-safe)
 
     // Retry with a working create: must reuse the SAME cloud id.

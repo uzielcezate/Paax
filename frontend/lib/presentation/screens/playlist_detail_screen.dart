@@ -194,7 +194,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   Future<void> _saveOrder(LibraryController library, Playlist playlist) async {
     final staged = _editOrder;
     if (staged != null) {
-      await library.commitPlaylistOrder(playlist, staged);
+      await library.commitPlaylistOrder(playlist, staged,
+          expectedVersion: (_cloud?.isCloud == true) ? _cloud?.version : null);
     }
     if (mounted) {
       setState(() {
@@ -464,8 +465,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                   listenable: _cloud!,
                                   builder: (context, _) {
                                     final c = _cloud!;
-                                    final nonMember = c.isCloud && c.loaded &&
-                                        !c.permissions.isEditorMember;
+                                    // Review M7: deny-by-default from the initial
+                                    // owner id (available immediately) — do NOT
+                                    // wait for `loaded`, else a non-member/follower
+                                    // transiently sees the owner/editor row.
+                                    final nonMember = c.isCloud && !c.permissions.isEditorMember;
 
                                     final shuffle = _buildActionButton(
                                       icon: Icons.shuffle_rounded,
@@ -856,7 +860,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                           // manage items; show Add-to-playlist +
                                           // Unfollow. Local playlists stay manageable.
                                           final canManage =
-                                              !(c.isCloud && c.loaded && !c.permissions.isEditorMember);
+                                              !(c.isCloud && !c.permissions.isEditorMember);
                                           return OverflowMenu(
                                             type: MenuType.playlist,
                                             playlist: currentPlaylist,

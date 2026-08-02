@@ -201,6 +201,14 @@ class HiveStorage {
     await _playlists.delete(id);
   }
 
+  /// Phase 3.4.1 — clear the local playlists cache on account switch (playlists
+  /// are now cloud-backed; a previous account's rows must not leak into the new
+  /// one). The signed-in account re-hydrates its own from the cloud, and any
+  /// unsynced local playlists survive in the per-user pending-op journal.
+  static Future<void> clearPlaylists() async {
+    await _playlists.clear();
+  }
+
   /// Phase 3.4.1 — re-key a local playlist to its cloud UUID after migration.
   /// Preserves tracks/name/cover/metadata and migrates the device-local pin
   /// (per current account scope). No-op if the source is missing or ids match.

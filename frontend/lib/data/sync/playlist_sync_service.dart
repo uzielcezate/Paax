@@ -10,16 +10,21 @@
 import '../local/playlist_ops_journal.dart';
 import 'playlist_op.dart';
 
-enum OpOutcome { success, conflict, forbidden, retry }
+/// `drop` = a PERMANENT non-conflict failure (NOT_FOUND / validation) that can
+/// never succeed on retry — removed without blocking the queue (vs `retry`,
+/// which is a transient network stall that stops replay to preserve order).
+enum OpOutcome { success, conflict, forbidden, retry, drop }
 
 class PlaylistFlushResult {
   final List<PlaylistOp> conflicts;
   final List<PlaylistOp> forbidden;
+  final List<PlaylistOp> dropped; // permanent failures / gave-up poison pills
   final int remaining;
 
   const PlaylistFlushResult({
     this.conflicts = const [],
     this.forbidden = const [],
+    this.dropped = const [],
     this.remaining = 0,
   });
 
@@ -29,6 +34,10 @@ class PlaylistFlushResult {
 
 class PlaylistSyncService {
   final PlaylistOpsJournal _journal;
+
+  /// After this many failed network retries, a stuck op is dropped so it can
+  /// never permanently block later ops for the same user.
+  static const int maxRetries = 8;
 
   PlaylistSyncService(this._journal);
 
@@ -47,11 +56,17 @@ class PlaylistSyncService {
     final remaining = <PlaylistOp>[];
     final conflicts = <PlaylistOp>[];
     final forbidden = <PlaylistOp>[];
+    final dropped = <PlaylistOp>[];
     var stopped = false;
 
     for (final op in ops) {
       if (stopped) {
         remaining.add(op); // preserve strict FIFO order after a network stall
+        continue;
+      }
+      // Give up on a poison pill so it can't block the queue forever.
+      if (op.retryCount >= maxRetries) {
+        dropped.add(op);
         continue;
       }
       OpOutcome outcome;
@@ -69,6 +84,9 @@ class PlaylistSyncService {
         case OpOutcome.forbidden:
           forbidden.add(op); // drop — permission lost; caller rolls back
           break;
+        case OpOutcome.drop:
+          dropped.add(op); // permanent (NOT_FOUND/validation) — remove, keep going
+          break;
         case OpOutcome.retry:
           op.retryCount += 1;
           remaining.add(op);
@@ -81,6 +99,7 @@ class PlaylistSyncService {
     return PlaylistFlushResult(
       conflicts: conflicts,
       forbidden: forbidden,
+      dropped: dropped,
       remaining: remaining.length,
     );
   }

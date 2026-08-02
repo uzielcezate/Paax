@@ -76,20 +76,23 @@ class PlaylistMigrationService {
     await _settings.put(_migratedUsersKey, s.toList());
   }
 
-  // ── local id → cloud uuid map (stable, retry-safe) ──
-  Map<String, String> _idMap() {
-    final raw = _settings.get(_idMapKey);
+  // ── local id → cloud uuid map, PER USER (stable, retry-safe, no cross-account
+  //    handoff of a pre-allocated UUID) ──
+  String _mapKey(String uid) => '$_idMapKey::$uid';
+
+  Map<String, String> _idMap(String uid) {
+    final raw = _settings.get(_mapKey(uid));
     if (raw is Map) {
       return raw.map((k, v) => MapEntry(k.toString(), v.toString()));
     }
     return <String, String>{};
   }
 
-  String? cloudIdFor(String localId) => _idMap()[localId];
+  String? cloudIdFor(String uid, String localId) => _idMap(uid)[localId];
 
-  Future<void> _putMap(String localId, String cloudId) async {
-    final m = _idMap()..[localId] = cloudId;
-    await _settings.put(_idMapKey, m);
+  Future<void> _putMap(String uid, String localId, String cloudId) async {
+    final m = _idMap(uid)..[localId] = cloudId;
+    await _settings.put(_mapKey(uid), m);
   }
 
   /// Idempotent migration for [uid]. Returns counts; only marks the user fully
@@ -105,10 +108,10 @@ class PlaylistMigrationService {
     var failed = 0;
     for (final p in localPlaylists) {
       try {
-        var cloudId = cloudIdFor(p.id);
+        var cloudId = cloudIdFor(uid, p.id);
         if (cloudId == null) {
           cloudId = _uuidV4();
-          await _putMap(p.id, cloudId); // persist before create → retry-safe
+          await _putMap(uid, p.id, cloudId); // persist before create → retry-safe
         }
         final deezerIds = p.tracks.map((t) => t.deezerTrackId).toList();
         final resolved = await _resolve(deezerIds);

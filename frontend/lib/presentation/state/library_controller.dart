@@ -66,6 +66,12 @@ class LibraryController extends ChangeNotifier {
       _followedArtists = [];
       _followedGenres = [];
       _hiddenTrackIds = {};
+      // Phase 3.4.1 (review H2): playlists are cloud-backed now — drop the
+      // previous account's local playlists so private ones don't leak into the
+      // new account. The new account re-hydrates its own; unsynced local
+      // playlists survive in the per-user pending-op journal.
+      _playlists = [];
+      await HiveStorage.clearPlaylists();
       notifyListeners();
     }
     try {
@@ -95,13 +101,19 @@ class LibraryController extends ChangeNotifier {
       //    then re-key each local playlist to its cloud UUID (only after the
       //    migration fully succeeded, so every cloud row exists first).
       final migration = PlaylistMigrationService();
-      if (!migration.isMigrated(uid)) {
+      // Review H3: apply the SAME cross-account guard the library uses — never
+      // upload a pre-existing UNATTRIBUTED local library (another user's leftover
+      // playlists) to the first signer. Those stay local-only until clearly
+      // owned; the id-map is per-user so a pre-allocated UUID can't be handed to
+      // a different account.
+      final unattributed = _repo?.lastSessionUnattributed ?? false;
+      if (!unattributed && !migration.isMigrated(uid)) {
         final locals =
             HiveStorage.getPlaylists().where((p) => !isUuid(p.id)).toList();
         await migration.migrateForUser(uid, locals);
         if (migration.isMigrated(uid)) {
           for (final p in locals) {
-            final cloudId = migration.cloudIdFor(p.id);
+            final cloudId = migration.cloudIdFor(uid, p.id);
             if (cloudId != null && cloudId != p.id) {
               await HiveStorage.rekeyPlaylist(p.id, cloudId);
             }
@@ -271,14 +283,32 @@ class LibraryController extends ChangeNotifier {
   /// Commit a manually-reordered track list (Phase 3.3.6). Called ONLY when the
   /// user presses Save in Edit Order mode. Persists to Hive, then pushes the
   /// atomic reorder to the cloud (best-effort; journaled offline).
-  Future<void> commitPlaylistOrder(Playlist playlist, List<Track> newOrder) async {
+  Future<void> commitPlaylistOrder(Playlist playlist, List<Track> newOrder,
+      {int? expectedVersion}) async {
     final ordered = List<Track>.from(newOrder);
     playlist.tracks
       ..clear()
       ..addAll(ordered);
     await _persistPlaylist(playlist);
-    await _pushCloud(
-        playlist.id, () => _cloud!.saveOrder(playlist.id, ordered, null));
+    // Review L13: pass the expected cloud version so a stale device cannot
+    // overwrite a newer collaborative order (the server rejects the conflict;
+    // hydration reconciles the local mirror).
+    await _pushCloud(playlist.id,
+        () => _cloud!.saveOrder(playlist.id, ordered, expectedVersion));
+  }
+
+  /// Locally unfollow a non-owned (followed) playlist: remove it from the local
+  /// library + pin, and best-effort cloud unfollow. Used from the Library row's
+  /// overflow for playlists the user does not own.
+  Future<void> unfollowPlaylist(String playlistId) async {
+    await HiveStorage.deletePlaylist(playlistId);
+    await HiveStorage.unpinPlaylist(playlistId);
+    _loadData();
+    if (_cloudEnabled && isUuid(playlistId)) {
+      try {
+        await _cloud!.setFollow(playlistId, false);
+      } catch (_) {}
+    }
   }
 
   /// Persist a playlist with normalized explicit track positions, then reload so

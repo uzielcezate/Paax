@@ -8,6 +8,8 @@ import '../state/playback_controller.dart';
 import '../state/auth_controller.dart';
 import '../../core/utils/playlist_meta.dart';
 import '../../core/utils/library_layout.dart';
+import '../widgets/add_to_playlist_sheet.dart';
+import '../../domain/entities/playlist.dart';
 import 'track_detail_screen.dart';
 import 'album_detail_screen.dart';
 import 'artist_detail_screen.dart';
@@ -477,19 +479,42 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
                 final text = owner.isEmpty ? count : "$owner${PlaylistMeta.separator}$count";
                 return Text(text, style: const TextStyle(color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis);
               }),
-              trailing: OverflowMenu(
-                type: MenuType.playlist,
-                playlist: pl,
-                iconColor: Colors.white,
-                onEdit: () => _showRenamePlaylistDialog(context, pl),
-                onDelete: () => _confirmDeletePlaylist(context, pl.id, pl.name),
-              ),
+              trailing: Builder(builder: (context) {
+                // Phase 3.4.1 (review M7): a hydrated followed/collaborating
+                // playlist (owned by someone else) must NOT offer Edit/Delete in
+                // the Library row. Owner-only manage; otherwise Add-to-playlist +
+                // Unfollow.
+                final uid = context.read<AuthController>().profile?.id;
+                final owns = pl.ownerId == null || pl.ownerId == uid;
+                return OverflowMenu(
+                  type: MenuType.playlist,
+                  playlist: pl,
+                  iconColor: Colors.white,
+                  canManage: owns,
+                  onAddToPlaylist: () => _showAddPlaylistTracksSheet(context, pl),
+                  onUnfollow: () => context.read<LibraryController>().unfollowPlaylist(pl.id),
+                  isFollowing: !owns,
+                  onEdit: owns ? () => _showRenamePlaylistDialog(context, pl) : null,
+                  onDelete: owns ? () => _confirmDeletePlaylist(context, pl.id, pl.name) : null,
+                );
+              }),
               onTap: () {
                  Navigator.push(context, MaterialPageRoute(builder: (_) => PlaylistDetailScreen(playlist: pl)));
               },
             );
           },
         );
+  }
+
+  void _showAddPlaylistTracksSheet(BuildContext context, Playlist pl) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (_) => AddToPlaylistSheet(tracks: pl.tracks),
+    );
   }
 
   void _showRenamePlaylistDialog(BuildContext context, dynamic playlist) {
