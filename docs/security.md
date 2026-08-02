@@ -195,4 +195,36 @@ The Critical items (Deezer `verify=False`, unauthenticated write endpoints, debu
 
 ---
 
-*Last updated: 2026-07-17*
+## Phase 3.4.1 — Cloud Playlist RLS & RPC model (2026-08-02)
+
+**All playlist mutations go through transactional RPCs** (`public.playlist_*`),
+never raw table writes. Each is `SECURITY DEFINER`, `SET search_path = ''`,
+validates `auth.uid()` and the correct permission (`private.can_edit_playlist` /
+`is_playlist_owner` / `can_view_playlist`) **before any privileged write**, is
+version-aware where relevant, emits activity via a trusted function, and is
+`GRANT EXECUTE ... TO authenticated` only (revoked from `public`/`anon`).
+
+- **Never client-trusted for authorization**: `owner_id`, `last_modified_by`,
+  `added_by`, `actor_id`, `version`, `follower_count`, `track_count`,
+  `total_duration_seconds` — all set server-side by RPCs/triggers.
+- **Owner-only**: manage collaborators, change visibility, transfer ownership,
+  delete, disable collaboration, replace custom cover.
+- **Accepted collaborators**: add/remove/reorder tracks (via
+  `can_edit_playlist`).
+- **Followers**: insert/delete only their own `user_followed_playlists` row.
+- **Account-deletion succession** runs in a trusted `auth.users` AFTER DELETE
+  trigger (`private.handle_owner_account_deletion`, revoked from `authenticated`),
+  not dependent on the deleting client.
+- **Activity** is insertable only through `private.log_playlist_activity` (no
+  direct INSERT policy), so `actor_id` cannot be spoofed.
+
+**Security advisor note**: the linter flags each `public.playlist_*` RPC as
+"Signed-In Users Can Execute SECURITY DEFINER Function" (WARN). This is the
+**intended** permission-checked RPC pattern (same as the pre-existing
+`complete_artist_onboarding`/`username_available`); each RPC validates auth +
+role internally. No RLS bypass is exposed. No new ERROR-level advisor was
+introduced by this phase.
+
+---
+
+*Last updated: 2026-08-02*

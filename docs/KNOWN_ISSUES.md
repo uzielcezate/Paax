@@ -497,4 +497,37 @@ reliably carry an artist) — tracked in TECH_DEBT.
 
 ---
 
-*Last updated: 2026-08-01*
+## Phase 3.4.1 — known limitations (2026-08-02)
+
+Adversarial-review HIGH + MEDIUM findings were fixed (see the review-fixes
+commit). Remaining LOW items, accepted for this phase:
+
+- **Live follower count isn't pushed to open viewers** (review L9). Following
+  doesn't bump `version`, and the realtime version-guard (which prevents an
+  optimistic-follow 2→1→2 clobber) drops non-version-bumping `playlists` events,
+  so an open Playlist Detail reflects *others'* follows on open/resume or on the
+  next content change, not instantly. A dedicated follower realtime path (like
+  artists have) is a follow-on.
+- **Follow/unfollow bumps `playlists.updated_at`** via the pre-existing
+  `set_updated_at` trigger (L8). `last_modified_at`/`version` are correctly
+  untouched, and Library sort keys on name/pinned, so impact is nil.
+- **N+1 reads** on hydration and on realtime refresh (L10): `hydrateEntity` does
+  tracks+collaborators+usernames per playlist; `_onRealtime` refetches on every
+  event. Bounded but scales poorly with a large library / very active
+  collaboration.
+- **Activity metadata is visible to any viewer** of a public collaborative
+  playlist (collaborator ids, rename/visibility history) — expected for public
+  playlists (L11).
+- **Client edit policy ignores a live `collaborative=false` toggle** (L12): an
+  accepted editor's UI still offers edits after the owner disables collaboration;
+  the server rejects with `FORBIDDEN` (no data risk, minor UX mismatch).
+- **Hydrated (cross-device/followed/collaborating) tracks lack an artist-name
+  join**, so their subtitle can be empty until edited locally.
+- **A follow reflects in the Library on the next session hydration**, not
+  instantly.
+- **Multi-device realtime delivery and audible playback are on-device QA** — not
+  verifiable headless.
+
+---
+
+*Last updated: 2026-08-02*

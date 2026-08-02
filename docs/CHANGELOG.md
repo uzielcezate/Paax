@@ -26,6 +26,57 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.4.1 — Cloud Playlists, collaboration, ownership, activity, following, cross-device sync (2026-08-02)
+
+Converts playlists from device-local Hive entities into authoritative
+Supabase-backed cloud playlists while preserving the current UI, playback, collage
+and device-local pins. Hive remains the offline cache / optimistic mirror /
+pending-op journal. **DB: additive migrations only (all playlist tables were
+empty → zero data risk); no `paax-api` change, no Railway redeploy.**
+
+- **Schema** (additive): `playlists` gains `version`, `last_modified_at/by`,
+  `deleted_at`, `cover_mode`, `custom_cover_url`, `source_playlist_id`;
+  `playlist_tracks` gains `updated_at` + a deferrable `unique(playlist_id,position)`
+  + `unique(playlist_id,track_id)` (**one-based** positions); `playlist_collaborators`
+  gains the invitation lifecycle (`status`/`invited_by`/`invited_at`/`accepted_at`/
+  `joined_at`/`updated_at`). New `playlist_activity` (append-only) and `user_blocks`
+  tables. Tightened `private.can_view_playlist`/`can_edit_playlist` (accepted-only
+  edit, blocking-aware, soft-delete aware) + `is_playlist_owner`/`is_blocked`/
+  `log_playlist_activity`. Reused existing totals/follower/updated_at triggers.
+  Realtime enabled for the four playlist tables.
+- **14 transactional RPCs** (SECURITY DEFINER, `search_path=''`, auth+permission+
+  version checked, activity-emitting, `authenticated`-only): create, save_order
+  (optimistic version conflict), add/remove tracks, update_metadata, delete
+  (soft), set_follow, invite/respond/leave/remove_collaborator, transfer_ownership,
+  clone, add_tracks_from_source, plus `private.handle_owner_account_deletion`
+  (oldest eligible accepted collaborator; skips blocked; soft-delete when none)
+  fired by an `auth.users` AFTER DELETE trigger.
+- **Flutter cloud-sync layer**: `PlaylistPermissions` (central role policy),
+  `PlaylistActivity`/`ActivitySummary`, `PlaylistRemoteDataSource` (typed
+  conflict/forbidden errors), offline `PlaylistOp`/journal/`PlaylistSyncService`
+  (ordered replay), `PlaylistRealtimeService` (ref-counted, version-guarded,
+  account-reset), `PlaylistMigrationService` (idempotent, retry-safe client UUID),
+  `PlaylistRepository` facade.
+- **Role-dependent Playlist Detail UI** (spec §6/§7/§9): header line 1
+  `contributors · Last modified …` (tappable → activity detail sheet), line 2
+  `Visibility · N songs · duration · N followers`; owner/editor keep the edit
+  action row, a non-member gets Follow/Following + Add-to-playlist and Pin →
+  overflow; owner-only **Manage collaborators** (invite/remove/transfer) +
+  invitee Accept/Decline prompt. No redesign; collage/spacing/playback unchanged.
+- **LibraryController cloud integration**: new playlists are cloud-backed from
+  creation (client UUID); mutations push (best-effort + journal); on session,
+  idempotent migration of pre-3.4.1 local playlists → cloud (re-key local + pin
+  to the cloud UUID) + flush + hydrate owned/collaborating/followed.
+- Tests: DB/RLS verified via JWT-claim simulation + a two-account end-to-end
+  production scenario (create→invite→accept→edit→reorder→public→follow→clone→
+  transfer, self-cleaning); 40+ new Flutter unit/widget tests (permissions,
+  activity, sync journal/replay, migration idempotency, realtime guards, formatter,
+  activity sheet, collaborators sheet, uuid). No new/real security advisory (the
+  RPC WARNs are the intended permission-checked SECURITY DEFINER pattern).
+- **Not started** (out of scope): cloud likes/hidden tracks, playback-session
+  persistence, listening history, folders, full activity feed, discovery rankings.
+  **Multi-device realtime delivery and audible playback are on-device QA.**
+
 ### Phase 3.3.6 — Playlist metadata, cloud-ready ordering, cover collage, Library spacing (2026-08-01)
 
 Focused stabilization before Phase 3.4 cloud sync. **Frontend only — no backend
