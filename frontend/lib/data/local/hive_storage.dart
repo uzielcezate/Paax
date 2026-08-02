@@ -200,6 +200,23 @@ class HiveStorage {
   static Future<void> deletePlaylist(String id) async {
     await _playlists.delete(id);
   }
+
+  /// Phase 3.4.1 — re-key a local playlist to its cloud UUID after migration.
+  /// Preserves tracks/name/cover/metadata and migrates the device-local pin
+  /// (per current account scope). No-op if the source is missing or ids match.
+  static Future<void> rekeyPlaylist(String oldId, String newId) async {
+    if (oldId == newId) return;
+    final p = _playlists.get(oldId);
+    if (p == null) return;
+    await _playlists.put(newId, p.copyWith(id: newId));
+    await _playlists.delete(oldId);
+    final map = getPinnedPlaylistMap();
+    if (map.containsKey(oldId)) {
+      final ts = map.remove(oldId)!;
+      map[newId] = ts;
+      await _writePinnedScope(_pinScope, map);
+    }
+  }
   
   // Saved Albums
   static Box<SavedAlbum> get _albums => Hive.box<SavedAlbum>(savedAlbumsBox);

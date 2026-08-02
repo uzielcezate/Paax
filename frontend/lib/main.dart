@@ -111,7 +111,12 @@ class PaaxApp extends StatelessWidget {
         // on sign-out it clears session state. onUserSession is idempotent per
         // identity, so calling it on every AuthController notification is safe.
         ChangeNotifierProxyProvider<AuthController, LibraryController>(
-          create: (_) => LibraryController(LibraryRepository()),
+          create: (_) => LibraryController(
+            LibraryRepository(),
+            // Phase 3.4.1 — cloud playlist repository (best-effort; local Hive
+            // stays authoritative). Shares the offline ops journal.
+            PlaylistRepository(sync: PlaylistSyncService(PlaylistOpsJournal())),
+          ),
           update: (_, auth, lib) {
             final uid = auth.isAuthenticated
                 ? Supabase.instance.client.auth.currentUser?.id

@@ -9,6 +9,9 @@
 // Track identity is resolved from local Deezer ids → catalog UUIDs here so the
 // UI keeps working with local Track objects.
 
+import 'dart:convert';
+
+import '../../domain/entities/playlist.dart';
 import '../../domain/entities/track.dart';
 import '../local/playlist_ops_journal.dart';
 import '../remote/catalog_resolver.dart';
@@ -72,12 +75,25 @@ class PlaylistRepository {
     String? clientId,
   }) async {
     final uuids = await _resolveTrackUuids(tracks);
-    return _remote.createPlaylist(
-        name: name, visibility: visibility, trackUuids: uuids, id: clientId);
+    final uid = currentUserId;
+    return _online(
+      () => _remote.createPlaylist(
+          name: name, visibility: visibility, trackUuids: uuids, id: clientId),
+      journalOnNetworkError: (uid == null || clientId == null)
+          ? null
+          : PlaylistOp(
+              opId: _newOpId(),
+              userId: uid,
+              playlistId: clientId,
+              type: PlaylistOpType.create,
+              createdAt: DateTime.now(),
+              payload: {'name': name, 'visibility': visibility, 'ids': uuids, 'clientId': clientId},
+            ),
+    );
   }
 
   Future<Map<String, dynamic>> saveOrder(
-      String playlistId, List<Track> orderedTracks, int expectedVersion) async {
+      String playlistId, List<Track> orderedTracks, int? expectedVersion) async {
     final uuids = await _resolveTrackUuids(orderedTracks);
     final uid = currentUserId;
     return _online(
@@ -138,7 +154,7 @@ class PlaylistRepository {
     String? description,
     String? visibility,
     bool? collaborative,
-    required int expectedVersion,
+    int? expectedVersion,
   }) =>
       _remote.updateMetadata(playlistId,
           name: name,
@@ -188,6 +204,98 @@ class PlaylistRepository {
   Future<Map<String, String>> resolveUsernames(Iterable<String> ids) =>
       _remote.resolveUsernames(ids);
 
+  // ── hydration (cloud → local Playlist entities) ──
+  /// The current user's cloud playlists: owned + accepted-collaborating +
+  /// followed, deduped, each mapped to a local [Playlist] entity (tracks
+  /// resolved to playable videoIds; accepted collaborators + owner username
+  /// resolved). Best-effort per playlist.
+  Future<List<Playlist>> hydrateLibrary() async {
+    final uid = currentUserId;
+    if (uid == null) return const [];
+    final owned = await _remote.fetchOwnedPlaylists(uid);
+    final ownedIds = owned.map((r) => r['id'].toString()).toSet();
+    final followed = await _remote.fetchFollowedPlaylistIds(uid);
+    final collab = await _remote.fetchCollaboratingPlaylistIds(uid);
+    final extraIds =
+        {...followed, ...collab}.where((id) => !ownedIds.contains(id)).toList();
+    final extras = await _remote.fetchPlaylistsByIds(extraIds);
+    final rows = [...owned, ...extras];
+    final out = <Playlist>[];
+    for (final row in rows) {
+      try {
+        out.add(await hydrateEntity(row));
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  Future<Playlist> hydrateEntity(Map<String, dynamic> row) async {
+    final id = row['id'].toString();
+    final trackRows = await _remote.fetchTracks(id);
+    final tracks = <Track>[];
+    for (final tr in trackRows) {
+      final t = _mapCloudTrack(tr);
+      if (t != null) tracks.add(t);
+    }
+    final collabRows = await _remote.fetchCollaborators(id);
+    final accepted =
+        collabRows.where((c) => c['status']?.toString() == 'accepted').toList();
+    final ids = <String>{
+      if (row['owner_id'] != null) row['owner_id'].toString(),
+      ...accepted.map((c) => c['user_id']?.toString() ?? ''),
+    }..removeWhere((e) => e.isEmpty);
+    final names = await _remote.resolveUsernames(ids);
+
+    final collabsJson = jsonEncode(accepted.map((c) {
+      final cid = c['user_id']?.toString() ?? '';
+      final prof = c['profiles'];
+      final uname = names[cid] ??
+          (prof is Map ? (prof['username'] ?? prof['display_name']) : null);
+      return {
+        'userId': cid,
+        if (uname != null) 'username': uname.toString(),
+        'role': c['role']?.toString() ?? 'editor',
+        'status': 'accepted',
+        'position': DateTime.tryParse(c['joined_at']?.toString() ?? '')
+                ?.millisecondsSinceEpoch ??
+            0,
+      };
+    }).toList());
+
+    return Playlist(
+      id: id,
+      name: row['name']?.toString() ?? '',
+      tracks: tracks,
+      createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ??
+          DateTime.now(),
+      ownerId: row['owner_id']?.toString(),
+      ownerUsername: names[row['owner_id']?.toString()],
+      visibility: row['visibility']?.toString(),
+      isCollaborative: row['collaborative'] == true,
+      collaboratorsJson: collabsJson,
+      trackPositions: List<int>.generate(tracks.length, (i) => i),
+    );
+  }
+
+  Track? _mapCloudTrack(Map<String, dynamic> row) {
+    final t = row['tracks'];
+    if (t is! Map) return null;
+    final videoId = t['preferred_youtube_video_id']?.toString();
+    if (videoId == null || videoId.isEmpty) return null; // unplayable — skip
+    final dur = t['duration_seconds'];
+    return Track(
+      id: videoId,
+      title: t['title']?.toString() ?? '',
+      artistName: '',
+      albumId: '',
+      albumTitle: '',
+      artworkUrl:
+          (t['image_cached_url'] ?? t['image_original_url'] ?? '').toString(),
+      duration: dur is int ? dur : int.tryParse('${dur ?? ''}') ?? 0,
+      deezerTrackId: t['deezer_id']?.toString(),
+    );
+  }
+
   // ── offline replay ──
   Future<PlaylistFlushResult> flushPending() async {
     final uid = currentUserId;
@@ -199,6 +307,14 @@ class PlaylistRepository {
     try {
       final ids = (op.payload['ids'] as List?)?.cast<String>() ?? const <String>[];
       switch (op.type) {
+        case PlaylistOpType.create:
+          await _remote.createPlaylist(
+            name: op.payload['name']?.toString() ?? '',
+            visibility: op.payload['visibility']?.toString() ?? 'private',
+            trackUuids: ids,
+            id: op.payload['clientId']?.toString(),
+          );
+          break;
         case PlaylistOpType.saveOrder:
           await _remote.saveOrder(op.playlistId, ids, op.expectedVersion);
           break;
