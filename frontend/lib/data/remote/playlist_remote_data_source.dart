@@ -237,6 +237,16 @@ class PlaylistRemoteDataSource {
         return (rows as List).cast<Map<String, dynamic>>();
       });
 
+  Future<bool> fetchIsFollowing(String playlistId, String uid) => _guard(() async {
+        final row = await _client
+            .from('user_followed_playlists')
+            .select('playlist_id')
+            .eq('user_id', uid)
+            .eq('playlist_id', playlistId)
+            .maybeSingle();
+        return row != null;
+      });
+
   Future<Map<String, dynamic>?> fetchLatestActivity(String playlistId) => _guard(() async {
         final row = await _client
             .from('playlist_activity')

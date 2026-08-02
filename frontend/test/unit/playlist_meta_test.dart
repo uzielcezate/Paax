@@ -215,6 +215,53 @@ void main() {
     });
   });
 
+  group('Phase 3.4.1 followers + stats line + last modified', () {
+    test('followers singular/plural', () {
+      expect(PlaylistMeta.followers(0), '0 followers');
+      expect(PlaylistMeta.followers(1), '1 follower');
+      expect(PlaylistMeta.followers(37), '37 followers');
+    });
+
+    test('stats line with followers', () {
+      expect(
+        PlaylistMeta.statsLine(
+            visibility: 'public', trackCount: 21, totalDurationSeconds: 74 * 60, followerCount: 37),
+        'Public · 21 songs · 1 hr 14 min · 37 followers',
+      );
+      expect(
+        PlaylistMeta.statsLine(
+            visibility: 'private', trackCount: 6, totalDurationSeconds: 22 * 60, followerCount: 0),
+        'Private · 6 songs · 22 min · 0 followers',
+      );
+    });
+
+    test('stats line omits followers when unknown, duration when zero', () {
+      expect(
+        PlaylistMeta.statsLine(visibility: 'private', trackCount: 1, totalDurationSeconds: 0),
+        'Private · 1 song',
+      );
+    });
+
+    test('last modified text', () {
+      final now = DateTime(2026, 6, 1, 12);
+      expect(PlaylistMeta.lastModifiedText(now.subtract(const Duration(hours: 2)), now),
+          'Last modified 2 hours ago');
+      expect(PlaylistMeta.lastModifiedText(null, now), isNull);
+    });
+
+    test('contributors · last modified (line 1)', () {
+      final now = DateTime(2026, 6, 1, 12);
+      final p = _playlist(ownerId: 'u1', ownerUsername: 'iamleizu');
+      expect(
+        PlaylistMeta.contributorsWithModified(p,
+            lastModifiedAt: now.subtract(const Duration(minutes: 12)), now: now),
+        'iamleizu · Last modified 12 minutes ago',
+      );
+      // contributors only when modified unknown
+      expect(PlaylistMeta.contributorsWithModified(p, now: now), 'iamleizu');
+    });
+  });
+
   group('visibility × collaboration are independent', () {
     test('private + collaborative keeps "Private"', () {
       final p = _playlist(

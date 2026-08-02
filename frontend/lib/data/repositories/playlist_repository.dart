@@ -180,6 +180,11 @@ class PlaylistRepository {
       _remote.fetchCollaborators(playlistId);
   Future<Map<String, dynamic>?> fetchLatestActivity(String playlistId) =>
       _remote.fetchLatestActivity(playlistId);
+  Future<bool> isFollowing(String playlistId) async {
+    final uid = currentUserId;
+    if (uid == null) return false;
+    return _remote.fetchIsFollowing(playlistId, uid);
+  }
   Future<Map<String, String>> resolveUsernames(Iterable<String> ids) =>
       _remote.resolveUsernames(ids);
 

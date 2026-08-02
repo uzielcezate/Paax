@@ -38,6 +38,12 @@ class OverflowMenu extends StatelessWidget {
   final VoidCallback? onNavigation;
   final Playlist? playlistContext; // When non-null, adds 'Remove from Playlist'
   final Color? iconColor;
+  // Phase 3.4.1 role gating: owner/editor sees manage items; a non-member sees
+  // Unfollow + Add-to-playlist instead of Edit Order / Edit / Delete.
+  final bool canManage;
+  final VoidCallback? onUnfollow;
+  final bool isFollowing;
+  final VoidCallback? onAddToPlaylist;
 
   const OverflowMenu({
     super.key,
@@ -54,6 +60,10 @@ class OverflowMenu extends StatelessWidget {
     this.isNowPlaying = false, // Default false
     this.playlistContext,
     this.iconColor,
+    this.canManage = true,
+    this.onUnfollow,
+    this.isFollowing = false,
+    this.onAddToPlaylist,
   });
 
   void _showMenu(BuildContext context) {
@@ -72,9 +82,13 @@ class OverflowMenu extends StatelessWidget {
         onEdit: onEdit,
         onEditOrder: onEditOrder,
         parentContext: context,
-        onNavigation: onNavigation, 
+        onNavigation: onNavigation,
         isNowPlaying: isNowPlaying,
         playlistContext: playlistContext,
+        canManage: canManage,
+        onUnfollow: onUnfollow,
+        isFollowing: isFollowing,
+        onAddToPlaylist: onAddToPlaylist,
       ),
     );
   }
@@ -103,6 +117,10 @@ class _MenuContent extends StatelessWidget {
   final bool isNowPlaying;
   final BuildContext parentContext;
   final Playlist? playlistContext;
+  final bool canManage;
+  final VoidCallback? onUnfollow;
+  final bool isFollowing;
+  final VoidCallback? onAddToPlaylist;
 
   const _MenuContent({
     required this.type,
@@ -118,6 +136,10 @@ class _MenuContent extends StatelessWidget {
     this.onNavigation,
     this.isNowPlaying = false,
     this.playlistContext,
+    this.canManage = true,
+    this.onUnfollow,
+    this.isFollowing = false,
+    this.onAddToPlaylist,
   });
 
   @override
@@ -511,19 +533,33 @@ class _MenuContent extends StatelessWidget {
           );
         },
       ),
-      if (onEditOrder != null)
+      // Non-member: offer Add-to-playlist + Unfollow instead of manage items.
+      if (!canManage && onAddToPlaylist != null)
+        _actionItem(context, icon: Icons.playlist_add_rounded, label: "Add to playlist", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           onAddToPlaylist!();
+        }),
+      if (!canManage && isFollowing && onUnfollow != null)
+        _actionItem(context, icon: Icons.bookmark_remove_outlined, label: "Unfollow playlist", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           onUnfollow!();
+        }),
+      // Manage items — owner/editor only (Phase 3.4.1).
+      if (canManage && onEditOrder != null)
         _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", color: sheetFg, onTap: () {
            Navigator.pop(context);
            onEditOrder!();
         }),
-      _actionItem(context, icon: Icons.edit, label: "Edit Playlist", color: sheetFg, onTap: () {
-         Navigator.pop(context);
-         if (onEdit != null) onEdit!();
-      }),
-      _actionItem(context, icon: Icons.delete_outline, label: "Delete Playlist", color: Colors.redAccent, onTap: () {
-         Navigator.pop(context);
-         if (onDelete != null) onDelete!();
-      }),
+      if (canManage)
+        _actionItem(context, icon: Icons.edit, label: "Edit Playlist", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           if (onEdit != null) onEdit!();
+        }),
+      if (canManage)
+        _actionItem(context, icon: Icons.delete_outline, label: "Delete Playlist", color: Colors.redAccent, onTap: () {
+           Navigator.pop(context);
+           if (onDelete != null) onDelete!();
+        }),
       _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);
           Share.share('Check out my playlist "${playlist!.name}" on Paax!');
