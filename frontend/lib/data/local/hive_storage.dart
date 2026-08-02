@@ -18,6 +18,8 @@ class HiveStorage {
   static const String recentlyPlayedBox    = 'recently_played';
   /// Persisted stream URL cache used by StreamCache / MediaResolver.
   static const String streamCandidatesBox  = 'stream_candidates';
+  /// Phase 3.4.1 — pending cloud-playlist operations journal (offline replay).
+  static const String playlistOpsBox        = 'playlist_ops';
 
   static Future<void> init() async {
     await Hive.initFlutter();
@@ -45,6 +47,8 @@ class HiveStorage {
     await Hive.openBox<Track>(recentlyPlayedBox);
     // Stream URL cache — stores resolved Worker URLs for fast repeat plays
     await Hive.openBox(streamCandidatesBox);
+    // Phase 3.4.1 — pending cloud-playlist ops journal (offline replay).
+    await Hive.openBox(playlistOpsBox);
 
     // Run one-time migration to fix duplicates from old .add() calls
     await _deduplicateLikedTracks();
