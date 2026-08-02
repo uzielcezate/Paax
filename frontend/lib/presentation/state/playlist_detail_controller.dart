@@ -16,6 +16,22 @@ import '../../domain/entities/playlist_contributors.dart';
 import '../../data/remote/playlist_realtime_service.dart';
 import '../../data/repositories/playlist_repository.dart';
 
+/// A collaborator row for the owner's management sheet (accepted or pending).
+class ManagedCollaborator {
+  final String userId;
+  final String username;
+  final String role;
+  final String status;
+  const ManagedCollaborator({
+    required this.userId,
+    required this.username,
+    required this.role,
+    required this.status,
+  });
+  bool get isPending => status == 'pending';
+  bool get isAccepted => status == 'accepted';
+}
+
 class PlaylistDetailController extends ChangeNotifier {
   final PlaylistRepository _repo;
   final PlaylistRealtimeService _realtime;
@@ -49,6 +65,15 @@ class PlaylistDetailController extends ChangeNotifier {
   bool _isFollowing = false;
   PlaylistActivity? _latestActivity;
   bool _followBusy = false;
+  List<ManagedCollaborator> _allCollaborators = const [];
+  bool _myPendingInvite = false;
+
+  /// All non-terminal collaborators (accepted + pending) for the owner's manage
+  /// sheet, with resolved usernames.
+  List<ManagedCollaborator> get allCollaborators => _allCollaborators;
+
+  /// True when the CURRENT user has a pending invitation on this playlist.
+  bool get myPendingInvite => _myPendingInvite;
 
   bool get loaded => _loaded;
   bool get isCloud => _isCloud;
@@ -104,16 +129,26 @@ class PlaylistDetailController extends ChangeNotifier {
 
       final collabRows = await _repo.fetchCollaborators(playlistId);
       final accepted = <PlaylistCollaborator>[];
+      final managed = <ManagedCollaborator>[];
+      var myPending = false;
       for (final c in collabRows) {
-        if (c['status']?.toString() != 'accepted') continue;
+        final status = c['status']?.toString() ?? '';
+        final userId = c['user_id']?.toString() ?? '';
         final prof = c['profiles'];
         final username = (prof is Map)
             ? (prof['username'] ?? prof['display_name'] ?? '').toString()
             : '';
+        final role = c['role']?.toString() ?? CollaboratorRole.editor;
+        if (status == 'pending' && userId == currentUserId) myPending = true;
+        if (status == 'accepted' || status == 'pending') {
+          managed.add(ManagedCollaborator(
+              userId: userId, username: username, role: role, status: status));
+        }
+        if (status != 'accepted') continue;
         accepted.add(PlaylistCollaborator(
-          userId: c['user_id']?.toString() ?? '',
+          userId: userId,
           username: username,
-          role: c['role']?.toString() ?? CollaboratorRole.editor,
+          role: role,
           status: CollaboratorStatus.accepted,
           position: DateTime.tryParse(c['joined_at']?.toString() ?? '')
                   ?.millisecondsSinceEpoch ??
@@ -122,6 +157,8 @@ class PlaylistDetailController extends ChangeNotifier {
       }
       accepted.sort((a, b) => a.position.compareTo(b.position));
       _collaborators = accepted;
+      _allCollaborators = managed;
+      _myPendingInvite = myPending;
 
       // Owner username + activity actor name (batched).
       final ids = <String>{if (_ownerId != null) _ownerId!};
@@ -205,6 +242,51 @@ class PlaylistDetailController extends ChangeNotifier {
 
   Future<void> addToExisting(String targetPlaylistId) =>
       _repo.addTracksFromSource(playlistId, targetPlaylistId);
+
+  // ── collaboration management (owner) ──
+  /// Invite by username. Returns null on success, or a short error message.
+  Future<String?> inviteByUsername(String username) async {
+    final name = username.trim();
+    if (name.isEmpty) return 'Enter a username';
+    try {
+      final id = await _repo.resolveUserIdByUsername(name);
+      if (id == null) return 'No user "$name"';
+      if (id == _ownerId) return 'That user is the owner';
+      await _repo.invite(playlistId, id);
+      await refresh();
+      return null;
+    } catch (e) {
+      final s = e.toString();
+      if (s.contains('ALREADY_INVITED')) return 'Already invited';
+      if (s.contains('USER_BLOCKED')) return 'Cannot invite this user';
+      return 'Could not send invite';
+    }
+  }
+
+  Future<void> removeCollaborator(String userId) async {
+    try {
+      await _repo.removeCollaborator(playlistId, userId);
+      await refresh();
+    } catch (_) {}
+  }
+
+  Future<String?> transferOwnershipTo(String newOwnerId) async {
+    try {
+      await _repo.transferOwnership(playlistId, newOwnerId);
+      await refresh();
+      return null;
+    } catch (_) {
+      return 'Could not transfer ownership';
+    }
+  }
+
+  /// Accept or decline the current user's pending invitation.
+  Future<void> respondToInvitation(bool accept) async {
+    try {
+      await _repo.respondInvitation(playlistId, accept);
+      await refresh();
+    } catch (_) {}
+  }
 
   @override
   void dispose() {

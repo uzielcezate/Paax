@@ -44,6 +44,7 @@ class OverflowMenu extends StatelessWidget {
   final VoidCallback? onUnfollow;
   final bool isFollowing;
   final VoidCallback? onAddToPlaylist;
+  final VoidCallback? onManageCollaborators;
 
   const OverflowMenu({
     super.key,
@@ -64,6 +65,7 @@ class OverflowMenu extends StatelessWidget {
     this.onUnfollow,
     this.isFollowing = false,
     this.onAddToPlaylist,
+    this.onManageCollaborators,
   });
 
   void _showMenu(BuildContext context) {
@@ -89,6 +91,7 @@ class OverflowMenu extends StatelessWidget {
         onUnfollow: onUnfollow,
         isFollowing: isFollowing,
         onAddToPlaylist: onAddToPlaylist,
+        onManageCollaborators: onManageCollaborators,
       ),
     );
   }
@@ -121,6 +124,7 @@ class _MenuContent extends StatelessWidget {
   final VoidCallback? onUnfollow;
   final bool isFollowing;
   final VoidCallback? onAddToPlaylist;
+  final VoidCallback? onManageCollaborators;
 
   const _MenuContent({
     required this.type,
@@ -140,6 +144,7 @@ class _MenuContent extends StatelessWidget {
     this.onUnfollow,
     this.isFollowing = false,
     this.onAddToPlaylist,
+    this.onManageCollaborators,
   });
 
   @override
@@ -545,6 +550,11 @@ class _MenuContent extends StatelessWidget {
            onUnfollow!();
         }),
       // Manage items — owner/editor only (Phase 3.4.1).
+      if (canManage && onManageCollaborators != null)
+        _actionItem(context, icon: Icons.group_add_rounded, label: "Manage collaborators", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           onManageCollaborators!();
+        }),
       if (canManage && onEditOrder != null)
         _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", color: sheetFg, onTap: () {
            Navigator.pop(context);

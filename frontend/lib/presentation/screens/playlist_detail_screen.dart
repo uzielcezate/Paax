@@ -15,6 +15,7 @@ import '../../domain/entities/playlist_activity.dart';
 import '../../data/repositories/playlist_repository.dart';
 import '../../data/remote/playlist_realtime_service.dart';
 import '../widgets/playlist_activity_sheet.dart';
+import '../widgets/playlist_collaborators_sheet.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/bottom_content_padding.dart';
@@ -564,6 +565,38 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                   },
                                 ),
                                 const SizedBox(height: 16),
+                                // Pending-invitation prompt (spec §12) — shown to
+                                // an invited user viewing the playlist.
+                                ListenableBuilder(
+                                  listenable: _cloud!,
+                                  builder: (context, _) {
+                                    if (!_cloud!.myPendingInvite) return const SizedBox.shrink();
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(alpha: 0.08),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Expanded(
+                                            child: Text("You're invited to collaborate",
+                                                style: TextStyle(color: Colors.white, fontSize: 13)),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => _cloud!.respondToInvitation(false),
+                                            child: const Text('Decline'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => _cloud!.respondToInvitation(true),
+                                            child: const Text('Accept'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
                               ],
                             );
                           },
@@ -832,6 +865,10 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                             isFollowing: c.isFollowing,
                                             onUnfollow: () => c.toggleFollow(),
                                             onAddToPlaylist: () => _openAddToPlaylistSheet(tracks),
+                                            // Owner-only collaborator management.
+                                            onManageCollaborators: (c.isCloud && c.permissions.canManageCollaborators)
+                                                ? () => showManageCollaboratorsSheet(context, c)
+                                                : null,
                                             onEdit: canManage
                                                 ? () => _showRenameDialog(context, library, currentPlaylist!)
                                                 : null,
