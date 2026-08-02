@@ -8,7 +8,14 @@ import '../../core/theme/app_colors.dart';
 import '../state/library_controller.dart';
 import '../state/playback_controller.dart';
 import '../state/auth_controller.dart';
+import '../state/playlist_detail_controller.dart';
 import '../../core/utils/playlist_meta.dart';
+import '../../core/policy/playlist_permissions.dart';
+import '../../domain/entities/playlist_activity.dart';
+import '../../data/repositories/playlist_repository.dart';
+import '../../data/remote/playlist_realtime_service.dart';
+import '../widgets/playlist_activity_sheet.dart';
+import '../widgets/playlist_collaborators_sheet.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/bottom_content_padding.dart';
@@ -50,11 +57,35 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   // Accent color from artwork
   Color _dominantColor = DominantColorService.fallback;
 
+  /// Phase 3.4.1: cloud state (owner/collaborators/followers/last-modified/role)
+  /// for this playlist. Created once in didChangeDependencies; no-ops gracefully
+  /// for a local (non-cloud) playlist.
+  PlaylistDetailController? _cloud;
+
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
     _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_cloud == null) {
+      final auth = context.read<AuthController>();
+      _cloud = PlaylistDetailController(
+        repository: context.read<PlaylistRepository>(),
+        realtime: context.read<PlaylistRealtimeService>(),
+        currentUserId: auth.profile?.id,
+        playlistId: widget.playlist.id,
+        initialOwnerId: widget.playlist.ownerId,
+        initialOwnerUsername: widget.playlist.ownerUsername,
+        initialVisibility: widget.playlist.visibilityOrDefault,
+      );
+      // ignore: discarded_futures
+      _cloud!.load();
+    }
   }
   
   void _onScroll() {
@@ -67,6 +98,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   @override
   void dispose() {
+    _cloud?.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -112,6 +144,19 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     return filtered;
   }
   
+  /// Non-member "Add to playlist" (spec §9): reuse the current Paax bottom sheet
+  /// to create a new playlist from these tracks or add them to an existing one.
+  void _openAddToPlaylistSheet(List<Track> tracks) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (context) => AddToPlaylistSheet(tracks: tracks),
+    );
+  }
+
   void _showSortMenu() {
     showModalBottomSheet(
       context: context,
@@ -149,7 +194,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   Future<void> _saveOrder(LibraryController library, Playlist playlist) async {
     final staged = _editOrder;
     if (staged != null) {
-      await library.commitPlaylistOrder(playlist, staged);
+      await library.commitPlaylistOrder(playlist, staged,
+          expectedVersion: (_cloud?.isCloud == true) ? _cloud?.version : null);
     }
     if (mounted) {
       setState(() {
@@ -263,15 +309,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                             final String? fallbackUsername =
                                 context.watch<AuthController>().profile?.username ??
                                     context.read<AuthController>().profile?.displayName;
-                            final String contributorLine = PlaylistMeta
-                                .contributorLine(currentPlaylist!,
-                                    fallbackUsername: fallbackUsername);
-                            final String detailLine = PlaylistMeta.detailLine(
-                              visibility: currentPlaylist.visibility,
-                              trackCount: currentPlaylist.trackCount,
-                              totalDurationSeconds:
-                                  currentPlaylist.totalDurationSeconds,
-                            );
                             final double targetButtonY = screenWidth + 16;
                             final double currentY = topSafeArea + 16 + coverSize + textBlockHeight + 16; // 16 is bottom gap
                             final double gap = targetButtonY - currentY;
@@ -346,47 +383,95 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                       ),
                                       const SizedBox(height: 4),
 
-                                      // Line 2: owner + accepted collaborators.
-                                      // Hidden entirely when no name is available
-                                      // (never a blank line). Truncates safely.
-                                      if (contributorLine.isNotEmpty) ...[
-                                        Text(
-                                          contributorLine,
-                                          textAlign: TextAlign.center,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                      ],
-
-                                      // Line 3: visibility · songs · duration.
-                                      Text(
-                                        detailLine,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w500,
-                                        ),
+                                      // Phase 3.4.1 header (spec §6):
+                                      //  Line 1: contributors · Last modified …  (tappable)
+                                      //  Line 2: visibility · songs · duration · followers
+                                      // Falls back to the local contributor/detail
+                                      // line for a not-yet-cloud playlist.
+                                      ListenableBuilder(
+                                        listenable: _cloud!,
+                                        builder: (context, _) {
+                                          final c = _cloud!;
+                                          final cloud = c.isCloud && c.loaded;
+                                          final names = cloud
+                                              ? c.contributorNames(fallback: fallbackUsername)
+                                              : PlaylistMeta.contributorNames(currentPlaylist!,
+                                                  fallbackUsername: fallbackUsername);
+                                          final contributors = names.join(', ');
+                                          final modified = PlaylistMeta.lastModifiedText(
+                                              cloud ? c.lastModifiedAt : null, DateTime.now());
+                                          final line1 = [
+                                            if (contributors.isNotEmpty) contributors,
+                                            if (modified != null) modified,
+                                          ].join(PlaylistMeta.separator);
+                                          final line2 = PlaylistMeta.statsLine(
+                                            visibility: cloud ? c.visibility : currentPlaylist!.visibility,
+                                            trackCount: currentPlaylist!.trackCount,
+                                            totalDurationSeconds: currentPlaylist.totalDurationSeconds,
+                                            followerCount: cloud ? c.followerCount : null,
+                                          );
+                                          final activity = c.latestActivity;
+                                          return Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment: CrossAxisAlignment.center,
+                                            children: [
+                                              if (line1.isNotEmpty) ...[
+                                                GestureDetector(
+                                                  behavior: HitTestBehavior.opaque,
+                                                  onTap: activity == null
+                                                      ? null
+                                                      : () => showPlaylistActivitySheet(context, activity),
+                                                  child: Text(
+                                                    line1,
+                                                    textAlign: TextAlign.center,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 12,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 2),
+                                              ],
+                                              Text(
+                                                line2,
+                                                textAlign: TextAlign.center,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white70,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ],
+                                          );
+                                        },
                                       ),
                                     ],
                                   ),
                                 ),
                                 const SizedBox(height: 16),
 
-                                // Action Buttons Row
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    // Shuffle
-                                    _buildActionButton(
+                                // Action Buttons Row — role-dependent (Phase 3.4.1
+                                // §9). Owner/accepted-collaborator (or a local
+                                // playlist) keep the edit row (Shuffle · Pin · Play
+                                // · Reorder · Download). A non-member sees
+                                // Shuffle · Add-to-playlist · Play · Follow · Download;
+                                // Pin moves to the overflow menu.
+                                ListenableBuilder(
+                                  listenable: _cloud!,
+                                  builder: (context, _) {
+                                    final c = _cloud!;
+                                    // Review M7: deny-by-default from the initial
+                                    // owner id (available immediately) — do NOT
+                                    // wait for `loaded`, else a non-member/follower
+                                    // transiently sees the owner/editor row.
+                                    final nonMember = c.isCloud && !c.permissions.isEditorMember;
+
+                                    final shuffle = _buildActionButton(
                                       icon: Icons.shuffle_rounded,
                                       onTap: () {
                                         if (tracks.isNotEmpty) {
@@ -394,45 +479,17 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                           context.read<PlaybackController>().playQueue(shuffled);
                                         }
                                       },
-                                    ),
-                                    // Pin Playlist
-                                    Consumer<LibraryController>(
-                                      builder: (context, lib, _) {
-                                        final isPinned = lib.isPlaylistPinned(currentPlaylist!.id);
-                                        return _buildActionButton(
-                                          icon: isPinned
-                                              ? Icons.push_pin_rounded
-                                              : Icons.push_pin_outlined,
-                                          onTap: () async {
-                                            final result = await lib.togglePinPlaylist(currentPlaylist!.id);
-                                            if (result == null && mounted) {
-                                              ScaffoldMessenger.of(context).clearSnackBars();
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text('You can pin up to 5 playlists'),
-                                                  duration: Duration(seconds: 2),
-                                                  behavior: SnackBarBehavior.floating,
-                                                ),
-                                              );
-                                            }
-                                          },
-                                        );
-                                      },
-                                    ),
-                                    // Play / Pause (Large Center Button)
-                                    Consumer<PlaybackController>(
+                                    );
+                                    final play = Consumer<PlaybackController>(
                                       builder: (context, playback, _) {
                                         final isPlaying = playback.isPlaying;
                                         final currentId = playback.currentTrack?.id;
                                         final isContext = currentId != null && tracks.any((t) => t.id == currentId);
-
                                         return _buildActionButton(
                                           icon: (isPlaying && isContext)
                                               ? Icons.pause_rounded
                                               : Icons.play_arrow_rounded,
-                                          size: 58,
-                                          iconSize: 28,
-                                          primary: true,
+                                          size: 58, iconSize: 28, primary: true,
                                           onTap: () {
                                             if (tracks.isEmpty) return;
                                             if (isContext) {
@@ -443,22 +500,107 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                           },
                                         );
                                       },
-                                    ),
-                                    // Edit Order
-                                    _buildActionButton(
-                                      icon: Icons.swap_vert_rounded,
-                                      onTap: tracks.isNotEmpty ? () => _enterEditMode(tracks) : () {},
-                                    ),
-                                    // Download
-                                    _buildActionButton(
+                                    );
+                                    final download = _buildActionButton(
                                       icon: Icons.download_rounded,
-                                      onTap: () {
-                                        // TODO: Implement download functionality
-                                      },
-                                    ),
-                                  ],
+                                      onTap: () {},
+                                    );
+
+                                    final List<Widget> children;
+                                    if (nonMember) {
+                                      children = [
+                                        shuffle,
+                                        // Add to playlist (clone / add-to-existing)
+                                        _buildActionButton(
+                                          icon: Icons.playlist_add_rounded,
+                                          onTap: () => _openAddToPlaylistSheet(tracks),
+                                        ),
+                                        play,
+                                        // Follow / Following
+                                        _buildActionButton(
+                                          icon: c.isFollowing
+                                              ? Icons.bookmark_added_rounded
+                                              : Icons.bookmark_add_outlined,
+                                          primary: c.isFollowing,
+                                          onTap: () => c.toggleFollow(),
+                                        ),
+                                        download,
+                                      ];
+                                    } else {
+                                      children = [
+                                        shuffle,
+                                        // Pin (device-local)
+                                        Consumer<LibraryController>(
+                                          builder: (context, lib, _) {
+                                            final isPinned = lib.isPlaylistPinned(currentPlaylist!.id);
+                                            return _buildActionButton(
+                                              icon: isPinned
+                                                  ? Icons.push_pin_rounded
+                                                  : Icons.push_pin_outlined,
+                                              onTap: () async {
+                                                final result = await lib.togglePinPlaylist(currentPlaylist!.id);
+                                                if (result == null && mounted) {
+                                                  ScaffoldMessenger.of(context).clearSnackBars();
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    const SnackBar(
+                                                      content: Text('You can pin up to 5 playlists'),
+                                                      duration: Duration(seconds: 2),
+                                                      behavior: SnackBarBehavior.floating,
+                                                    ),
+                                                  );
+                                                }
+                                              },
+                                            );
+                                          },
+                                        ),
+                                        play,
+                                        // Reorder (Edit Order)
+                                        _buildActionButton(
+                                          icon: Icons.swap_vert_rounded,
+                                          onTap: tracks.isNotEmpty ? () => _enterEditMode(tracks) : () {},
+                                        ),
+                                        download,
+                                      ];
+                                    }
+                                    return Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: children,
+                                    );
+                                  },
                                 ),
                                 const SizedBox(height: 16),
+                                // Pending-invitation prompt (spec §12) — shown to
+                                // an invited user viewing the playlist.
+                                ListenableBuilder(
+                                  listenable: _cloud!,
+                                  builder: (context, _) {
+                                    if (!_cloud!.myPendingInvite) return const SizedBox.shrink();
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(alpha: 0.08),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Expanded(
+                                            child: Text("You're invited to collaborate",
+                                                style: TextStyle(color: Colors.white, fontSize: 13)),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => _cloud!.respondToInvitation(false),
+                                            child: const Text('Decline'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => _cloud!.respondToInvitation(true),
+                                            child: const Text('Accept'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
                               ],
                             );
                           },
@@ -710,13 +852,38 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                     width: 48,
                                     height: 48,
                                     child: Center(
-                                      child: OverflowMenu(
-                                        type: MenuType.playlist,
-                                        playlist: currentPlaylist,
-                                        iconColor: Colors.white,
-                                        onEdit: () => _showRenameDialog(context, library, currentPlaylist!),
-                                        onDelete: () => _confirmDelete(context, library, currentPlaylist!),
-                                        onEditOrder: tracks.isNotEmpty ? () => _enterEditMode(tracks) : null,
+                                      child: ListenableBuilder(
+                                        listenable: _cloud!,
+                                        builder: (context, _) {
+                                          final c = _cloud!;
+                                          // Non-member (cloud, not editor) → hide
+                                          // manage items; show Add-to-playlist +
+                                          // Unfollow. Local playlists stay manageable.
+                                          final canManage =
+                                              !(c.isCloud && !c.permissions.isEditorMember);
+                                          return OverflowMenu(
+                                            type: MenuType.playlist,
+                                            playlist: currentPlaylist,
+                                            iconColor: Colors.white,
+                                            canManage: canManage,
+                                            isFollowing: c.isFollowing,
+                                            onUnfollow: () => c.toggleFollow(),
+                                            onAddToPlaylist: () => _openAddToPlaylistSheet(tracks),
+                                            // Owner-only collaborator management.
+                                            onManageCollaborators: (c.isCloud && c.permissions.canManageCollaborators)
+                                                ? () => showManageCollaboratorsSheet(context, c)
+                                                : null,
+                                            onEdit: canManage
+                                                ? () => _showRenameDialog(context, library, currentPlaylist!)
+                                                : null,
+                                            onDelete: canManage
+                                                ? () => _confirmDelete(context, library, currentPlaylist!)
+                                                : null,
+                                            onEditOrder: canManage && tracks.isNotEmpty
+                                                ? () => _enterEditMode(tracks)
+                                                : null,
+                                          );
+                                        },
                                       ),
                                     ),
                                   ),

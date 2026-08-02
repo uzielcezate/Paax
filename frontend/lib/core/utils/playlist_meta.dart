@@ -12,6 +12,7 @@
 // are independent; visibility is never replaced by "Collaborative".
 
 import '../../domain/entities/playlist.dart';
+import '../../domain/entities/playlist_activity.dart';
 
 class PlaylistMeta {
   const PlaylistMeta._();
@@ -21,6 +22,10 @@ class PlaylistMeta {
   /// "1 song" / "N songs".
   static String songCount(int count) =>
       count == 1 ? '1 song' : '$count songs';
+
+  /// "1 follower" / "N followers".
+  static String followers(int count) =>
+      count == 1 ? '1 follower' : '$count followers';
 
   /// Duration: "22 min" (< 60 min) or "1 hr 2 min" (>= 60 min). Returns null
   /// when zero/unavailable so the caller omits the segment entirely.
@@ -36,7 +41,7 @@ class PlaylistMeta {
   static String visibilityLabel(String? visibility) =>
       visibility == PlaylistVisibility.public ? 'Public' : 'Private';
 
-  /// Line 3: "Private · 6 songs · 22 min". Duration omitted when zero.
+  /// Line 3 (Phase 3.3.6): "Private · 6 songs · 22 min". Duration omitted at 0.
   static String detailLine({
     required String? visibility,
     required int trackCount,
@@ -49,6 +54,47 @@ class PlaylistMeta {
     final d = duration(totalDurationSeconds);
     if (d != null) parts.add(d);
     return parts.join(separator);
+  }
+
+  /// Phase 3.4.1 stats line (spec §6, line 2):
+  /// "Public · 6 songs · 22 min · 14 followers". Duration omitted at 0; the
+  /// follower segment is omitted when [followerCount] is null (unknown/offline).
+  static String statsLine({
+    required String? visibility,
+    required int trackCount,
+    required int totalDurationSeconds,
+    int? followerCount,
+  }) {
+    final parts = <String>[
+      visibilityLabel(visibility),
+      songCount(trackCount),
+    ];
+    final d = duration(totalDurationSeconds);
+    if (d != null) parts.add(d);
+    if (followerCount != null) parts.add(followers(followerCount));
+    return parts.join(separator);
+  }
+
+  /// "Last modified 2 hours ago", or null when unknown. [now] is injectable.
+  static String? lastModifiedText(DateTime? at, DateTime now) {
+    if (at == null) return null;
+    return 'Last modified ${ActivitySummary.relativeTime(at, now)}';
+  }
+
+  /// Phase 3.4.1 header line 1: "iamleizu, bren_arteaga · Last modified 2 hours
+  /// ago" (the last-modified suffix omitted when unknown; contributors omitted
+  /// when empty — never a leading/trailing separator).
+  static String contributorsWithModified(
+    Playlist playlist, {
+    String? fallbackUsername,
+    DateTime? lastModifiedAt,
+    required DateTime now,
+  }) {
+    final contributors = contributorLine(playlist, fallbackUsername: fallbackUsername);
+    final modified = lastModifiedText(lastModifiedAt, now);
+    if (contributors.isEmpty) return modified ?? '';
+    if (modified == null) return contributors;
+    return '$contributors$separator$modified';
   }
 
   /// Line 2 as a list of names — owner first, then accepted collaborators,

@@ -45,6 +45,14 @@ class LibraryRepository {
   final CatalogResolver _resolver;
   final LibrarySyncState _syncState;
 
+  /// Phase 3.4.1 — true when the most recent [onUserSession] classified the
+  /// pre-existing local library as UNATTRIBUTED (a first sign-in whose local
+  /// data can't be safely attributed to this account). Playlist migration reads
+  /// this to apply the SAME cross-account safety guard (don't upload another
+  /// user's leftover local playlists to the first signer).
+  bool _lastUnattributed = false;
+  bool get lastSessionUnattributed => _lastUnattributed;
+
   LibraryRepository({
     LibraryRemoteDataSource? remote,
     CatalogResolver? resolver,
@@ -426,6 +434,7 @@ class LibraryRepository {
     final unattributedLocal = !switchedAccount &&
         lastUserId == null &&
         _hasLocalLibrary();
+    _lastUnattributed = unattributedLocal;
 
     await _syncState.setLastUserId(userId);
 

@@ -18,6 +18,8 @@ class HiveStorage {
   static const String recentlyPlayedBox    = 'recently_played';
   /// Persisted stream URL cache used by StreamCache / MediaResolver.
   static const String streamCandidatesBox  = 'stream_candidates';
+  /// Phase 3.4.1 — pending cloud-playlist operations journal (offline replay).
+  static const String playlistOpsBox        = 'playlist_ops';
 
   static Future<void> init() async {
     await Hive.initFlutter();
@@ -45,6 +47,8 @@ class HiveStorage {
     await Hive.openBox<Track>(recentlyPlayedBox);
     // Stream URL cache — stores resolved Worker URLs for fast repeat plays
     await Hive.openBox(streamCandidatesBox);
+    // Phase 3.4.1 — pending cloud-playlist ops journal (offline replay).
+    await Hive.openBox(playlistOpsBox);
 
     // Run one-time migration to fix duplicates from old .add() calls
     await _deduplicateLikedTracks();
@@ -195,6 +199,31 @@ class HiveStorage {
   
   static Future<void> deletePlaylist(String id) async {
     await _playlists.delete(id);
+  }
+
+  /// Phase 3.4.1 — clear the local playlists cache on account switch (playlists
+  /// are now cloud-backed; a previous account's rows must not leak into the new
+  /// one). The signed-in account re-hydrates its own from the cloud, and any
+  /// unsynced local playlists survive in the per-user pending-op journal.
+  static Future<void> clearPlaylists() async {
+    await _playlists.clear();
+  }
+
+  /// Phase 3.4.1 — re-key a local playlist to its cloud UUID after migration.
+  /// Preserves tracks/name/cover/metadata and migrates the device-local pin
+  /// (per current account scope). No-op if the source is missing or ids match.
+  static Future<void> rekeyPlaylist(String oldId, String newId) async {
+    if (oldId == newId) return;
+    final p = _playlists.get(oldId);
+    if (p == null) return;
+    await _playlists.put(newId, p.copyWith(id: newId));
+    await _playlists.delete(oldId);
+    final map = getPinnedPlaylistMap();
+    if (map.containsKey(oldId)) {
+      final ts = map.remove(oldId)!;
+      map[newId] = ts;
+      await _writePinnedScope(_pinScope, map);
+    }
   }
   
   // Saved Albums

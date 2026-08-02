@@ -180,4 +180,98 @@ real-time playlist editing (Phase 3.4+).
 
 ---
 
-*Last updated: 2026-08-01*
+## Phase 3.4.1 — Cloud Playlists (2026-08-02)
+
+Playlists are now **authoritative in Supabase**. Hive is the offline cache /
+optimistic mirror / pending-op journal / last-known state / device-local pin
+store — never the cloud source of truth. Every write goes through a
+permission-/version-checked SECURITY DEFINER RPC.
+
+**Concepts (kept strictly separate)**
+- **Owner** — the single creator/administrator (`playlists.owner_id`, canonical
+  user id). The authorization source for ownership. Changing it is an explicit
+  operation (transfer / succession), never implicit.
+- **Collaborators** — users with an **accepted** `playlist_collaborators` record
+  and an editing role. The authorization source for shared editing. Pending /
+  declined / removed / left / blocked users have no edit rights.
+- **Displayed contributors** — a presentation projection (owner first, then
+  accepted collaborators by `joined_at`, deduped by canonical id, owner never
+  repeated, pending never shown). **Never** an authorization source.
+- **Followers** — `user_followed_playlists`. Following ≠ ownership/editing: a
+  followed playlist appears in the follower's Library, reflects owner/collaborator
+  updates, and cannot be edited by the follower.
+
+**Follow vs Clone / Add-to-playlist**
+- **Follow** saves the *source* cloud playlist in the follower's Library (read-only,
+  live updates). Unfollow removes it locally; the source is untouched.
+- **Add to playlist** (non-member) either **creates a new independent playlist**
+  from the source tracks (clone — new UUID, owner = current user, Private, no
+  collaborators/followers/activity copied, `source_playlist_id` recorded; later
+  edits are independent both ways) or **adds all source tracks to one of the
+  user's editable playlists** (one grouped `tracks_added` on the target; source
+  untouched).
+
+**Cloud order vs device-local pin**
+- Track content + order = **cloud-ready** (synced; one-based `position`,
+  normalized, no dupes). Reorder stays staged-until-Save; Save submits one atomic
+  `playlist_save_order` (version-checked), bumps `version` + `last_modified_at/by`,
+  and emits one `tracks_reordered` activity.
+- **Pinned status = device-local preference.** Never synced, never in any cloud
+  payload, per-account scoped, and it must not change `updated_at`/
+  `last_modified_at`/`version`/follower count or create activity.
+
+**`last_modified_at` semantics** — updates for title/description/visibility/cover/
+track add/remove/reorder (meaningful content or metadata edits). Follow/unfollow,
+device-local pin, and open/play do NOT change it.
+
+**Ownership succession (account deletion)** — server-side (`auth.users` AFTER
+DELETE trigger → `private.handle_owner_account_deletion`, independent of the
+deleting client): ownership transfers to the **oldest eligible accepted
+collaborator** ordered by `joined_at` → `created_at` → `user_id`, **skipping
+blocked / missing-profile** candidates. If none, the playlist is **soft-deleted**
+(no arbitrary/system owner). Explicit transfer (owner-initiated) requires the
+target to be an accepted collaborator, is transactional, and demotes the prior
+owner to an accepted editor.
+
+**Blocking** — a minimal `user_blocks` seam. `private.is_blocked` denies access in
+BOTH directions: a blocked user cannot view/edit the blocker's private
+collaborative playlists, is hidden from displayed contributors, and is **not
+eligible to inherit ownership**. Historical activity remains attributed; prior
+track additions are not deleted.
+
+**Offline / conflict** — optimistic local write → RPC when online → journal
+(per-user pending-op queue) when offline. Replay is ordered: success drops the op,
+a **version conflict or lost permission drops the stale op and is surfaced**, a
+network error keeps the op and stops (preserving order). Reorder/metadata use
+optimistic concurrency (expected `version`); a stale device cannot overwrite a
+newer title/collaborator/ownership/order.
+
+**Realtime** — while Playlist Detail is open, one ref-counted channel per playlist
+watches metadata/version, tracks, collaborators, activity, and deletion; a
+monotonic version guard drops stale events; torn down on leave and on account
+switch. RLS governs delivery (no private leakage).
+
+### Future Supabase mapping (implemented)
+`playlists(id, owner_id, name, description, visibility, collaborative,
+cover_mode, custom_cover_url, source_playlist_id, version, deleted_at,
+platform_followers_count, total_tracks, total_duration_seconds, created_at,
+updated_at, last_modified_at, last_modified_by)` ·
+`playlist_collaborators(playlist_id, user_id, role, status, invited_by,
+invited_at, accepted_at, joined_at, created_at, updated_at)` ·
+`playlist_tracks(id, playlist_id, track_id, position, added_by, added_at,
+updated_at)` · `playlist_activity(id, playlist_id, actor_id, event_type,
+created_at, playlist_version, metadata, grouped_change_id)` ·
+`user_followed_playlists(user_id, playlist_id, created_at)` ·
+`user_blocks(blocker_id, blocked_id, created_at)`.
+
+**Known limitations (3.4.1):** hydrated (cross-device/followed/collaborating)
+track rows carry no artist-name join, so their subtitle can be empty until edited
+locally; a follow reflects in the Library on the next session hydration (not
+instantly); LibraryController's best-effort mirror pushes for reorder use no
+version check (the version-checked path is the Detail-screen Save); first sign-in
+on a device holding another account's pre-3.4.1 local playlists migrates them to
+the signed-in account (device-local single-user assumption).
+
+---
+
+*Last updated: 2026-08-02*

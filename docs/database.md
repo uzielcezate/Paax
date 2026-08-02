@@ -206,4 +206,51 @@ Full detail: [architecture-review.md](architecture-review.md#8-database-improvem
 
 ---
 
-*Last updated: 2026-07-17*
+## Phase 3.4.1 — Cloud Playlists schema (2026-08-02)
+
+Additive migrations (`supabase/migrations/20260801120000..130100`). Playlist
+tables were empty before this phase (zero data risk). **Positions are one-based**
+(`playlist_tracks.position > 0` check retained).
+
+**`playlists`** (additive columns): `version bigint` (optimistic concurrency,
+RPC-bumped one per grouped op), `last_modified_at`/`last_modified_by` (meaningful
+edits only), `deleted_at` (soft delete), `cover_mode` (`generated`|`custom`),
+`custom_cover_url`, `source_playlist_id` (clone provenance). Counters
+`total_tracks`/`total_duration_seconds` (trigger `refresh_playlist_totals`) and
+`platform_followers_count` (trigger `bump_playlist_followers`) are
+trigger-maintained — never client-trusted.
+
+**`playlist_tracks`**: `id uuid` PK, `updated_at`; `unique(playlist_id,position)`
+**deferrable initially deferred** (transactional reorder), `unique(playlist_id,
+track_id)` (no dup tracks).
+
+**`playlist_collaborators`** (PK `playlist_id,user_id`): invitation lifecycle
+`status` (`pending`/`accepted`/`declined`/`removed`/`left`), `invited_by`,
+`invited_at`, `accepted_at`, `joined_at`, `updated_at`, `role`
+(`editor`/`moderator`/`viewer`).
+
+**`playlist_activity`** (new, append-only): `id, playlist_id (fk cascade),
+actor_id, event_type, created_at, playlist_version, metadata jsonb,
+grouped_change_id`. RLS: SELECT via `private.can_view_playlist`; **no
+INSERT/UPDATE/DELETE policy** → only trusted RPCs write.
+
+**`user_blocks`** (new, minimal seam): `blocker_id, blocked_id, created_at`
+(PK both, `blocker_id<>blocked_id` check). RLS: users manage only their own rows.
+
+**Helpers** (`private`, SECURITY DEFINER, `search_path=''`, execute revoked):
+`can_view_playlist` (public/unlisted → all; owner/pending+accepted collaborator/
+`followers`-friend → view; blocked/soft-deleted denied), `can_edit_playlist`
+(owner or **accepted** editor/moderator, not blocked, not deleted),
+`is_playlist_owner`, `is_blocked` (symmetric), `log_playlist_activity`,
+`handle_owner_account_deletion` (succession).
+
+**Realtime**: `playlists`, `playlist_tracks`, `playlist_collaborators`,
+`playlist_activity` added to the `supabase_realtime` publication (RLS still
+governs delivery).
+
+See [security](security.md) for the RPC/RLS model and [playlist](features/playlist.md)
+for the domain/policy documentation.
+
+---
+
+*Last updated: 2026-08-02*

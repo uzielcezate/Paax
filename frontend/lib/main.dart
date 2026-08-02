@@ -7,8 +7,12 @@ import 'core/theme/app_theme.dart';
 import 'core/config/api_config.dart';
 import 'core/config/supabase_config.dart';
 import 'data/local/hive_storage.dart';
+import 'data/local/playlist_ops_journal.dart';
 import 'data/remote/follower_count_service.dart';
+import 'data/remote/playlist_realtime_service.dart';
 import 'data/repositories/library_repository.dart';
+import 'data/repositories/playlist_repository.dart';
+import 'data/sync/playlist_sync_service.dart';
 import 'presentation/state/auth_controller.dart';
 import 'presentation/state/home_controller.dart';
 import 'presentation/state/library_controller.dart';
@@ -107,7 +111,12 @@ class PaaxApp extends StatelessWidget {
         // on sign-out it clears session state. onUserSession is idempotent per
         // identity, so calling it on every AuthController notification is safe.
         ChangeNotifierProxyProvider<AuthController, LibraryController>(
-          create: (_) => LibraryController(LibraryRepository()),
+          create: (_) => LibraryController(
+            LibraryRepository(),
+            // Phase 3.4.1 — cloud playlist repository (best-effort; local Hive
+            // stays authoritative). Shares the offline ops journal.
+            PlaylistRepository(sync: PlaylistSyncService(PlaylistOpsJournal())),
+          ),
           update: (_, auth, lib) {
             final uid = auth.isAuthenticated
                 ? Supabase.instance.client.auth.currentUser?.id
@@ -127,6 +136,26 @@ class PaaxApp extends StatelessWidget {
         // (multi-account isolation); the global count itself is user-independent.
         ProxyProvider<AuthController, FollowerCountService>(
           create: (_) => FollowerCountService(SupabaseFollowerCountBackend()),
+          update: (_, auth, service) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            // ignore: discarded_futures
+            service!.onUserSession(uid);
+            return service;
+          },
+          dispose: (_, service) => service.dispose(),
+        ),
+        // Phase 3.4.1: cloud-playlist repository + realtime service. Supabase is
+        // authoritative; Hive is the cache/journal. The realtime service is
+        // driven by the auth session so channels tear down on account switch.
+        Provider<PlaylistRepository>(
+          create: (_) => PlaylistRepository(
+            sync: PlaylistSyncService(PlaylistOpsJournal()),
+          ),
+        ),
+        ProxyProvider<AuthController, PlaylistRealtimeService>(
+          create: (_) => PlaylistRealtimeService(SupabasePlaylistRealtimeBackend()),
           update: (_, auth, service) {
             final uid = auth.isAuthenticated
                 ? Supabase.instance.client.auth.currentUser?.id

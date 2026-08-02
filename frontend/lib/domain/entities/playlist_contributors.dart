@@ -26,11 +26,15 @@ class CollaboratorRole {
   static const String moderator = 'moderator';
 }
 
-/// Collaboration lifecycle status (future `playlist_collaborators.status`).
-/// Only [accepted] grants edit permission or appears in the contributor line.
+/// Collaboration lifecycle status (`playlist_collaborators.status`). Only
+/// [accepted] grants edit permission or appears in the contributor line.
 class CollaboratorStatus {
   static const String pending = 'pending';
   static const String accepted = 'accepted';
+  static const String declined = 'declined';
+  static const String removed = 'removed';
+  static const String left = 'left';
+  // Retained for backward compatibility with pre-3.4.1 local data.
   static const String rejected = 'rejected';
   static const String revoked = 'revoked';
 }
