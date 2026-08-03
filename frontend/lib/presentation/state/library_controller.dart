@@ -319,11 +319,32 @@ class LibraryController extends ChangeNotifier {
     _loadData();
   }
 
+  /// Delete an OWNED playlist (Phase 3.4.1.1 B). For a cloud-backed (UUID)
+  /// playlist the soft-delete RPC runs FIRST — only on success is the local
+  /// cache + device-local pin removed, so a failed/offline delete can never
+  /// leave a local/cloud divergence (it throws; the UI keeps the playlist and
+  /// shows an error). Legacy local (non-UUID) playlists delete locally only.
   Future<void> deletePlaylist(Playlist playlist) async {
     final id = playlist.id;
-    await playlist.delete();
+    if (_cloudEnabled && isUuid(id)) {
+      await _cloud!.deletePlaylist(id); // authoritative first; throws on failure
+    }
+    await HiveStorage.deletePlaylist(id);
+    await HiveStorage.unpinPlaylist(id); // remove device-local pin (spec H)
     _loadData();
-    await _pushCloud(id, () => _cloud!.deletePlaylist(id));
+  }
+
+  /// Accepted collaborator leaves a playlist: remove it from THIS user's library
+  /// (+ pin) and call the leave RPC. The source playlist is untouched.
+  Future<void> leavePlaylist(String playlistId) async {
+    await HiveStorage.deletePlaylist(playlistId);
+    await HiveStorage.unpinPlaylist(playlistId);
+    _loadData();
+    if (_cloudEnabled && isUuid(playlistId)) {
+      try {
+        await _cloud!.leave(playlistId);
+      } catch (_) {}
+    }
   }
 
   Future<void> renamePlaylist(Playlist playlist, String newName) async {

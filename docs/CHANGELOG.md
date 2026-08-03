@@ -26,6 +26,72 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.4.1.1 — Cloud playlist stabilization, invitation notifications, privacy management, Party entry scaffold (2026-08-03)
+
+Follow-up to 3.4.1. **DB: additive migrations only** (extends the pre-existing
+`notifications` table; no `paax-api` change, no Railway redeploy). UI preserved,
+playback untouched, still Provider + ChangeNotifier.
+
+- **Fixed — Reorder header overlap (§A):** in Edit Order mode the first
+  reorderable row rendered under the fixed top bar. The list top inset is now
+  composed from the real bar height via the pure `editOrderListPadding(safeTop)`
+  helper (`safeTop + kEditOrderBarHeight + kEditOrderListGap`), not a hardcoded
+  number. Widget test asserts the first row's top is at/below the bar bottom.
+- **Fixed — Delete/leave/unfollow by role (§B):** the root cause of "deleted in
+  app but still in Supabase" was an optimistic local removal with no RPC and no
+  rollback plus role confusion. `LibraryController.deletePlaylist` is now
+  **RPC-first** (owner-only `playlist_delete`; throws before any local change →
+  no local-only deletion), then clears Hive + device-local pin. New
+  `leavePlaylist` (collaborator → `playlist_leave`, own library only); followers
+  unfollow via `playlist_set_follow(false)`; pending invitees decline. The
+  overflow menu now shows the correct single action per role
+  (owner=Delete, collaborator=Leave, follower=Remove-from-library,
+  invitee=Decline) — UI visibility is convenience; the RPC/RLS is authoritative.
+- **Changed — "Last modified…" always tappable (§C):** every cloud playlist
+  (owner/collaborative/followed/zero-track) opens the activity detail sheet.
+  `ensureLatestActivity()` fetches on demand and synthesizes a "created" event
+  when the log is empty. Actor shows username, never a UUID (fallback "A user").
+- **Added — Playlist privacy management (§D):** owner overflow → "Edit privacy"
+  (Private/Public) via version-checked `playlist_update_metadata`; emits a
+  grouped `visibility_changed` activity; rolls back + reloads on version
+  conflict. Visibility stays orthogonal to collaboration.
+- **Added — Invitation notifications (§E):** the existing `notifications` table
+  gains `actor_user_id, entity_type, entity_id, acted_at, dedupe_key,
+  deleted_at`, a partial-unique dedupe index `(user_id, dedupe_key)`, and
+  realtime. A trusted `private.emit_playlist_notification` (revoked from all
+  client roles) is called **inside** the collaboration RPCs (same transaction):
+  invite→invitee, accept/decline→owner, leave→owner, remove→user (+ revokes the
+  pending invite notif), ownership-transfer→new owner. Types:
+  `playlist_collaboration_invited/accepted/declined`,
+  `playlist_collaborator_removed/left`, `playlist_ownership_transferred`.
+- **Added — Notification inbox + Home bell (§E/§F):** a Flutter layer
+  (`AppNotification` model, `NotificationInbox` data source,
+  `NotificationRealtimeService`, `NotificationController`), a Home-header
+  **bell** immediately left of the profile (live red badge, hidden at 0, caps at
+  "99+", never blocks the tap), and a **Notifications screen** (Today/Earlier,
+  unread-distinct, relative time, pull-to-refresh, realtime, loading/empty/error
+  states, mark-one-on-open, "Mark all as read", inline Accept/Decline on live
+  invites, quiet status for revoked/expired). Account-switch safe (rebinds +
+  discards previous rows; realtime filtered `user_id=eq`).
+- **Added — Create action sheet + Party entry scaffold (§G):** the "+" button
+  opens a sheet (Create playlist / Start a Party). Create playlist keeps the
+  existing flow. **Start a Party is an entry scaffold only**, behind
+  `AppConfig.partyEnabled` (default **OFF**): it opens an informational prep
+  sheet ("temporary shared listening session… coming soon") and creates nothing.
+  No Party backend/migrations.
+- **Security:** notification rows can only be created by the trusted RPC path —
+  RLS has **no client INSERT policy** (verified: a direct client INSERT and a
+  direct call to the emitter both fail); SELECT/UPDATE/DELETE are own-rows-only;
+  the emitter payload is display-safe (playlist title/cover + actor username, no
+  private track data). Non-owner invite is `FORBIDDEN`, closing the forgery
+  vector. Verified end-to-end in production with disposable users in rolled-back
+  transactions (invite/accept/decline/leave/remove/transfer + dedupe; zero data
+  left behind).
+- **Tests:** +32 automated (notification model, inbox realtime lifecycle,
+  controller state/realtime/mark-read/invite-response/account-isolation, Home
+  bell badge, reorder-header geometry, create/Party sheet). Full suite green
+  (one pre-existing empty smoke test fails on `path_provider` in headless mode).
+
 ### Phase 3.4.1 — Cloud Playlists, collaboration, ownership, activity, following, cross-device sync (2026-08-02)
 
 Converts playlists from device-local Hive entities into authoritative

@@ -201,4 +201,29 @@ Full rationale in [decisions.md](decisions.md). Highlights:
 
 ---
 
-*Last updated: 2026-07-16*
+## In-app notifications (Phase 3.4.1.1)
+
+The notification inbox reuses the established cloud pattern, not a new one:
+Supabase is authoritative, writes happen only through trusted SECURITY DEFINER
+RPCs, and delivery is realtime.
+
+- **Write path**: collaboration RPCs call `private.emit_playlist_notification`
+  (execute revoked from clients) in the same transaction as the mutation, so a
+  notification exists iff the change committed. There is **no client INSERT path**
+  (RLS has no INSERT policy on `notifications`).
+- **Read/deliver path** (Flutter, mirrors `PlaylistRealtimeService`):
+  `NotificationInbox` (RLS-scoped reads + mark-read) → `NotificationController`
+  (app-scoped `ChangeNotifier`: list, unread badge, invite Accept/Decline
+  delegated to `playlist_respond_invitation`) ← `NotificationRealtimeService`
+  (one channel filtered `user_id=eq.<uid>`, rebound on account switch). Wired in
+  `main.dart` as a `ChangeNotifierProxyProvider<AuthController, …>` so it loads on
+  sign-in and tears down on sign-out (same lifecycle as `LibraryController` /
+  `HomeController` / `FollowerCountService`).
+- **UI seam**: Home-header bell (`notification_bell.dart`) + `NotificationsScreen`;
+  not in the bottom nav. The Library "+" gains a `CreateActionSheet` with a
+  flag-gated Party entry scaffold (`AppConfig.partyEnabled`, default OFF) — a nav
+  seam only, no domain/backend.
+
+---
+
+*Last updated: 2026-08-03*

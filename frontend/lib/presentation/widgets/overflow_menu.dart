@@ -15,7 +15,6 @@ import '../state/playback_controller.dart';
 import '../screens/artist_detail_screen.dart';
 import '../screens/album_detail_screen.dart';
 import 'playlist_cover.dart';
-import '../screens/home_screen.dart'; // Import MainWrapper if needed, but it's a circular dep maybe.
 import '../screens/main_wrapper.dart'; // To access MainWrapper.shellKey
 import 'package:share_plus/share_plus.dart';
 
@@ -45,6 +44,14 @@ class OverflowMenu extends StatelessWidget {
   final bool isFollowing;
   final VoidCallback? onAddToPlaylist;
   final VoidCallback? onManageCollaborators;
+  // Phase 3.4.1.1 (B): finer role differentiation. `canManage` = can EDIT
+  // (owner or accepted collaborator); `isOwner` = owner-only manage/delete/
+  // privacy. A collaborator gets Leave; a pending invitee gets Decline.
+  final bool isOwner;
+  final VoidCallback? onLeave;
+  final VoidCallback? onDecline;
+  final bool isPendingInvite;
+  final VoidCallback? onEditPrivacy;
 
   const OverflowMenu({
     super.key,
@@ -66,6 +73,11 @@ class OverflowMenu extends StatelessWidget {
     this.isFollowing = false,
     this.onAddToPlaylist,
     this.onManageCollaborators,
+    this.isOwner = false,
+    this.onLeave,
+    this.onDecline,
+    this.isPendingInvite = false,
+    this.onEditPrivacy,
   });
 
   void _showMenu(BuildContext context) {
@@ -92,6 +104,11 @@ class OverflowMenu extends StatelessWidget {
         isFollowing: isFollowing,
         onAddToPlaylist: onAddToPlaylist,
         onManageCollaborators: onManageCollaborators,
+        isOwner: isOwner,
+        onLeave: onLeave,
+        onDecline: onDecline,
+        isPendingInvite: isPendingInvite,
+        onEditPrivacy: onEditPrivacy,
       ),
     );
   }
@@ -125,6 +142,11 @@ class _MenuContent extends StatelessWidget {
   final bool isFollowing;
   final VoidCallback? onAddToPlaylist;
   final VoidCallback? onManageCollaborators;
+  final bool isOwner;
+  final VoidCallback? onLeave;
+  final VoidCallback? onDecline;
+  final bool isPendingInvite;
+  final VoidCallback? onEditPrivacy;
 
   const _MenuContent({
     required this.type,
@@ -145,6 +167,11 @@ class _MenuContent extends StatelessWidget {
     this.isFollowing = false,
     this.onAddToPlaylist,
     this.onManageCollaborators,
+    this.isOwner = false,
+    this.onLeave,
+    this.onDecline,
+    this.isPendingInvite = false,
+    this.onEditPrivacy,
   });
 
   @override
@@ -538,37 +565,54 @@ class _MenuContent extends StatelessWidget {
           );
         },
       ),
-      // Non-member: offer Add-to-playlist + Unfollow instead of manage items.
+      // ── Non-member (follower / none): add-to-playlist + unfollow. ──
       if (!canManage && onAddToPlaylist != null)
         _actionItem(context, icon: Icons.playlist_add_rounded, label: "Add to playlist", color: sheetFg, onTap: () {
            Navigator.pop(context);
            onAddToPlaylist!();
         }),
       if (!canManage && isFollowing && onUnfollow != null)
-        _actionItem(context, icon: Icons.bookmark_remove_outlined, label: "Unfollow playlist", color: sheetFg, onTap: () {
+        _actionItem(context, icon: Icons.bookmark_remove_outlined, label: "Remove from library", color: sheetFg, onTap: () {
            Navigator.pop(context);
            onUnfollow!();
         }),
-      // Manage items — owner/editor only (Phase 3.4.1).
-      if (canManage && onManageCollaborators != null)
-        _actionItem(context, icon: Icons.group_add_rounded, label: "Manage collaborators", color: sheetFg, onTap: () {
+      // ── Pending invitee: Decline (Phase 3.4.1.1). ──
+      if (isPendingInvite && onDecline != null)
+        _actionItem(context, icon: Icons.close_rounded, label: "Decline invitation", color: sheetFg, onTap: () {
            Navigator.pop(context);
-           onManageCollaborators!();
+           onDecline!();
         }),
+      // ── Editor (accepted collaborator, NOT owner): reorder + Leave. ──
       if (canManage && onEditOrder != null)
         _actionItem(context, icon: Icons.reorder_rounded, label: "Edit Order", color: sheetFg, onTap: () {
            Navigator.pop(context);
            onEditOrder!();
         }),
-      if (canManage)
+      if (canManage && !isOwner && onLeave != null)
+        _actionItem(context, icon: Icons.logout_rounded, label: "Leave collaborative playlist", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           onLeave!();
+        }),
+      // ── Owner-only: manage collaborators, edit privacy, rename, delete. ──
+      if (isOwner && onManageCollaborators != null)
+        _actionItem(context, icon: Icons.group_add_rounded, label: "Manage collaborators", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           onManageCollaborators!();
+        }),
+      if (isOwner && onEditPrivacy != null)
+        _actionItem(context, icon: Icons.lock_outline_rounded, label: "Edit privacy", color: sheetFg, onTap: () {
+           Navigator.pop(context);
+           onEditPrivacy!();
+        }),
+      if (isOwner && onEdit != null)
         _actionItem(context, icon: Icons.edit, label: "Edit Playlist", color: sheetFg, onTap: () {
            Navigator.pop(context);
-           if (onEdit != null) onEdit!();
+           onEdit!();
         }),
-      if (canManage)
-        _actionItem(context, icon: Icons.delete_outline, label: "Delete Playlist", color: Colors.redAccent, onTap: () {
+      if (isOwner && onDelete != null)
+        _actionItem(context, icon: Icons.delete_outline, label: "Delete playlist", color: Colors.redAccent, onTap: () {
            Navigator.pop(context);
-           if (onDelete != null) onDelete!();
+           onDelete!();
         }),
       _actionItem(context, icon: Icons.share, label: "Share", color: sheetFg, onTap: () {
          Navigator.pop(context);

@@ -27,7 +27,7 @@ class PlaylistActivitySheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final headline = ActivitySummary.headline(activity);
+    final headline = ActivitySummary.headline(activity, actorFallback: 'A user');
     final details = ActivitySummary.detailLines(activity);
     final overflow = ActivitySummary.overflowCount(activity);
     final when = ActivitySummary.relativeTime(activity.createdAt, DateTime.now());

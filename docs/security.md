@@ -227,4 +227,41 @@ introduced by this phase.
 
 ---
 
-*Last updated: 2026-08-02*
+## Phase 3.4.1.1 — Notification integrity (2026-08-03)
+
+Collaboration notifications are **server-authored only**. The `notifications`
+table has SELECT/UPDATE/DELETE own-rows policies (`auth.uid() = user_id`) and
+**no INSERT policy** — so with RLS enabled a client cannot create a notification
+at all. Rows are written exclusively by `private.emit_playlist_notification`
+(SECURITY DEFINER, `EXECUTE` revoked from `public`/`anon`/`authenticated`),
+called inside the collaboration RPCs.
+
+**Threats considered & closed** (verified in production with disposable users in
+rolled-back transactions):
+
+- **Forgery — direct INSERT** of a notification into a victim's inbox: blocked by
+  RLS (no INSERT policy). *Confirmed: attempt fails.*
+- **Forgery — calling the emitter directly** as `authenticated`: blocked by the
+  `EXECUTE` revoke. *Confirmed: attempt fails.*
+- **Forgery via invite**: only the playlist owner can invite
+  (`playlist_invite_collaborator` → non-owner is `FORBIDDEN`), so an attacker
+  cannot emit an invite notification to an arbitrary user.
+- **Private data leakage**: the emitter payload is limited to playlist
+  title/cover + actor username — never private track contents; recipients are
+  only the counterpart of the action (invitee/owner/removed user/new owner).
+- **Revoked-invite race**: removing a collaborator marks their pending invite
+  notification `acted` (`revoke_invite_notification`); `playlist_respond_invitation`
+  independently re-checks `status='pending'`, so a forged `acted_at=null` on the
+  client's own row still cannot accept a revoked invite.
+- **Cross-account leak**: realtime is filtered `user_id=eq.<uid>` and rebound on
+  account switch; the controller also drops rows whose `user_id` ≠ the active uid.
+- **Duplicate spam**: partial-unique dedupe index + `on conflict … do update`, so
+  a re-invite refreshes one row instead of stacking.
+
+The client's UPDATE policy allows a user to modify only their **own** rows (used
+for mark-read); this cannot affect another user's inbox and cannot bypass any RPC
+permission check (all authoritative decisions are re-validated server-side).
+
+---
+
+*Last updated: 2026-08-03*

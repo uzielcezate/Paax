@@ -528,6 +528,21 @@ commit). Remaining LOW items, accepted for this phase:
 - **Multi-device realtime delivery and audible playback are on-device QA** — not
   verifiable headless.
 
+### Phase 3.4.1.1 (2026-08-03)
+
+- **Notifications are in-app only, delivered via Supabase Realtime while the app
+  is open** — there is no device push (FCM/APNs), so events raised while the app
+  is closed are seen on next open/refresh, not pushed.
+- **Notification tap does not deep-link into the playlist** in this phase (tap =
+  mark read). Opening the referenced playlist is manual.
+- **"Start a Party" is a non-functional entry scaffold** (`AppConfig.partyEnabled`
+  default OFF): it shows an informational prep sheet and creates nothing. There is
+  no Party backend/session yet.
+- **Pre-existing empty smoke test** `test/widget_test.dart` fails under headless
+  `flutter test` (its `setUp` calls `Hive.initFlutter()` → `path_provider`
+  `MissingPluginException`). Not introduced by this phase; the test body is
+  commented out. The rest of the suite (230+) is green.
+
 ---
 
-*Last updated: 2026-08-02*
+*Last updated: 2026-08-03*

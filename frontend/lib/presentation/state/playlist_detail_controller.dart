@@ -14,6 +14,7 @@ import '../../core/policy/playlist_permissions.dart';
 import '../../domain/entities/playlist_activity.dart';
 import '../../domain/entities/playlist_contributors.dart';
 import '../../data/remote/playlist_realtime_service.dart';
+import '../../data/remote/playlist_remote_data_source.dart' show PlaylistConflictException;
 import '../../data/repositories/playlist_repository.dart';
 
 /// A collaborator row for the owner's management sheet (accepted or pending).
@@ -67,6 +68,11 @@ class PlaylistDetailController extends ChangeNotifier {
   bool _followBusy = false;
   List<ManagedCollaborator> _allCollaborators = const [];
   bool _myPendingInvite = false;
+  bool _deleted = false;
+
+  /// True when the playlist was deleted (soft) or the user lost access — the
+  /// Detail screen resolves to an unavailable state (spec 3.4.1.1 B).
+  bool get isDeleted => _deleted;
 
   /// All non-terminal collaborators (accepted + pending) for the owner's manage
   /// sheet, with resolved usernames.
@@ -116,6 +122,8 @@ class PlaylistDetailController extends ChangeNotifier {
     try {
       final row = await _repo.fetchPlaylist(playlistId);
       if (row == null) {
+        // Deleted (soft) or access lost — RLS denies the select either way.
+        _deleted = true;
         _loaded = true;
         notifyListeners();
         return;
@@ -186,10 +194,53 @@ class PlaylistDetailController extends ChangeNotifier {
   }
 
   void _onRealtime(PlaylistRealtimeEvent e) {
+    if (e.kind == 'deleted') {
+      _deleted = true;
+      notifyListeners();
+      return;
+    }
     // Refetch authoritative state on any relevant change (bounded — one open
     // playlist). The realtime service already applies a version guard.
     // ignore: discarded_futures
     refresh();
+  }
+
+  /// Accepted collaborator leaves the playlist (spec 3.4.1.1 B). Best-effort.
+  Future<void> leave() async {
+    try {
+      await _repo.leave(playlistId);
+    } catch (_) {}
+  }
+
+  /// Owner-only visibility change (spec 3.4.1.1 D): optimistic + version-checked
+  /// RPC; rollback + reconcile on conflict/failure. Returns null on success or a
+  /// short message. The RPC emits the `visibility_changed` activity.
+  Future<String?> changeVisibility(String newVisibility) async {
+    if (!_isCloud) return null;
+    final old = _visibility;
+    _visibility = newVisibility;
+    notifyListeners();
+    try {
+      final row = await _repo.updateMetadata(playlistId,
+          visibility: newVisibility, expectedVersion: _version);
+      _visibility = row['visibility']?.toString() ?? newVisibility;
+      _version = (row['version'] as num?)?.toInt() ?? _version;
+      _lastModifiedAt =
+          DateTime.tryParse(row['last_modified_at']?.toString() ?? '')?.toLocal() ??
+              _lastModifiedAt;
+      _latestActivity = null; // force re-fetch of the visibility_changed event
+      notifyListeners();
+      return null;
+    } on PlaylistConflictException {
+      _visibility = old;
+      notifyListeners();
+      await refresh(); // reconcile to authoritative state
+      return 'This playlist changed elsewhere — reloaded. Try again.';
+    } catch (_) {
+      _visibility = old;
+      notifyListeners();
+      return 'Could not change privacy';
+    }
   }
 
   /// Displayed contributor usernames: owner first, then accepted collaborators,
@@ -235,6 +286,36 @@ class PlaylistDetailController extends ChangeNotifier {
       _followBusy = false;
       notifyListeners();
     }
+  }
+
+  /// Phase 3.4.1.1 (C): the "Last modified…" line must be tappable for EVERY
+  /// cloud playlist. Return the latest activity, fetching if not yet loaded, and
+  /// synthesize a "created" event when none exists (never a raw uuid).
+  Future<PlaylistActivity?> ensureLatestActivity() async {
+    if (!_isCloud) return null;
+    if (_latestActivity != null) return _latestActivity;
+    try {
+      final row = await _repo.fetchLatestActivity(playlistId);
+      if (row != null) {
+        String? actorName;
+        final prof = row['profiles'];
+        if (prof is Map) {
+          actorName = (prof['username'] ?? prof['display_name'])?.toString();
+        }
+        _latestActivity = PlaylistActivity.fromMap(row, actorUsername: actorName);
+        notifyListeners();
+        return _latestActivity;
+      }
+    } catch (_) {}
+    // No stored activity yet → show playlist creation.
+    return PlaylistActivity(
+      id: 'created',
+      playlistId: playlistId,
+      actorId: _ownerId,
+      actorUsername: _ownerUsername,
+      eventType: 'playlist_created',
+      createdAt: _lastModifiedAt ?? DateTime.now(),
+    );
   }
 
   Future<Map<String, dynamic>> clone({String? title}) =>

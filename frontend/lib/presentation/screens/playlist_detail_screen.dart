@@ -10,8 +10,6 @@ import '../state/playback_controller.dart';
 import '../state/auth_controller.dart';
 import '../state/playlist_detail_controller.dart';
 import '../../core/utils/playlist_meta.dart';
-import '../../core/policy/playlist_permissions.dart';
-import '../../domain/entities/playlist_activity.dart';
 import '../../data/repositories/playlist_repository.dart';
 import '../../data/remote/playlist_realtime_service.dart';
 import '../widgets/playlist_activity_sheet.dart';
@@ -35,6 +33,20 @@ class PlaylistDetailScreen extends StatefulWidget {
   @override
   State<PlaylistDetailScreen> createState() => _PlaylistDetailScreenState();
 }
+
+/// Height of the fixed Playlist Detail / Edit Order top bar (below the safe
+/// area). Single source of truth shared by the bar and the edit-list top inset.
+const double kEditOrderBarHeight = 58;
+
+/// Gap between the bottom of the fixed Edit Order bar and the first reorderable
+/// row, so the first row never renders under the bar.
+const double kEditOrderListGap = 12;
+
+/// Top inset for the reorderable list in Edit Order mode: safe area + the fixed
+/// bar height + a gap. Kept as a pure function so the layout invariant (first
+/// row below the bar) is unit-testable without mounting the whole screen.
+EdgeInsets editOrderListPadding(double safeAreaTop) =>
+    EdgeInsets.only(top: safeAreaTop + kEditOrderBarHeight + kEditOrderListGap);
 
 class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   late ScrollController _scrollController;
@@ -144,6 +156,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     return filtered;
   }
   
+  /// Open the "Last modified…" activity detail sheet, fetching the latest
+  /// activity (or a creation fallback) when it isn't loaded yet (Phase 3.4.1.1 C).
+  Future<void> _openActivitySheet(PlaylistDetailController c) async {
+    final activity = c.latestActivity ?? await c.ensureLatestActivity();
+    if (!mounted || activity == null) return;
+    showPlaylistActivitySheet(context, activity);
+  }
+
   /// Non-member "Add to playlist" (spec §9): reuse the current Paax bottom sheet
   /// to create a new playlist from these tracks or add them to an existing one.
   void _openAddToPlaylistSheet(List<Track> tracks) {
@@ -209,6 +229,15 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   Widget build(BuildContext context) {
     // Watch library to get updates (e.g. track removed)
     final library = context.watch<LibraryController>();
+    // Phase 3.4.1.1 (B): the playlist was deleted (soft) or access was lost —
+    // resolve to unavailable and leave (realtime 'deleted' / null authoritative
+    // read), never show stale cached content.
+    if (_cloud?.isDeleted == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      });
+      return const Scaffold(backgroundColor: Colors.transparent);
+    }
     // Re-fetch playlist from library to ensure we have latest state
     Playlist? currentPlaylist;
     try {
@@ -410,7 +439,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                             totalDurationSeconds: currentPlaylist.totalDurationSeconds,
                                             followerCount: cloud ? c.followerCount : null,
                                           );
-                                          final activity = c.latestActivity;
                                           return Column(
                                             mainAxisSize: MainAxisSize.min,
                                             crossAxisAlignment: CrossAxisAlignment.center,
@@ -418,9 +446,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                               if (line1.isNotEmpty) ...[
                                                 GestureDetector(
                                                   behavior: HitTestBehavior.opaque,
-                                                  onTap: activity == null
-                                                      ? null
-                                                      : () => showPlaylistActivitySheet(context, activity),
+                                                  // Phase 3.4.1.1 (C): tappable for
+                                                  // EVERY cloud playlist (fetches +
+                                                  // creation fallback), not just when
+                                                  // activity is already loaded.
+                                                  onTap: cloud ? () => _openActivitySheet(c) : null,
                                                   child: Text(
                                                     line1,
                                                     textAlign: TextAlign.center,
@@ -655,7 +685,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                 // ── Edit Mode: ReorderableListView with drag handles + remove icons ──
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 8),
+                    // Phase 3.4.1.1 (A): clear the fixed Edit Order top bar
+                    // (safe-area + the bar's own height + a normal gap) so the
+                    // first reorderable row is fully visible below it. No
+                    // device-specific number — composed from the real bar height.
+                    padding: editOrderListPadding(MediaQuery.of(context).padding.top),
                     child: ReorderableListView.builder(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
@@ -793,7 +827,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                     top: MediaQuery.of(context).padding.top,
                   ),
                   child: SizedBox(
-                    height: 58,
+                    height: kEditOrderBarHeight,
                     child: Stack(
                       children: [
                         // Left: back button — fixed position
@@ -856,30 +890,40 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                                         listenable: _cloud!,
                                         builder: (context, _) {
                                           final c = _cloud!;
-                                          // Non-member (cloud, not editor) → hide
-                                          // manage items; show Add-to-playlist +
-                                          // Unfollow. Local playlists stay manageable.
-                                          final canManage =
-                                              !(c.isCloud && !c.permissions.isEditorMember);
+                                          // Role signals (Phase 3.4.1.1 B). A local
+                                          // playlist is treated as owner-editable.
+                                          final isOwner = !c.isCloud || c.permissions.isOwner;
+                                          final canEdit = !c.isCloud || c.permissions.isEditorMember;
+                                          final isCollaborator = c.isCloud && canEdit && !isOwner;
                                           return OverflowMenu(
                                             type: MenuType.playlist,
                                             playlist: currentPlaylist,
                                             iconColor: Colors.white,
-                                            canManage: canManage,
+                                            canManage: canEdit,
+                                            isOwner: isOwner,
                                             isFollowing: c.isFollowing,
+                                            isPendingInvite: c.myPendingInvite,
                                             onUnfollow: () => c.toggleFollow(),
                                             onAddToPlaylist: () => _openAddToPlaylistSheet(tracks),
-                                            // Owner-only collaborator management.
+                                            onDecline: c.myPendingInvite
+                                                ? () => c.respondToInvitation(false)
+                                                : null,
+                                            onLeave: isCollaborator
+                                                ? () => _confirmLeave(context, library, c, currentPlaylist!)
+                                                : null,
                                             onManageCollaborators: (c.isCloud && c.permissions.canManageCollaborators)
                                                 ? () => showManageCollaboratorsSheet(context, c)
                                                 : null,
-                                            onEdit: canManage
+                                            onEditPrivacy: (c.isCloud && c.permissions.canChangeVisibility)
+                                                ? () => _showEditPrivacySheet(context, c)
+                                                : null,
+                                            onEdit: isOwner
                                                 ? () => _showRenameDialog(context, library, currentPlaylist!)
                                                 : null,
-                                            onDelete: canManage
+                                            onDelete: isOwner
                                                 ? () => _confirmDelete(context, library, currentPlaylist!)
                                                 : null,
-                                            onEditOrder: canManage && tracks.isNotEmpty
+                                            onEditOrder: canEdit && tracks.isNotEmpty
                                                 ? () => _enterEditMode(tracks)
                                                 : null,
                                           );
@@ -998,15 +1042,102 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
           TextButton(
             onPressed: () async {
               Navigator.of(dialogContext).pop();
-              await library.deletePlaylist(playlist);
-              if (screenNavigator.canPop()) {
-                screenNavigator.pop();
+              try {
+                // RPC-first: throws on failure WITHOUT removing local state, so a
+                // failed delete never diverges local vs cloud (Phase 3.4.1.1 B).
+                await library.deletePlaylist(playlist);
+                if (screenNavigator.canPop()) screenNavigator.pop();
+              } catch (_) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text("Couldn't delete the playlist. Please try again."),
+                    behavior: SnackBarBehavior.floating,
+                  ));
+                }
               }
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
+    );
+  }
+
+  /// Accepted collaborator leaves the playlist (Phase 3.4.1.1 B).
+  void _confirmLeave(BuildContext context, LibraryController library,
+      PlaylistDetailController c, Playlist playlist) {
+    final screenNavigator = Navigator.of(context);
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text("Leave playlist?", style: TextStyle(color: Colors.white)),
+        content: Text("You'll lose access to '${playlist.name}'. The playlist itself is not deleted.",
+            style: const TextStyle(color: Colors.grey)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text("Cancel")),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop();
+              await library.leavePlaylist(playlist.id);
+              if (screenNavigator.canPop()) screenNavigator.pop();
+            },
+            child: const Text("Leave", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Owner-only privacy editor (Phase 3.4.1.1 D): Private / Public, version-
+  /// checked cloud RPC with optimistic update + rollback on conflict.
+  void _showEditPrivacySheet(BuildContext context, PlaylistDetailController c) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (sheetCtx) {
+        Widget option(String value, String label, IconData icon) {
+          final selected = c.visibility == value;
+          return ListTile(
+            leading: Icon(icon, color: Colors.white70),
+            title: Text(label, style: const TextStyle(color: Colors.white)),
+            trailing: selected ? const Icon(Icons.check_rounded, color: Colors.white) : null,
+            onTap: () async {
+              Navigator.pop(sheetCtx);
+              if (selected) return;
+              final err = await c.changeVisibility(value);
+              if (err != null && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(err), behavior: SnackBarBehavior.floating));
+              }
+            },
+          );
+        }
+        return Container(
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).padding.bottom + 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(width: 36, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 14, 20, 6),
+                child: Align(alignment: Alignment.centerLeft,
+                    child: Text("Playlist privacy", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700))),
+              ),
+              option('private', 'Private', Icons.lock_outline_rounded),
+              option('public', 'Public', Icons.public_rounded),
+            ],
+          ),
+        );
+      },
     );
   }
 }

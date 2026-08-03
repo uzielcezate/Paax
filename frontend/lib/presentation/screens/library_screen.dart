@@ -9,6 +9,7 @@ import '../state/auth_controller.dart';
 import '../../core/utils/playlist_meta.dart';
 import '../../core/utils/library_layout.dart';
 import '../widgets/add_to_playlist_sheet.dart';
+import '../widgets/create_action_sheet.dart';
 import '../../domain/entities/playlist.dart';
 import 'track_detail_screen.dart';
 import 'album_detail_screen.dart';
@@ -279,7 +280,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   right: 16,
                   bottom: fabBottom.toDouble(),
                   child: GestureDetector(
-                    onTap: () => _showCreatePlaylistDialog(context),
+                    onTap: () => showCreateActionSheet(
+                      context,
+                      onCreatePlaylist: () => _showCreatePlaylistDialog(context),
+                    ),
                     child: Container(
                       width: 46,
                       height: 46,
@@ -480,20 +484,25 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
                 return Text(text, style: const TextStyle(color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis);
               }),
               trailing: Builder(builder: (context) {
-                // Phase 3.4.1 (review M7): a hydrated followed/collaborating
-                // playlist (owned by someone else) must NOT offer Edit/Delete in
-                // the Library row. Owner-only manage; otherwise Add-to-playlist +
-                // Unfollow.
+                // Phase 3.4.1.1 (B): role-correct Library-row actions — owner
+                // (Edit/Delete), accepted collaborator (Leave), follower
+                // (Remove from library). Owned/local = owner.
                 final uid = context.read<AuthController>().profile?.id;
                 final owns = pl.ownerId == null || pl.ownerId == uid;
+                final isCollaborator = !owns &&
+                    pl.acceptedCollaborators.any((c) => c.userId == uid);
                 return OverflowMenu(
                   type: MenuType.playlist,
                   playlist: pl,
                   iconColor: Colors.white,
-                  canManage: owns,
+                  canManage: owns || isCollaborator,
+                  isOwner: owns,
+                  isFollowing: !owns && !isCollaborator,
                   onAddToPlaylist: () => _showAddPlaylistTracksSheet(context, pl),
                   onUnfollow: () => context.read<LibraryController>().unfollowPlaylist(pl.id),
-                  isFollowing: !owns,
+                  onLeave: isCollaborator
+                      ? () => context.read<LibraryController>().leavePlaylist(pl.id)
+                      : null,
                   onEdit: owns ? () => _showRenamePlaylistDialog(context, pl) : null,
                   onDelete: owns ? () => _confirmDeletePlaylist(context, pl.id, pl.name) : null,
                 );
@@ -582,7 +591,16 @@ class _PlaylistsTabState extends State<_PlaylistsTab> with AutomaticKeepAliveCli
           TextButton(
             onPressed: () async {
               Navigator.of(dialogContext).pop(); // close dialog first
-              await library.deletePlaylist(playlist);
+              try {
+                await library.deletePlaylist(playlist); // RPC-first; throws on failure
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text("Couldn't delete the playlist. Please try again."),
+                    behavior: SnackBarBehavior.floating,
+                  ));
+                }
+              }
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
           ),

@@ -44,4 +44,16 @@ class AppConfig {
     'ARTIST_DISCOVERY_MODE',
     defaultValue: 'hybrid',
   );
+
+  /// Party (temporary shared listening session) feature flag — Phase 3.4.1.1 §G.
+  ///
+  /// Injected via --dart-define=PARTY_ENABLED=true. Defaults to OFF: Party is an
+  /// entry scaffold only. When OFF, "Start a Party" opens an informational prep
+  /// sheet (no session is created) and the track-overflow "Add to Party" action
+  /// is hidden. No Party backend/migrations exist yet — do not build against a
+  /// live session assuming this flag is on.
+  static const bool partyEnabled = bool.fromEnvironment(
+    'PARTY_ENABLED',
+    defaultValue: false,
+  );
 }
