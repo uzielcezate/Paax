@@ -250,12 +250,30 @@ class PlaylistRemoteDataSource {
   Future<Map<String, dynamic>?> fetchLatestActivity(String playlistId) => _guard(() async {
         final row = await _client
             .from('playlist_activity')
-            .select('*, profiles:actor_id(username, display_name)')
+            .select('*, profiles:actor_id(username, display_name, avatar_url, avatar_original_url)')
             .eq('playlist_id', playlistId)
             .order('created_at', ascending: false)
             .limit(1)
             .maybeSingle();
         return row == null ? null : (row as Map).cast<String, dynamic>();
+      });
+
+  /// One page of activity, newest-first, with the actor profile joined. Keyset
+  /// pagination: pass the oldest loaded `created_at` (ISO) as [beforeIso] to get
+  /// the next older page. Includes avatar fields for the timeline.
+  Future<List<Map<String, dynamic>>> fetchActivityPage(
+    String playlistId, {
+    int limit = 30,
+    String? beforeIso,
+  }) =>
+      _guard(() async {
+        var q = _client
+            .from('playlist_activity')
+            .select('*, profiles:actor_id(username, display_name, avatar_url, avatar_original_url)')
+            .eq('playlist_id', playlistId);
+        if (beforeIso != null) q = q.lt('created_at', beforeIso);
+        final rows = await q.order('created_at', ascending: false).limit(limit);
+        return (rows as List).cast<Map<String, dynamic>>();
       });
 
   /// user_id → username, batched (no N+1).

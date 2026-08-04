@@ -12,6 +12,7 @@
 import 'dart:convert';
 
 import '../../domain/entities/playlist.dart';
+import '../../domain/entities/playlist_activity.dart';
 import '../../domain/entities/track.dart';
 import '../local/playlist_ops_journal.dart';
 import '../remote/catalog_resolver.dart';
@@ -196,6 +197,21 @@ class PlaylistRepository {
       _remote.fetchCollaborators(playlistId);
   Future<Map<String, dynamic>?> fetchLatestActivity(String playlistId) =>
       _remote.fetchLatestActivity(playlistId);
+
+  /// One page of activity as domain entities (newest-first, actor + avatar
+  /// resolved). Keyset pagination via [before] (the oldest loaded timestamp).
+  Future<List<PlaylistActivity>> fetchActivityTimeline(
+    String playlistId, {
+    int limit = 30,
+    DateTime? before,
+  }) async {
+    final rows = await _remote.fetchActivityPage(
+      playlistId,
+      limit: limit,
+      beforeIso: before?.toUtc().toIso8601String(),
+    );
+    return rows.map(PlaylistActivity.fromJoinedRow).toList();
+  }
   Future<bool> isFollowing(String playlistId) async {
     final uid = currentUserId;
     if (uid == null) return false;

@@ -47,6 +47,6 @@ void main() {
       metadata: {'from': 'private', 'to': 'public'},
     );
     await _pump(tester, a);
-    expect(find.text('iamleizu changed the playlist visibility from Private to Public'), findsOneWidget);
+    expect(find.text('iamleizu made this playlist public'), findsOneWidget);
   });
 }

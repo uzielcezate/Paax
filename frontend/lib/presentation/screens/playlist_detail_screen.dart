@@ -12,7 +12,7 @@ import '../state/playlist_detail_controller.dart';
 import '../../core/utils/playlist_meta.dart';
 import '../../data/repositories/playlist_repository.dart';
 import '../../data/remote/playlist_realtime_service.dart';
-import '../widgets/playlist_activity_sheet.dart';
+import '../widgets/playlist_activity_timeline_sheet.dart';
 import '../widgets/playlist_collaborators_sheet.dart';
 import '../widgets/track_list_tile.dart';
 import '../widgets/glass_surface.dart';
@@ -156,12 +156,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     return filtered;
   }
   
-  /// Open the "Last modified…" activity detail sheet, fetching the latest
-  /// activity (or a creation fallback) when it isn't loaded yet (Phase 3.4.1.1 C).
+  /// Open the "Last modified…" activity timeline (Phase 3.4.1.2A): a paginated,
+  /// realtime, newest-first history — not just the latest event. Cloud-only.
   Future<void> _openActivitySheet(PlaylistDetailController c) async {
-    final activity = c.latestActivity ?? await c.ensureLatestActivity();
-    if (!mounted || activity == null) return;
-    showPlaylistActivitySheet(context, activity);
+    if (!c.isCloud) return;
+    await showPlaylistActivityTimeline(context, c.playlistId);
   }
 
   /// Non-member "Add to playlist" (spec §9): reuse the current Paax bottom sheet
@@ -238,17 +237,17 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       });
       return const Scaffold(backgroundColor: Colors.transparent);
     }
-    // Re-fetch playlist from library to ensure we have latest state
-    Playlist? currentPlaylist;
-    try {
-      currentPlaylist = library.playlists.firstWhere((p) => p.id == widget.playlist.id);
-    } catch (_) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && Navigator.canPop(context)) {
-          Navigator.pop(context);
-        }
-      });
-      return const Scaffold(backgroundColor: Colors.transparent);
+    // Prefer the live library copy (reflects local edits); fall back to the
+    // entity we were opened with when it is not in the library — e.g. deep-nav
+    // from a notification to a pending-invite playlist the user hasn't added
+    // yet. Genuine unavailability (soft-delete / lost access) is already handled
+    // by the `_cloud.isDeleted` guard above, so a miss here is safe to render.
+    Playlist currentPlaylist = widget.playlist;
+    for (final p in library.playlists) {
+      if (p.id == widget.playlist.id) {
+        currentPlaylist = p;
+        break;
+      }
     }
 
     final tracks = currentPlaylist.tracks;

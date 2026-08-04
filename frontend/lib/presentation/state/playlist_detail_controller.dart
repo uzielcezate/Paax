@@ -199,6 +199,18 @@ class PlaylistDetailController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (e.kind == 'followers') {
+      // Apply the AUTHORITATIVE absolute count directly (idempotent — never a
+      // delta), so a viewer sees +1/-1 in realtime even though a follow does not
+      // bump `version`. Do NOT touch `_isFollowing`: the current user's follow
+      // state is never inferred from the global count (spec F). No refetch.
+      final c = (e.record?['platform_followers_count'] as num?)?.toInt();
+      if (c != null && c != _followerCount) {
+        _followerCount = c;
+        notifyListeners();
+      }
+      return;
+    }
     // Refetch authoritative state on any relevant change (bounded — one open
     // playlist). The realtime service already applies a version guard.
     // ignore: discarded_futures

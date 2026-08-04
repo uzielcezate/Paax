@@ -20,9 +20,14 @@ void main() {
           'iamleizu reordered 6 songs');
     });
     test('visibility change', () {
+      // Phase 3.4.1.2 §E — friendlier public/private copy.
       expect(
         ActivitySummary.headline(_a('visibility_changed', {'from': 'private', 'to': 'public'}, actor: 'iamleizu')),
-        'iamleizu changed the playlist visibility from Private to Public',
+        'iamleizu made this playlist public',
+      );
+      expect(
+        ActivitySummary.headline(_a('visibility_changed', {'from': 'public', 'to': 'private'}, actor: 'iamleizu')),
+        'iamleizu made this playlist private',
       );
     });
     test('rename', () {

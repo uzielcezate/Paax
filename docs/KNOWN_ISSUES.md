@@ -541,8 +541,39 @@ commit). Remaining LOW items, accepted for this phase:
 - **Pre-existing empty smoke test** `test/widget_test.dart` fails under headless
   `flutter test` (its `setUp` calls `Hive.initFlutter()` → `path_provider`
   `MissingPluginException`). Not introduced by this phase; the test body is
-  commented out. The rest of the suite (230+) is green.
+  commented out. The rest of the suite (250+) is green.
+
+### Phase 3.4.1.2 (2026-08-04)
+
+- **Two "uziel" accounts exist.** `iamleizu@gmail.com` (username `uziel`) is the
+  active account and owns all 3 playlists; `uziel.sando@hotmail.com` (username
+  `iamleizu`) has **never signed in** and owns none. Signing into the hotmail
+  account shows an empty library — this is correct behavior, not a hydration bug.
+- **Unfollow is silent by design** — no inbox notification (avoids
+  follow/unfollow spam). Documented product decision, not a bug.
+- **Notification deep-nav uses one generic "no longer available" message** for
+  deleted / private-inaccessible / blocked targets (RLS collapses all three to a
+  null read); distinct per-reason messages are intentionally not shown to avoid
+  leaking whether a private/blocked playlist exists.
+- **Follower `+1/-1` across two devices and audible playback remain on-device QA**
+  — not verifiable headless.
+
+### Phase 3.4.1.2B (2026-08-04)
+
+- **Soft-delete keeps the row.** A deleted playlist remains in `public.playlists`
+  with a non-null `deleted_at` by design. The Table Editor showing it is expected;
+  the app never treats it as active. This is the delete contract, not a bug.
+- **Activity timeline grouping is presentation-only.** The DB stores each event
+  separately; the sheet groups adjacent same-actor/same-type track events within
+  5 minutes. Group boundaries are a UI convenience, not persisted.
+- **Party is still backend-less.** The track "Start a Party with this song" and
+  the Library "Start a Party" are both gated by `AppConfig.partyEnabled` (OFF in
+  production → hidden) and, when enabled in dev, open the informational prep sheet
+  — no Party session is created (full Party not implemented).
+- **On-device QA still required:** notification-tap navigation, activity-timeline
+  realtime append in an open sheet, and audible playback are not verifiable
+  headless.
 
 ---
 
-*Last updated: 2026-08-03*
+*Last updated: 2026-08-04*

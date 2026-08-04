@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/entities/playlist_activity.dart';
+import '../util/playlist_activity_presentation.dart';
 
 Future<void> showPlaylistActivitySheet(
     BuildContext context, PlaylistActivity activity) {
@@ -27,7 +28,9 @@ class PlaylistActivitySheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final headline = ActivitySummary.headline(activity, actorFallback: 'A user');
+    final presentation =
+        PlaylistActivityPresentation.of(activity, actorFallback: 'A user');
+    final headline = presentation.title;
     final details = ActivitySummary.detailLines(activity);
     final overflow = ActivitySummary.overflowCount(activity);
     final when = ActivitySummary.relativeTime(activity.createdAt, DateTime.now());
@@ -54,10 +57,43 @@ class PlaylistActivitySheet extends StatelessWidget {
               ),
             ),
           ),
-          Text(
-            headline,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: (presentation.destructive
+                          ? AppColors.primaryEnd
+                          : Colors.white)
+                      .withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: ExcludeSemantics(
+                  child: Icon(
+                    presentation.icon,
+                    size: 18,
+                    color: presentation.destructive
+                        ? AppColors.primaryEnd
+                        : Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Semantics(
+                  label: presentation.semanticLabel,
+                  child: Text(
+                    headline,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
           ),
           if (details.isNotEmpty) ...[
             const SizedBox(height: 12),

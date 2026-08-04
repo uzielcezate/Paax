@@ -11,9 +11,70 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../data/repositories/playlist_repository.dart';
 import '../../domain/entities/app_notification.dart';
+import '../../domain/entities/playlist.dart';
 import '../../domain/entities/playlist_activity.dart' show ActivitySummary;
+import '../state/library_controller.dart';
 import '../state/notification_controller.dart';
+import '../widgets/actor_avatar.dart';
+import 'playlist_detail_screen.dart';
+
+typedef _RowFetcher = Future<Map<String, dynamic>?> Function(String id);
+typedef _RowHydrator = Future<Playlist> Function(Map<String, dynamic> row);
+
+/// Resolve the [Playlist] a playlist notification should open, or null when the
+/// target is unavailable (deleted / private-without-access / blocked — all
+/// collapse to a null RLS-filtered read). Pure and injectable so §C navigation
+/// is unit-testable without mounting the detail screen:
+///   * in-library copy (owner / collaborator / followed) → returned directly;
+///   * otherwise fetched under RLS and hydrated;
+///   * any failure → null (caller shows a non-destructive message).
+Future<Playlist?> resolveNotificationPlaylistTarget(
+  AppNotification n,
+  List<Playlist> library, {
+  required _RowFetcher fetch,
+  required _RowHydrator hydrate,
+}) async {
+  if (!n.isPlaylistTarget) return null;
+  final pid = n.playlistId!;
+  for (final p in library) {
+    if (p.id == pid) return p;
+  }
+  try {
+    final row = await fetch(pid);
+    if (row == null) return null;
+    return await hydrate(row);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Deep-nav (§C): mark the notification read, resolve the canonical playlist
+/// UUID (visibility + blocking enforced by RLS), and open Playlist Detail —
+/// preserving back navigation to the inbox. An unavailable target shows a
+/// non-destructive message instead of crashing or looping.
+Future<void> openPlaylistFromNotification(
+    BuildContext context, AppNotification n) async {
+  // 1. Mark read (best-effort; navigation proceeds regardless).
+  await context.read<NotificationController>().markRead(n.id);
+  if (!context.mounted || !n.isPlaylistTarget) return;
+  final repo = context.read<PlaylistRepository>();
+  final target = await resolveNotificationPlaylistTarget(
+    n,
+    context.read<LibraryController>().playlists,
+    fetch: repo.fetchPlaylist,
+    hydrate: repo.hydrateEntity,
+  );
+  if (!context.mounted) return;
+  if (target == null) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('This playlist is no longer available.')));
+    return;
+  }
+  Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => PlaylistDetailScreen(playlist: target)));
+}
 
 class NotificationsScreen extends StatelessWidget {
   const NotificationsScreen({super.key});
@@ -158,14 +219,20 @@ class _NotificationTile extends StatelessWidget {
         (x) => x.isActing(n.id));
 
     return InkWell(
-      onTap: () => c.markRead(n.id),
+      onTap: () => n.isPlaylistTarget
+          ? openPlaylistFromNotification(context, n)
+          : c.markRead(n.id),
       child: Container(
         color: n.isRead ? Colors.transparent : Colors.white.withValues(alpha: 0.05),
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _Avatar(cover: n.playlistCover),
+            ActorAvatar(
+              imageUrl: n.actorAvatarUrl,
+              displayName: n.actorLabel,
+              size: 44,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -212,30 +279,6 @@ class _NotificationTile extends StatelessWidget {
               ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _Avatar extends StatelessWidget {
-  final String? cover;
-  const _Avatar({this.cover});
-  @override
-  Widget build(BuildContext context) {
-    final hasCover = (cover ?? '').isNotEmpty;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        width: 44,
-        height: 44,
-        color: AppColors.surfaceLight,
-        child: hasCover
-            ? Image.network(cover!,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const Icon(
-                    Icons.queue_music_rounded,
-                    color: Colors.white38))
-            : const Icon(Icons.queue_music_rounded, color: Colors.white38),
       ),
     );
   }

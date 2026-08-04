@@ -262,6 +262,38 @@ The client's UPDATE policy allows a user to modify only their **own** rows (used
 for mark-read); this cannot affect another user's inbox and cannot bypass any RPC
 permission check (all authoritative decisions are re-validated server-side).
 
+### Phase 3.4.1.2 additions
+
+- **Follow notifications** inherit the same integrity model: `playlist_followed`
+  is emitted only inside `playlist_set_follow`, which first checks
+  `can_view_playlist`. A follower can only follow a playlist they may view, the
+  notification's actor is the authenticated follower, and the recipient is the
+  owner — there is no vector to forge a follow notification to an arbitrary user.
+  Dedupe prevents spam; the counter is trigger-maintained (never client-trusted).
+- **Notification deep-nav** fetches the target playlist through the RLS-filtered
+  `playlists` select (`can_view_playlist`), so a deleted, private-without-access,
+  or blocked target returns null and renders a generic "no longer available"
+  message — no hidden metadata (title/cover/tracks) is exposed for an
+  inaccessible playlist.
+- **Avatars** are display-only URLs already in the (server-authored) payload; a
+  broken/404 avatar (e.g. deleted actor) falls back locally and never blocks the
+  row.
+
+### Phase 3.4.1.2B additions
+
+- **Delete stays RPC-only + soft.** `playlist_delete` remains a
+  permission-checked SECURITY DEFINER soft-delete; the client removes local state
+  only after RPC success. Deleted playlists are excluded from every read by
+  `can_view_playlist` (RLS) + `deleted_at is null` filters — they cannot be
+  opened, counted, searched, followed, or resurrected by realtime.
+- **Admin purge is not client-reachable.** `private.purge_soft_deleted_playlist`
+  is in the private schema with `EXECUTE` revoked from public/anon/authenticated
+  (service_role / direct SQL only) and **refuses to purge a live playlist**, so it
+  cannot be used to bypass the soft-delete contract or delete an active playlist.
+- **Activity timeline is read-only** and RLS-scoped: it reads `playlist_activity`
+  (which has no client INSERT/UPDATE/DELETE policy — only trusted RPCs write it),
+  so opening the timeline can never mutate the playlist or forge events.
+
 ---
 
-*Last updated: 2026-08-03*
+*Last updated: 2026-08-04*

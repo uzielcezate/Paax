@@ -10,7 +10,12 @@ import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PlaylistRealtimeEvent {
-  /// 'playlist' | 'tracks' | 'collaborators' | 'activity' | 'deleted'
+  /// 'playlist' | 'followers' | 'tracks' | 'collaborators' | 'activity' | 'deleted'
+  ///
+  /// 'followers' is emitted on every playlists-row update and is NOT version
+  /// guarded: the follower counter is bumped by a trigger WITHOUT changing
+  /// `version`, so a version guard would drop it. It carries the authoritative
+  /// absolute count (idempotent to apply — never a delta).
   final String kind;
   final Map<String, dynamic>? record;
   final int? version;
@@ -126,6 +131,10 @@ class SupabasePlaylistRealtimeBackend implements PlaylistRealtimeBackend {
         } else {
           onEvent(PlaylistRealtimeEvent('playlist',
               record: rec, version: _asInt(rec['version'])));
+          // Also surface the follower count on its own, unguarded channel — a
+          // follow/unfollow bumps the counter without changing `version`, so the
+          // version-guarded 'playlist' event above would be dropped as stale.
+          onEvent(PlaylistRealtimeEvent('followers', record: rec));
         }
       },
     );

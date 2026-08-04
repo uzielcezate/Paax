@@ -79,6 +79,28 @@ void main() {
     expect(be.subs.first.closed, isTrue);
   });
 
+  test('followers events are NOT version-guarded (count stays realtime)', () async {
+    // A follow bumps the counter without bumping version, so 'playlist' events
+    // may be dropped as stale — but 'followers' must always get through.
+    final be = _FakeBackend();
+    final s = PlaylistRealtimeService(be);
+    final counts = <int?>[];
+    s.addListener(p, (e) {
+      if (e.kind == 'followers') {
+        counts.add((e.record?['platform_followers_count'] as num?)?.toInt());
+      }
+    });
+    await s.subscribe(p);
+    // Establish a version high-water mark via a 'playlist' event.
+    be.push(p, const PlaylistRealtimeEvent('playlist', version: 5));
+    // Two follower bumps at the SAME (unchanged) version — both must dispatch.
+    be.push(p, PlaylistRealtimeEvent('followers',
+        record: const {'platform_followers_count': 1, 'version': 5}));
+    be.push(p, PlaylistRealtimeEvent('followers',
+        record: const {'platform_followers_count': 2, 'version': 5}));
+    expect(counts, [1, 2]);
+  });
+
   test('deleted event dispatches to listeners', () async {
     final be = _FakeBackend();
     final s = PlaylistRealtimeService(be);

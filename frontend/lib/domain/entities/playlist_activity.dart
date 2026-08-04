@@ -10,6 +10,7 @@ class PlaylistActivity {
   final String playlistId;
   final String? actorId;
   final String? actorUsername; // resolved snapshot for display
+  final String? actorAvatarUrl; // resolved actor avatar (cached→original)
   final String eventType;
   final DateTime createdAt;
   final int? playlistVersion;
@@ -21,6 +22,7 @@ class PlaylistActivity {
     required this.playlistId,
     this.actorId,
     this.actorUsername,
+    this.actorAvatarUrl,
     required this.eventType,
     required this.createdAt,
     this.playlistVersion,
@@ -28,12 +30,20 @@ class PlaylistActivity {
     this.groupedChangeId,
   });
 
-  factory PlaylistActivity.fromMap(Map<String, dynamic> m, {String? actorUsername}) {
+  /// Actor label for display — never a raw UUID; "Deleted user" when unknown.
+  String get actorLabel {
+    final n = (actorUsername ?? '').trim();
+    return n.isEmpty ? 'Deleted user' : n;
+  }
+
+  factory PlaylistActivity.fromMap(Map<String, dynamic> m,
+      {String? actorUsername, String? actorAvatarUrl}) {
     return PlaylistActivity(
       id: m['id']?.toString() ?? '',
       playlistId: m['playlist_id']?.toString() ?? '',
       actorId: m['actor_id']?.toString(),
       actorUsername: actorUsername,
+      actorAvatarUrl: actorAvatarUrl,
       eventType: m['event_type']?.toString() ?? '',
       createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '')?.toLocal() ??
           DateTime.fromMillisecondsSinceEpoch(0),
@@ -47,15 +57,36 @@ class PlaylistActivity {
     );
   }
 
-  PlaylistActivity copyWith({String? actorUsername}) => PlaylistActivity(
+  /// Build from a row that joined `profiles:actor_id(username, display_name,
+  /// avatar_url, avatar_original_url)` — resolves the actor's display name +
+  /// avatar in one place.
+  factory PlaylistActivity.fromJoinedRow(Map<String, dynamic> m) {
+    final prof = m['profiles'];
+    String? name;
+    String? avatar;
+    if (prof is Map) {
+      name = (prof['username'] ?? prof['display_name'])?.toString();
+      avatar = (prof['avatar_url'] ?? prof['avatar_original_url'])?.toString();
+    }
+    return PlaylistActivity.fromMap(m, actorUsername: name, actorAvatarUrl: avatar);
+  }
+
+  PlaylistActivity copyWith({
+    String? actorUsername,
+    String? actorAvatarUrl,
+    Map<String, dynamic>? metadata,
+    DateTime? createdAt,
+  }) =>
+      PlaylistActivity(
         id: id,
         playlistId: playlistId,
         actorId: actorId,
         actorUsername: actorUsername ?? this.actorUsername,
+        actorAvatarUrl: actorAvatarUrl ?? this.actorAvatarUrl,
         eventType: eventType,
-        createdAt: createdAt,
+        createdAt: createdAt ?? this.createdAt,
         playlistVersion: playlistVersion,
-        metadata: metadata,
+        metadata: metadata ?? this.metadata,
         groupedChangeId: groupedChangeId,
       );
 }
@@ -98,11 +129,10 @@ class ActivitySummary {
       case 'description_changed':
         return '$actor updated the description';
       case 'visibility_changed':
-        final f = _cap(a.metadata['from']?.toString());
-        final t = _cap(a.metadata['to']?.toString());
-        return (f != null && t != null)
-            ? '$actor changed the playlist visibility from $f to $t'
-            : '$actor changed the playlist visibility';
+        final to = a.metadata['to']?.toString();
+        if (to == 'public') return '$actor made this playlist public';
+        if (to == 'private') return '$actor made this playlist private';
+        return '$actor changed the playlist visibility';
       case 'cover_changed':
         return '$actor changed the cover';
       case 'playlist_created':
@@ -144,17 +174,39 @@ class ActivitySummary {
     return titles.take(maxDetailLines).toList();
   }
 
+  /// All track titles carried by the event (bounded by the emitter payload).
+  static List<String> _allTrackTitles(PlaylistActivity a) {
+    final tracks = a.metadata['tracks'];
+    if (tracks is! List) return const [];
+    return tracks
+        .whereType<Map>()
+        .map((m) => (m['title'] ?? '').toString().trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+  }
+
+  /// Compact inline summary for add/remove events, e.g.
+  /// "Duro, offline, WASSUP and 3 more". Bounded to [max] titles. Empty for
+  /// non-track events. Never renders a raw id.
+  static String inlineTrackSummary(PlaylistActivity a, {int max = 3}) {
+    if (a.eventType != 'tracks_added' && a.eventType != 'tracks_removed') {
+      return '';
+    }
+    final titles = _allTrackTitles(a);
+    final total = _count(a) > titles.length ? _count(a) : titles.length;
+    if (titles.isEmpty) return '';
+    final shown = titles.take(max).toList();
+    final remaining = total - shown.length;
+    final head = shown.join(', ');
+    return remaining > 0 ? '$head and $remaining more' : head;
+  }
+
   /// Number of tracks beyond the shown detail lines (for "and N more").
   static int overflowCount(PlaylistActivity a) {
     if (a.eventType != 'tracks_added' && a.eventType != 'tracks_removed') return 0;
     final total = _count(a);
     final shown = detailLines(a).length;
     return total > shown ? total - shown : 0;
-  }
-
-  static String? _cap(String? s) {
-    if (s == null || s.isEmpty) return null;
-    return s[0].toUpperCase() + s.substring(1);
   }
 
   /// Compact relative time, e.g. "just now", "2 minutes ago", "2 hours ago",

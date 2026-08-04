@@ -304,6 +304,81 @@ Create playlist is unchanged. **Start a Party is a scaffold behind
 **creates nothing** — there is no Party backend, table, or session. It exists as
 the minimal nav seam for a future "temporary shared listening session".
 
+### Follow notifications, avatars, deep-nav, activity polish (Phase 3.4.1.2)
+
+- **Follow → owner notification.** Following a viewable playlist notifies the
+  owner once (`playlist_followed`), deduped, never on self-follow or idempotent
+  repeat. **Unfollow is silent** (product decision — avoids follow/unfollow
+  spam). Following is not a content edit, so it never bumps
+  `last_modified_*`/`updated_at`. See
+  [notifications](notifications.md#in-app-inbox-implemented-phase-3411).
+- **Follower count is realtime for viewers.** A follow/unfollow updates the
+  visible count on every open viewer's screen (the counter is bumped without a
+  `version` change, so it rides an unguarded `followers` realtime event carrying
+  the authoritative absolute count; no delta double-apply). The current user's
+  follow state is never inferred from the global count.
+- **Activity icons + copy** are centralized in `PlaylistActivityPresentation`
+  (one mapper: icon · title · subtitle · semanticLabel · destructive). Distinct
+  Material icons per type, friendlier public/private copy, bounded inline track
+  summary, accessibility semantics. The "Last modified…" sheet renders through it.
+- **Notification deep-nav** opens the correct Playlist Detail from a tapped
+  notification (in-library instantly; otherwise fetched under RLS), with graceful
+  "no longer available" handling for deleted/inaccessible targets. Detail now
+  falls back to the passed entity for not-in-library targets (e.g. pending
+  invites) rather than bouncing back.
+
+### Integrity audit (Phase 3.4.1.2, read-only)
+
+All production playlists were audited read-only: **3 playlists** — 1 valid live
+owned (`prueba`), 2 legitimately owner-soft-deleted (`Bad Bunny`, `bad bunny`);
+**0 orphan child rows, 0 counter mismatches**. No cleanup was performed (nothing
+disposable). Two accounts share the "uziel" identity: the active
+`iamleizu@gmail.com` (username `uziel`, owns all 3) and a never-signed-in
+`uziel.sando@hotmail.com` (username `iamleizu`, owns none) — signing into the
+latter is why a session could show no playlists. Hydration is correct for the
+active account.
+
+### Delete contract (verified — Phase 3.4.1.2B)
+
+`playlist_delete` is a **soft-delete**: owner-checked, sets `deleted_at`,
+`version+1`, logs one `playlist_deleted` activity, atomically. This is the
+intended contract (kept — not switched to hard-delete). Verified end-to-end:
+
+- The Flutter path is **RPC-first with rollback** — the local cache/pin is
+  removed only after the RPC succeeds; a failure keeps the playlist + shows an
+  error (never a false success).
+- Every read path excludes soft-deleted rows: `can_view_playlist` returns false
+  when `deleted_at is not null` (RLS), and `fetchOwnedPlaylists`/
+  `fetchPlaylistsByIds` filter `deleted_at is null`. So a deleted playlist
+  disappears from Library/search/counts and cannot be opened by collaborators or
+  followers; pending invites for it stop being actionable; realtime cannot
+  resurrect it.
+- Dependents (`playlist_tracks`, collaborators, activity) are **retained** for
+  audit. The row **remains in `public.playlists` with a non-null `deleted_at`** —
+  that is soft-delete, not a failure.
+
+A separate **admin-only** `private.purge_soft_deleted_playlist` (EXECUTE revoked
+from all client roles; refuses to purge a live playlist) exists for one-off hard
+removal of already-soft-deleted junk data — it is **not** the user delete path.
+
+### Activity timeline (Phase 3.4.1.2A)
+
+"Last modified…" now opens a **paginated, realtime, newest-first timeline** (not
+just the latest event — the previous `limit(1)` peek was the bug; the DB already
+logged the full history). ≥30 events initial + keyset load-more, realtime append
+deduped by activity id, actor avatar + username (never a UUID), distinct icons.
+**Grouping is presentation-only** — the DB persists every action immediately and
+atomically inside its mutation RPC; the UI groups only adjacent same-actor,
+same-type track add/remove events within 5 minutes. `playlist_created` never
+suppresses later events.
+
+### Song-level Party entry (Phase 3.4.1.2)
+
+Track overflow menus expose "Start a Party with this song", routed through the
+**same** shared Party seam as the Library "+" (seed-track aware) — one creation
+path, no duplicate. Both are gated by `AppConfig.partyEnabled` (default OFF →
+hidden in production). No Party backend was built.
+
 ---
 
-*Last updated: 2026-08-03*
+*Last updated: 2026-08-04*

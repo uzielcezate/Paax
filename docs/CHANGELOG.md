@@ -26,6 +26,113 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.4.1.2B — Delete-contract verification, activity timeline, admin purge, Party track entry (2026-08-04)
+
+Bug-triage + completion pass. **DB: additive only** (one admin maintenance
+function; the follow/emitter functions were already redefined in 3.4.1.2). UI
+preserved, playback untouched, Provider.
+
+- **Delete "regression" — root cause: none (soft-delete works).** Traced the
+  owner-delete path end-to-end with direct DB evidence: `playlist_delete` is a
+  correct owner-checked **soft-delete** (sets `deleted_at`, `version+1`, logs one
+  `playlist_deleted`), the Flutter path is RPC-first with rollback, and **every**
+  playlist the user "deleted" has `deleted_at` set (including `prueba 2` from the
+  latest APK). `can_view_playlist` returns false for soft-deleted rows and
+  `fetchOwnedPlaylists`/`fetchPlaylistsByIds` filter `deleted_at is null`, so a
+  soft-deleted playlist never appears in the app. The rows remaining in
+  `public.playlists` is the **soft-delete contract**, not a failure. **Decision:
+  keep soft-delete.** Added a DB acceptance test (`supabase/tests/
+  playlist_delete_contract_test.sql`) + Hive local-removal/restart tests; verified
+  every read path filters `deleted_at`.
+- **Admin-only purge + one-time cleanup.** Added `private.purge_soft_deleted_
+  playlist` (admin-only: EXECUTE revoked from all client roles, private schema;
+  refuses to purge a live playlist) as a maintenance tool separate from the user
+  delete contract. Used it once to hard-purge the 5 confirmed soft-deleted test
+  playlists (Bad Bunny, bad bunny, prueba, prueba 2, prueba 4) after a dry-run;
+  verified 0 orphans across all dependent tables and the live `prueba 3`
+  untouched. FK cascades clean tracks/collaborators/activity/followers/downloads;
+  notification refs + clone back-refs cleaned explicitly.
+- **Activity timeline (Phase 3.4.1.2A).** The activity sheet always showed only
+  "created" because the client called `fetchLatestActivity … limit(1)` and
+  rendered one event — the **DB already logs the full history** (verified:
+  `prueba 3` = 1 created + 3 visibility + 6 tracks_added, each with track titles +
+  group id). Replaced the single-event peek with a **paginated, realtime,
+  newest-first timeline**: ≥30 initial + keyset load-more, realtime append deduped
+  by id, actor avatar + username (never a UUID; "Deleted user" fallback), distinct
+  icons via the shared presentation mapper, and **presentation-only 5-minute
+  grouping** (same actor + same track add/remove type + adjacent within 5 min;
+  create/rename/visibility/ownership never grouped; add never groups with remove).
+  Grouping is UI-only — the DB persists every action immediately and atomically
+  inside its mutation RPC. `playlist_created` no longer suppresses later events.
+- **Song-level Party entry (consistency fix).** Added "Start a Party with this
+  song" to the track overflow menu, routed through the **same** shared Party seam
+  (`showPartyEntrySheet`, now seed-track aware) as the Library "+" — no second
+  creation path. Both entries are gated by `AppConfig.partyEnabled` (default OFF →
+  hidden in production, consistently), auth-guaranteed by AuthGate, with a
+  screen-reader label naming the track. No full Party backend was built.
+- **Tests:** +~20 (activity grouping rules, timeline controller pagination/
+  realtime/dedupe, delete local removal + restart, Party seed/gating) → **272
+  pass**; `flutter analyze` clean; no new security advisor; delete + purge
+  verified in production (disposable users, rolled-back).
+
+### Phase 3.4.1.2 — Follow notifications, avatars, notification deep-nav, activity polish, integrity audit (2026-08-04)
+
+Completion/stabilization pass before Phase 3.4.2 Cloud Likes. **DB: additive
+migration only** (redefines two functions; no schema/table change, no `paax-api`/
+Railway change). UI preserved, playback untouched, Provider + ChangeNotifier.
+
+- **Added — Follow notifications (§A):** following a viewable playlist emits
+  exactly one `playlist_followed` notification to the owner, from inside
+  `playlist_set_follow` (trusted RPC). Deduped per (owner, follower, playlist) via
+  `pl_follow:` key; `FOUND`-gated so an idempotent repeat follow never
+  re-notifies; never self-notifies. **Unfollow is intentionally silent** (product
+  decision: avoid follow/unfollow inbox spam; a re-follow refreshes the existing
+  row). Following does **not** touch `updated_at`/`last_modified_at/by` — the
+  counter is maintained by the existing `bump_playlist_followers` trigger only
+  (verified). Clients still cannot forge notifications (no INSERT policy; emitter
+  `EXECUTE` revoked).
+- **Added — Actor avatars (§B):** the emitter payload now carries `actor_avatar`
+  (`coalesce(avatar_url, avatar_original_url)`). A single canonical `ActorAvatar`
+  widget renders every actor avatar (circular center-crop, error/placeholder
+  fallback, initials for a known name, neutral glyph for a deleted/unknown actor).
+  Notification rows show the actor avatar; the body keeps the actor's username
+  snapshot so historical rows stay readable after the actor is deleted — never a
+  raw UUID (falls back to "Deleted user"). No N+1 (payload is self-contained).
+- **Added — Notification deep navigation (§C):** tapping a playlist notification
+  marks it read, resolves the canonical playlist UUID, and opens Playlist Detail
+  (back returns to the inbox). In-library playlists open instantly; others are
+  fetched under RLS (visibility + blocking enforced server-side). A deleted /
+  private-inaccessible / blocked target shows "This playlist is no longer
+  available." instead of crashing or looping. Playlist Detail now falls back to
+  the passed entity when the target isn't in the local library (e.g. a
+  pending-invite playlist), guarded by the existing soft-delete/access check.
+- **Changed — Activity presentation (§E):** a single `PlaylistActivityPresentation`
+  mapper (icon · title · subtitle · semanticLabel · destructive) is now the one
+  source of truth for every activity type — distinct Material icons, friendlier
+  public/private copy ("made this playlist public/private"), bounded inline track
+  summary ("Duro, offline, WASSUP and 3 more"), a11y semantics, no color-only
+  meaning. The activity sheet renders through it (no duplicated switches).
+- **Fixed — Playlist follower realtime (§F):** a follow bumps the counter without
+  bumping `version`, so the version-guarded `playlist` realtime event was dropped
+  and viewers never saw the count change. The realtime backend now also emits an
+  unguarded `followers` event carrying the authoritative absolute count; the
+  detail controller applies it idempotently (no delta double-apply) and never
+  infers the current user's follow state from the global count.
+- **Audit — Cloud playlist integrity (§G):** read-only audit of all 3 production
+  playlists — perfect integrity (zero orphans, zero counter mismatches). One live
+  valid owned playlist + two legitimately owner-soft-deleted. **No disposable
+  artifacts → no cleanup performed** (§I dry-run: nothing eligible). Root cause of
+  any "playlists don't appear": two accounts exist — the active
+  `iamleizu@gmail.com` (owns all 3) and a never-signed-in
+  `uziel.sando@hotmail.com` (owns none); signing into the latter shows nothing.
+  Hydration/migration verified correct for the active account.
+- **Tests:** +25 (activity presentation icons/copy/bounded, actor avatar,
+  deep-nav resolver, notification avatar/label, `followers` unguarded dispatch).
+  257 pass; `flutter analyze` clean; no new security advisor. Follow-notification
+  lifecycle verified in production with disposable users in rolled-back
+  transactions (emit-once, dedupe, self-skip, silent unfollow, no `last_modified`
+  change).
+
 ### Phase 3.4.1.1 — Cloud playlist stabilization, invitation notifications, privacy management, Party entry scaffold (2026-08-03)
 
 Follow-up to 3.4.1. **DB: additive migrations only** (extends the pre-existing
