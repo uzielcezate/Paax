@@ -7,12 +7,45 @@
 
 ## Overview
 
-"Notifications" in Paax means two very different things, and only one of them exists:
+"Notifications" in Paax means three different things:
 
 1. **The OS media notification** — the now-playing card with transport controls that Android shows while audio is playing. This **is implemented** (Android), and it is a core part of the playback experience rather than a "messaging" feature.
-2. **Push notifications** (new releases, recommendations, social pings, etc.) — **not implemented in the app**. There is no FCM/APNs integration, no device-token registration, and no notification inbox anywhere in the Flutter codebase. As of 2026-07-16 a **server foundation is deployed but unused** (Supabase Phase 1, ADR-009): `user_devices` (with protected push tokens) and a `notifications` inbox table exist server-side — see [below](#planned--if-push-is-added).
+2. **In-app notification inbox** — a **bell in the Home header + a Notifications screen** that surface **collaboration events** (invites, accepts/declines, removals/leaves, ownership transfers). **Implemented in Phase 3.4.1.1** on top of the existing `notifications` table — see [In-App Inbox](#in-app-inbox-implemented-phase-3411). This is **in-app realtime**, not device push: there is still no FCM/APNs and no device-token delivery pipeline.
+3. **Push notifications** (device-delivered when the app is closed) — **still not implemented**. No FCM/APNs integration, no `user_devices` token delivery. See [below](#planned--if-push-is-added).
 
-The rest of this doc keeps those two senses strictly separate so nobody assumes Paax can push messages to users. It cannot — the deployed tables have no delivery pipeline and no client.
+The rest of this doc keeps these senses separate so nobody assumes Paax can push messages to devices. It cannot yet — the inbox is delivered in-app via Supabase Realtime while the app is open.
+
+---
+
+## In-App Inbox (implemented, Phase 3.4.1.1)
+
+The inbox is the client for playlist-collaboration events. It is **read-only from
+the client's side**: rows are created **only** by trusted SECURITY DEFINER
+collaboration RPCs (via `private.emit_playlist_notification`, revoked from all
+client roles), inside the same transaction as the mutation. Clients can only
+read/mark their own rows (RLS: `auth.uid() = user_id`; **no INSERT policy**).
+
+- **Types**: `playlist_collaboration_invited`, `playlist_collaboration_accepted`,
+  `playlist_collaboration_declined`, `playlist_collaborator_removed`,
+  `playlist_collaborator_left`, `playlist_ownership_transferred`.
+- **Table** (extended, additive): `notifications` gains `actor_user_id`,
+  `entity_type`, `entity_id`, `acted_at`, `dedupe_key`, `deleted_at`, a
+  partial-unique dedupe index on `(user_id, dedupe_key)`, and membership in the
+  `supabase_realtime` publication. See [database](../database.md).
+- **Delivery**: `NotificationRealtimeService` opens one channel filtered
+  `user_id=eq.<uid>`, rebound on account switch (no cross-account leak).
+  `NotificationController` holds the caller's rows, drives the unread badge, and
+  handles insert/update/delete + mark-read + inline Accept/Decline (delegated to
+  `playlist_respond_invitation`, which also marks the invite `acted`).
+- **UI**: a **bell** immediately left of the Home profile button (live red badge,
+  hidden at 0, caps at "99+", never blocks the tap → `notification_bell.dart`);
+  the **Notifications screen** (`notifications_screen.dart`) groups Today/Earlier,
+  shows unread distinctly with relative timestamps, supports pull-to-refresh and
+  realtime, marks a row read on open, "Mark all as read", inline Accept/Decline
+  on live invites, and a quiet "no longer available" line for revoked/expired
+  ones. Loading/empty/error(offline) states all handled.
+- **Not** device push, **not** in the bottom nav, and does not deep-link into the
+  playlist on tap (tap = mark read) in this phase.
 
 ---
 
@@ -49,7 +82,7 @@ There are **no** user preferences for this notification (it is not a "message" t
 | Type | Status |
 |------|--------|
 | `new_release` (followed artist releases) | Not implemented. |
-| `playlist_update` (collaborative playlist) | Not implemented — playlists are local-only, non-collaborative (see [playlist](playlist.md)). |
+| `playlist_update` (collaborative playlist) | No **device push**. Collaboration events **are** delivered to the **in-app inbox** (Phase 3.4.1.1) — see [In-App Inbox](#in-app-inbox-implemented-phase-3411). |
 | `new_follower` | Not implemented — there is no social graph (see [profile](profile.md)). |
 | `recommendation` (weekly) | Not implemented — there is no recommender pipeline (see [recommendations](recommendations.md)). |
 | `system` (announcements) | Not implemented. |

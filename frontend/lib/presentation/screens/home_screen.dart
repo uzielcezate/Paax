@@ -10,6 +10,7 @@ import '../../data/repositories/home_repository.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
 import '../../domain/entities/genre.dart';
+import '../widgets/notification_bell.dart';
 import '../widgets/section_header.dart';
 import '../widgets/music_card.dart';
 import '../widgets/error_state_widget.dart';
@@ -243,15 +244,22 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
-          GestureDetector(
-            onTap: () {
-              Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()));
-            },
-            child: CircleAvatar(
-              backgroundColor: AppColors.surfaceLight,
-              child: const Icon(Icons.person, color: Colors.white),
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const NotificationBell(),
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: () {
+                  Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const ProfileScreen()));
+                },
+                child: const CircleAvatar(
+                  backgroundColor: AppColors.surfaceLight,
+                  child: Icon(Icons.person, color: Colors.white),
+                ),
+              ),
+            ],
           )
         ],
       ),

@@ -9,6 +9,7 @@ import 'core/config/supabase_config.dart';
 import 'data/local/hive_storage.dart';
 import 'data/local/playlist_ops_journal.dart';
 import 'data/remote/follower_count_service.dart';
+import 'data/remote/notification_realtime_service.dart';
 import 'data/remote/playlist_realtime_service.dart';
 import 'data/repositories/library_repository.dart';
 import 'data/repositories/playlist_repository.dart';
@@ -16,6 +17,7 @@ import 'data/sync/playlist_sync_service.dart';
 import 'presentation/state/auth_controller.dart';
 import 'presentation/state/home_controller.dart';
 import 'presentation/state/library_controller.dart';
+import 'presentation/state/notification_controller.dart';
 import 'presentation/state/playback_controller.dart';
 import 'presentation/state/search_controller.dart' as app_search;
 import 'presentation/state/theme_state.dart';
@@ -165,6 +167,29 @@ class PaaxApp extends StatelessWidget {
             return service;
           },
           dispose: (_, service) => service.dispose(),
+        ),
+        // Phase 3.4.1.1: in-app notification inbox. The realtime service is a
+        // plain singleton; the controller drives its account binding via
+        // onUserSession (bind(uid) on sign-in, bind(null) on sign-out) so the
+        // bell badge is live and tears down cleanly on an account switch.
+        Provider<NotificationRealtimeService>(
+          create: (_) =>
+              NotificationRealtimeService(SupabaseNotificationRealtimeBackend()),
+          dispose: (_, service) => service.dispose(),
+        ),
+        ChangeNotifierProxyProvider<AuthController, NotificationController>(
+          create: (ctx) => NotificationController(
+            realtime: ctx.read<NotificationRealtimeService>(),
+            respondInvitation: ctx.read<PlaylistRepository>().respondInvitation,
+          ),
+          update: (_, auth, notif) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            // ignore: discarded_futures
+            notif!.onUserSession(uid);
+            return notif;
+          },
         ),
         // Phase 3.2.5: personalized Home feed (real Supabase catalog sections).
         // Driven by the auth session so a persistent Home tab drops the previous

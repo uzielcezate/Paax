@@ -253,4 +253,38 @@ for the domain/policy documentation.
 
 ---
 
-*Last updated: 2026-08-02*
+## Phase 3.4.1.1 — Notification inbox extensions (2026-08-03)
+
+Additive migration `20260803090000_phase3_4_1_1_notifications` extends the
+pre-existing `notifications` table (from Phase 1 `..090700_notifications`) — no
+new table.
+
+**`notifications`** (additive columns): `actor_user_id uuid` (who caused it),
+`entity_type text` + `entity_id uuid` (target, e.g. `playlist`), `acted_at
+timestamptz` (invite resolved/revoked → no longer actionable), `dedupe_key text`,
+`deleted_at timestamptz` (soft delete). Indexes: partial-unique
+`notifications_dedupe_uidx (user_id, dedupe_key) where dedupe_key is not null and
+deleted_at is null` (a re-invite refreshes one row, never stacks), and
+`idx_notifications_user_created (user_id, created_at desc)`. Added to the
+`supabase_realtime` publication.
+
+**RLS** (unchanged shape, verified): SELECT/UPDATE/DELETE own-rows-only
+(`auth.uid() = user_id`), **no INSERT policy** → clients cannot create
+notifications (a direct client INSERT fails under RLS).
+
+**Helpers** (`private`, SECURITY DEFINER, execute revoked from all client roles):
+`emit_playlist_notification(recipient, actor, type, playlist_id, dedupe)` builds a
+display-safe payload (playlist title/cover + actor username; **no private track
+data**) and upserts on the dedupe key; `revoke_invite_notification(recipient,
+playlist_id)` marks a pending invite notification `acted` when the invite is
+revoked. Both are called **inside** the collaboration RPCs
+(`playlist_invite_collaborator`, `playlist_respond_invitation`, `playlist_leave`,
+`playlist_remove_collaborator`, `playlist_transfer_ownership`) in the same
+transaction — so a notification exists iff the mutation committed.
+
+Notification types: `playlist_collaboration_invited` / `_accepted` / `_declined`,
+`playlist_collaborator_removed` / `_left`, `playlist_ownership_transferred`.
+
+---
+
+*Last updated: 2026-08-03*

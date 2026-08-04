@@ -272,6 +272,38 @@ version check (the version-checked path is the Detail-screen Save); first sign-i
 on a device holding another account's pre-3.4.1 local playlists migrates them to
 the signed-in account (device-local single-user assumption).
 
+### Role-dependent removal, privacy, activity (Phase 3.4.1.1)
+
+The Playlist Detail overflow shows exactly one removal action per role, and each
+routes to the authoritative RPC (UI visibility is convenience; RLS/RPC decides):
+
+| Role | Action | Effect |
+|------|--------|--------|
+| Owner | **Delete playlist** | `playlist_delete` (soft delete). **RPC-first with rollback**: the RPC must succeed before any local change, so a failure never leaves a local-only deletion. On success clears Hive + device-local pin; realtime removes it on other devices; collaborators/followers lose it. |
+| Collaborator (accepted) | **Leave collaborative playlist** | `playlist_leave` — removes it from the leaver's library only. |
+| Follower | **Remove from library** | `playlist_set_follow(false)` — drops the follow + local pin. |
+| Pending invitee | **Decline invitation** | `playlist_respond_invitation(false)`. |
+
+- **"Last modified…" is always tappable** for every cloud playlist (owner,
+  collaborative, followed, zero-track). It opens the activity detail sheet;
+  `ensureLatestActivity()` fetches on demand and synthesizes a "created" event
+  when the log is empty. The actor is shown by username, never a UUID.
+- **Edit privacy (owner only):** overflow → Private/Public via version-checked
+  `playlist_update_metadata`; emits a grouped `visibility_changed` activity;
+  rolls back + reloads on a version conflict. Visibility is **orthogonal** to
+  `collaborative` (never overloaded).
+- **Collaboration notifications:** invite/accept/decline/remove/leave/transfer
+  now notify the counterpart via the in-app inbox — see
+  [notifications](notifications.md#in-app-inbox-implemented-phase-3411).
+
+### Party (entry scaffold only, Phase 3.4.1.1)
+
+The Library "+" opens an action sheet (**Create playlist** / **Start a Party**).
+Create playlist is unchanged. **Start a Party is a scaffold behind
+`AppConfig.partyEnabled` (default OFF)**: it opens an informational prep sheet and
+**creates nothing** — there is no Party backend, table, or session. It exists as
+the minimal nav seam for a future "temporary shared listening session".
+
 ---
 
-*Last updated: 2026-08-02*
+*Last updated: 2026-08-03*
