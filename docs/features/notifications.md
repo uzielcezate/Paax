@@ -27,7 +27,27 @@ read/mark their own rows (RLS: `auth.uid() = user_id`; **no INSERT policy**).
 
 - **Types**: `playlist_collaboration_invited`, `playlist_collaboration_accepted`,
   `playlist_collaboration_declined`, `playlist_collaborator_removed`,
-  `playlist_collaborator_left`, `playlist_ownership_transferred`.
+  `playlist_collaborator_left`, `playlist_ownership_transferred`,
+  `playlist_followed` (Phase 3.4.1.2). `playlist_unfollowed` copy exists in the
+  emitter but is **not** emitted — unfollow is intentionally silent to avoid
+  follow/unfollow spam (product decision, §3.4.1.2 A).
+- **Follow (Phase 3.4.1.2)**: following a viewable playlist emits exactly one
+  `playlist_followed` to the owner from inside `playlist_set_follow`. It is
+  `FOUND`-gated (an idempotent repeat follow inserts no row → no re-notify),
+  never self-notifies, and is deduped per (owner, follower, playlist) via the
+  `pl_follow:<pid>:<uid>` key. Following never touches the playlist's
+  `updated_at`/`last_modified_*` (not a content edit).
+- **Avatars (Phase 3.4.1.2)**: the payload carries `actor_avatar`
+  (`coalesce(avatar_url, avatar_original_url)`); the inbox renders it via the one
+  canonical `ActorAvatar` widget (circular center-crop, error/placeholder
+  fallback, initials for a known name, neutral glyph + "Deleted user" for a
+  missing actor). The body keeps the actor's username snapshot, so a row stays
+  readable after the actor is deleted — never a raw UUID.
+- **Deep navigation (Phase 3.4.1.2)**: tapping a playlist notification marks it
+  read, resolves the canonical playlist UUID, and opens Playlist Detail (back
+  returns to the inbox). In-library targets open instantly; others are fetched
+  under RLS. Deleted / private-inaccessible / blocked targets show "This playlist
+  is no longer available." — never a crash, infinite spinner, or leaked metadata.
 - **Table** (extended, additive): `notifications` gains `actor_user_id`,
   `entity_type`, `entity_id`, `acted_at`, `dedupe_key`, `deleted_at`, a
   partial-unique dedupe index on `(user_id, dedupe_key)`, and membership in the

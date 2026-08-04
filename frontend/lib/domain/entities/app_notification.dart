@@ -61,6 +61,22 @@ class AppNotification {
   String? get playlistCover => data['playlist_cover']?.toString();
   String? get actorUsername => data['actor_username']?.toString();
 
+  /// Server-resolved actor avatar URL (cached→original) or null. Purely for
+  /// display; a null/broken URL falls back to initials/placeholder in the UI.
+  String? get actorAvatarUrl => data['actor_avatar']?.toString();
+
+  /// Human actor label. The body is authored server-side with the actor's
+  /// username snapshot, so it survives the actor being deleted; this is only the
+  /// avatar/initials label. Never a UUID — falls back to "Deleted user".
+  String get actorLabel {
+    final n = (actorUsername ?? '').trim();
+    return n.isEmpty ? 'Deleted user' : n;
+  }
+
+  /// True when this notification points at a playlist that can be opened.
+  bool get isPlaylistTarget =>
+      entityType == 'playlist' && (playlistId ?? '').isNotEmpty;
+
   static DateTime? _ts(Object? v) =>
       v == null ? null : DateTime.tryParse(v.toString())?.toLocal();
 

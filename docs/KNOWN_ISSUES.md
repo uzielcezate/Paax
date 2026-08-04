@@ -541,8 +541,23 @@ commit). Remaining LOW items, accepted for this phase:
 - **Pre-existing empty smoke test** `test/widget_test.dart` fails under headless
   `flutter test` (its `setUp` calls `Hive.initFlutter()` → `path_provider`
   `MissingPluginException`). Not introduced by this phase; the test body is
-  commented out. The rest of the suite (230+) is green.
+  commented out. The rest of the suite (250+) is green.
+
+### Phase 3.4.1.2 (2026-08-04)
+
+- **Two "uziel" accounts exist.** `iamleizu@gmail.com` (username `uziel`) is the
+  active account and owns all 3 playlists; `uziel.sando@hotmail.com` (username
+  `iamleizu`) has **never signed in** and owns none. Signing into the hotmail
+  account shows an empty library — this is correct behavior, not a hydration bug.
+- **Unfollow is silent by design** — no inbox notification (avoids
+  follow/unfollow spam). Documented product decision, not a bug.
+- **Notification deep-nav uses one generic "no longer available" message** for
+  deleted / private-inaccessible / blocked targets (RLS collapses all three to a
+  null read); distinct per-reason messages are intentionally not shown to avoid
+  leaking whether a private/blocked playlist exists.
+- **Follower `+1/-1` across two devices and audible playback remain on-device QA**
+  — not verifiable headless.
 
 ---
 
-*Last updated: 2026-08-03*
+*Last updated: 2026-08-04*

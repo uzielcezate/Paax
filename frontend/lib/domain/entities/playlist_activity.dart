@@ -98,11 +98,10 @@ class ActivitySummary {
       case 'description_changed':
         return '$actor updated the description';
       case 'visibility_changed':
-        final f = _cap(a.metadata['from']?.toString());
-        final t = _cap(a.metadata['to']?.toString());
-        return (f != null && t != null)
-            ? '$actor changed the playlist visibility from $f to $t'
-            : '$actor changed the playlist visibility';
+        final to = a.metadata['to']?.toString();
+        if (to == 'public') return '$actor made this playlist public';
+        if (to == 'private') return '$actor made this playlist private';
+        return '$actor changed the playlist visibility';
       case 'cover_changed':
         return '$actor changed the cover';
       case 'playlist_created':
@@ -144,17 +143,39 @@ class ActivitySummary {
     return titles.take(maxDetailLines).toList();
   }
 
+  /// All track titles carried by the event (bounded by the emitter payload).
+  static List<String> _allTrackTitles(PlaylistActivity a) {
+    final tracks = a.metadata['tracks'];
+    if (tracks is! List) return const [];
+    return tracks
+        .whereType<Map>()
+        .map((m) => (m['title'] ?? '').toString().trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+  }
+
+  /// Compact inline summary for add/remove events, e.g.
+  /// "Duro, offline, WASSUP and 3 more". Bounded to [max] titles. Empty for
+  /// non-track events. Never renders a raw id.
+  static String inlineTrackSummary(PlaylistActivity a, {int max = 3}) {
+    if (a.eventType != 'tracks_added' && a.eventType != 'tracks_removed') {
+      return '';
+    }
+    final titles = _allTrackTitles(a);
+    final total = _count(a) > titles.length ? _count(a) : titles.length;
+    if (titles.isEmpty) return '';
+    final shown = titles.take(max).toList();
+    final remaining = total - shown.length;
+    final head = shown.join(', ');
+    return remaining > 0 ? '$head and $remaining more' : head;
+  }
+
   /// Number of tracks beyond the shown detail lines (for "and N more").
   static int overflowCount(PlaylistActivity a) {
     if (a.eventType != 'tracks_added' && a.eventType != 'tracks_removed') return 0;
     final total = _count(a);
     final shown = detailLines(a).length;
     return total > shown ? total - shown : 0;
-  }
-
-  static String? _cap(String? s) {
-    if (s == null || s.isEmpty) return null;
-    return s[0].toUpperCase() + s.substring(1);
   }
 
   /// Compact relative time, e.g. "just now", "2 minutes ago", "2 hours ago",

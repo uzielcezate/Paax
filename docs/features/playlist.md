@@ -304,6 +304,40 @@ Create playlist is unchanged. **Start a Party is a scaffold behind
 **creates nothing** — there is no Party backend, table, or session. It exists as
 the minimal nav seam for a future "temporary shared listening session".
 
+### Follow notifications, avatars, deep-nav, activity polish (Phase 3.4.1.2)
+
+- **Follow → owner notification.** Following a viewable playlist notifies the
+  owner once (`playlist_followed`), deduped, never on self-follow or idempotent
+  repeat. **Unfollow is silent** (product decision — avoids follow/unfollow
+  spam). Following is not a content edit, so it never bumps
+  `last_modified_*`/`updated_at`. See
+  [notifications](notifications.md#in-app-inbox-implemented-phase-3411).
+- **Follower count is realtime for viewers.** A follow/unfollow updates the
+  visible count on every open viewer's screen (the counter is bumped without a
+  `version` change, so it rides an unguarded `followers` realtime event carrying
+  the authoritative absolute count; no delta double-apply). The current user's
+  follow state is never inferred from the global count.
+- **Activity icons + copy** are centralized in `PlaylistActivityPresentation`
+  (one mapper: icon · title · subtitle · semanticLabel · destructive). Distinct
+  Material icons per type, friendlier public/private copy, bounded inline track
+  summary, accessibility semantics. The "Last modified…" sheet renders through it.
+- **Notification deep-nav** opens the correct Playlist Detail from a tapped
+  notification (in-library instantly; otherwise fetched under RLS), with graceful
+  "no longer available" handling for deleted/inaccessible targets. Detail now
+  falls back to the passed entity for not-in-library targets (e.g. pending
+  invites) rather than bouncing back.
+
+### Integrity audit (Phase 3.4.1.2, read-only)
+
+All production playlists were audited read-only: **3 playlists** — 1 valid live
+owned (`prueba`), 2 legitimately owner-soft-deleted (`Bad Bunny`, `bad bunny`);
+**0 orphan child rows, 0 counter mismatches**. No cleanup was performed (nothing
+disposable). Two accounts share the "uziel" identity: the active
+`iamleizu@gmail.com` (username `uziel`, owns all 3) and a never-signed-in
+`uziel.sando@hotmail.com` (username `iamleizu`, owns none) — signing into the
+latter is why a session could show no playlists. Hydration is correct for the
+active account.
+
 ---
 
-*Last updated: 2026-08-03*
+*Last updated: 2026-08-04*

@@ -59,6 +59,23 @@ void main() {
     expect(n.playlistId, 'pl-fallback');
   });
 
+  test('actor avatar + label parse; deleted actor falls back, never a UUID', () {
+    final withAvatar = AppNotification.fromMap(row(
+        data: {'actor_username': 'bren_arteaga', 'actor_avatar': 'https://cdn/av.jpg'}));
+    expect(withAvatar.actorAvatarUrl, 'https://cdn/av.jpg');
+    expect(withAvatar.actorLabel, 'bren_arteaga');
+
+    final deleted = AppNotification.fromMap(row(data: {'playlist_id': 'pl-1'}));
+    expect(deleted.actorAvatarUrl, isNull);
+    expect(deleted.actorLabel, 'Deleted user');
+  });
+
+  test('isPlaylistTarget true for a playlist entity with an id', () {
+    expect(AppNotification.fromMap(row()).isPlaylistTarget, isTrue);
+    final noEntity = AppNotification.fromMap(row(data: {}, entityId: null));
+    expect(noEntity.isPlaylistTarget, isFalse);
+  });
+
   test('copyWith preserves identity and updates read/acted', () {
     final n = AppNotification.fromMap(row());
     final at = DateTime.now();

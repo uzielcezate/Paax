@@ -287,4 +287,31 @@ Notification types: `playlist_collaboration_invited` / `_accepted` / `_declined`
 
 ---
 
-*Last updated: 2026-08-03*
+## Phase 3.4.1.2 — Follow notifications (2026-08-04)
+
+Additive migration `20260804090000_phase3_4_1_2_follow_notifications` — **no
+schema change**, redefines two functions:
+
+- `private.emit_playlist_notification` now selects the actor's avatar
+  (`coalesce(avatar_url, avatar_original_url)`) into the payload as `actor_avatar`
+  and knows the `playlist_followed` / `playlist_unfollowed` copy. Still
+  `SECURITY DEFINER`, `EXECUTE` revoked from all client roles.
+- `public.playlist_set_follow` emits one `playlist_followed` to the owner on a
+  **new** follow (`FOUND`-gated after `insert … on conflict do nothing`), never
+  to self, deduped by `pl_follow:<pid>:<follower>`. Unfollow emits nothing
+  (product decision). The follower counter is still maintained solely by the
+  pre-existing `bump_playlist_followers` trigger, which writes only
+  `platform_followers_count` — following never updates `updated_at` /
+  `last_modified_at` / `last_modified_by`.
+
+New notification type: `playlist_followed`. (`playlist_unfollowed` copy exists but
+is never emitted.)
+
+**Integrity snapshot (read-only audit, 2026-08-04):** 3 playlists — 1 live valid
+owned, 2 owner-soft-deleted; 0 orphan child rows across
+`playlist_tracks`/`user_followed_playlists`/`playlist_collaborators`/
+`playlist_activity`/notification refs; 0 counter mismatches. No cleanup performed.
+
+---
+
+*Last updated: 2026-08-04*
