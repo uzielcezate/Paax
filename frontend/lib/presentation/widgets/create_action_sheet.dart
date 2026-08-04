@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/config/app_config.dart';
 import '../../core/theme/app_colors.dart';
+import '../../domain/entities/track.dart';
 
 /// Shows the create action sheet. [onCreatePlaylist] runs the existing playlist
 /// creation flow. Party opens the prep sheet (or, once implemented and the flag
@@ -70,12 +71,15 @@ class _CreateActionSheet extends StatelessWidget {
             subtitle: 'A collection of songs you can share',
             onTap: onCreatePlaylist,
           ),
-          _ActionRow(
-            icon: Icons.celebration_rounded,
-            title: 'Start a Party',
-            subtitle: 'Listen together in a shared session',
-            onTap: onStartParty,
-          ),
+          // Party entry is gated by AppConfig.partyEnabled (default OFF) so it
+          // is hidden in production — kept consistent with the track-menu entry.
+          if (AppConfig.partyEnabled)
+            _ActionRow(
+              icon: Icons.celebration_rounded,
+              title: 'Start a Party',
+              subtitle: 'Listen together in a shared session',
+              onTap: onStartParty,
+            ),
           const SizedBox(height: 4),
         ],
       ),
@@ -137,25 +141,29 @@ class _ActionRow extends StatelessWidget {
   }
 }
 
-/// Informational "Start a Party" prep sheet. This is the entry scaffold: it
-/// explains what a Party is and that it is coming soon. It creates nothing.
-Future<void> showPartyEntrySheet(BuildContext context) {
+/// Informational "Start a Party" prep sheet — the shared entry scaffold for BOTH
+/// the Library "+" and the track-menu entry. [seedTrack] is the song a track-menu
+/// entry would seed the Party with; it is carried here as the seam for the future
+/// live flow. This sheet creates nothing (Party has no backend yet).
+Future<void> showPartyEntrySheet(BuildContext context, {Track? seedTrack}) {
   return showModalBottomSheet(
     context: context,
     backgroundColor: Colors.transparent,
     useRootNavigator: true,
     isScrollControlled: true,
     barrierColor: Colors.black.withValues(alpha: 0.55),
-    builder: (_) => const _PartyEntrySheet(),
+    builder: (_) => _PartyEntrySheet(seedTrack: seedTrack),
   );
 }
 
 class _PartyEntrySheet extends StatelessWidget {
-  const _PartyEntrySheet();
+  final Track? seedTrack;
+  const _PartyEntrySheet({this.seedTrack});
 
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
+    final seedTitle = seedTrack?.title.trim();
     // The flag gates the eventual live flow; while OFF this stays informational.
     final available = AppConfig.partyEnabled;
     return Container(
@@ -191,10 +199,13 @@ class _PartyEntrySheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          const Text(
-            'A Party is a temporary shared listening session — invite friends and '
-            'everyone hears the same songs in sync, in real time.',
-            style: TextStyle(
+          Text(
+            (seedTitle != null && seedTitle.isNotEmpty)
+                ? 'A Party is a temporary shared listening session — it would start '
+                    'with “$seedTitle” and let friends listen together in sync, in real time.'
+                : 'A Party is a temporary shared listening session — invite friends and '
+                    'everyone hears the same songs in sync, in real time.',
+            style: const TextStyle(
                 color: AppColors.textSecondary, fontSize: 14, height: 1.45),
           ),
           const SizedBox(height: 14),

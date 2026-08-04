@@ -10,6 +10,7 @@ class PlaylistActivity {
   final String playlistId;
   final String? actorId;
   final String? actorUsername; // resolved snapshot for display
+  final String? actorAvatarUrl; // resolved actor avatar (cached→original)
   final String eventType;
   final DateTime createdAt;
   final int? playlistVersion;
@@ -21,6 +22,7 @@ class PlaylistActivity {
     required this.playlistId,
     this.actorId,
     this.actorUsername,
+    this.actorAvatarUrl,
     required this.eventType,
     required this.createdAt,
     this.playlistVersion,
@@ -28,12 +30,20 @@ class PlaylistActivity {
     this.groupedChangeId,
   });
 
-  factory PlaylistActivity.fromMap(Map<String, dynamic> m, {String? actorUsername}) {
+  /// Actor label for display — never a raw UUID; "Deleted user" when unknown.
+  String get actorLabel {
+    final n = (actorUsername ?? '').trim();
+    return n.isEmpty ? 'Deleted user' : n;
+  }
+
+  factory PlaylistActivity.fromMap(Map<String, dynamic> m,
+      {String? actorUsername, String? actorAvatarUrl}) {
     return PlaylistActivity(
       id: m['id']?.toString() ?? '',
       playlistId: m['playlist_id']?.toString() ?? '',
       actorId: m['actor_id']?.toString(),
       actorUsername: actorUsername,
+      actorAvatarUrl: actorAvatarUrl,
       eventType: m['event_type']?.toString() ?? '',
       createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '')?.toLocal() ??
           DateTime.fromMillisecondsSinceEpoch(0),
@@ -47,15 +57,36 @@ class PlaylistActivity {
     );
   }
 
-  PlaylistActivity copyWith({String? actorUsername}) => PlaylistActivity(
+  /// Build from a row that joined `profiles:actor_id(username, display_name,
+  /// avatar_url, avatar_original_url)` — resolves the actor's display name +
+  /// avatar in one place.
+  factory PlaylistActivity.fromJoinedRow(Map<String, dynamic> m) {
+    final prof = m['profiles'];
+    String? name;
+    String? avatar;
+    if (prof is Map) {
+      name = (prof['username'] ?? prof['display_name'])?.toString();
+      avatar = (prof['avatar_url'] ?? prof['avatar_original_url'])?.toString();
+    }
+    return PlaylistActivity.fromMap(m, actorUsername: name, actorAvatarUrl: avatar);
+  }
+
+  PlaylistActivity copyWith({
+    String? actorUsername,
+    String? actorAvatarUrl,
+    Map<String, dynamic>? metadata,
+    DateTime? createdAt,
+  }) =>
+      PlaylistActivity(
         id: id,
         playlistId: playlistId,
         actorId: actorId,
         actorUsername: actorUsername ?? this.actorUsername,
+        actorAvatarUrl: actorAvatarUrl ?? this.actorAvatarUrl,
         eventType: eventType,
-        createdAt: createdAt,
+        createdAt: createdAt ?? this.createdAt,
         playlistVersion: playlistVersion,
-        metadata: metadata,
+        metadata: metadata ?? this.metadata,
         groupedChangeId: groupedChangeId,
       );
 }

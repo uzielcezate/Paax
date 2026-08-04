@@ -279,6 +279,21 @@ permission check (all authoritative decisions are re-validated server-side).
   broken/404 avatar (e.g. deleted actor) falls back locally and never blocks the
   row.
 
+### Phase 3.4.1.2B additions
+
+- **Delete stays RPC-only + soft.** `playlist_delete` remains a
+  permission-checked SECURITY DEFINER soft-delete; the client removes local state
+  only after RPC success. Deleted playlists are excluded from every read by
+  `can_view_playlist` (RLS) + `deleted_at is null` filters — they cannot be
+  opened, counted, searched, followed, or resurrected by realtime.
+- **Admin purge is not client-reachable.** `private.purge_soft_deleted_playlist`
+  is in the private schema with `EXECUTE` revoked from public/anon/authenticated
+  (service_role / direct SQL only) and **refuses to purge a live playlist**, so it
+  cannot be used to bypass the soft-delete contract or delete an active playlist.
+- **Activity timeline is read-only** and RLS-scoped: it reads `playlist_activity`
+  (which has no client INSERT/UPDATE/DELETE policy — only trusted RPCs write it),
+  so opening the timeline can never mutate the playlist or forge events.
+
 ---
 
 *Last updated: 2026-08-04*

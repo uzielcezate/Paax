@@ -314,4 +314,28 @@ owned, 2 owner-soft-deleted; 0 orphan child rows across
 
 ---
 
+## Phase 3.4.1.2B — Delete contract + admin purge (2026-08-04)
+
+`playlist_delete` is confirmed a **soft-delete** (owner-checked → `deleted_at`,
+`version+1`, one `playlist_deleted` activity). Dependents are retained; the row
+stays with a non-null `deleted_at`. FK references into `playlists` are:
+`playlist_tracks` / `playlist_collaborators` / `playlist_activity` /
+`user_followed_playlists` / `user_downloaded_playlists` = **CASCADE**;
+`stories.linked_playlist_id` = **SET NULL**. `notifications.entity_id` and clone
+`playlists.source_playlist_id` have no FK.
+
+Additive migration `20260804120000_admin_purge_soft_deleted_playlist` adds
+`private.purge_soft_deleted_playlist(uuid)` — an **admin-only** maintenance tool
+(SECURITY DEFINER, EXECUTE revoked from public/anon/authenticated, private schema
+→ not exposed by PostgREST). It **refuses to purge a live** (`deleted_at IS NULL`)
+playlist, so it can never bypass soft-delete. It cleans notification refs + clone
+back-refs explicitly and lets FK cascades remove the rest. Used once (2026-08-04)
+to hard-purge the 5 soft-deleted test playlists → 0 orphans, live `prueba 3` kept.
+
+Automated DB acceptance test: `supabase/tests/playlist_delete_contract_test.sql`
+(rolled-back; proves deleted_at/version/activity-once/retention/non-owner-blocked/
+repeat-blocked).
+
+---
+
 *Last updated: 2026-08-04*

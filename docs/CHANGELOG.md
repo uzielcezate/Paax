@@ -26,6 +26,55 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Phase 3.4.1.2B — Delete-contract verification, activity timeline, admin purge, Party track entry (2026-08-04)
+
+Bug-triage + completion pass. **DB: additive only** (one admin maintenance
+function; the follow/emitter functions were already redefined in 3.4.1.2). UI
+preserved, playback untouched, Provider.
+
+- **Delete "regression" — root cause: none (soft-delete works).** Traced the
+  owner-delete path end-to-end with direct DB evidence: `playlist_delete` is a
+  correct owner-checked **soft-delete** (sets `deleted_at`, `version+1`, logs one
+  `playlist_deleted`), the Flutter path is RPC-first with rollback, and **every**
+  playlist the user "deleted" has `deleted_at` set (including `prueba 2` from the
+  latest APK). `can_view_playlist` returns false for soft-deleted rows and
+  `fetchOwnedPlaylists`/`fetchPlaylistsByIds` filter `deleted_at is null`, so a
+  soft-deleted playlist never appears in the app. The rows remaining in
+  `public.playlists` is the **soft-delete contract**, not a failure. **Decision:
+  keep soft-delete.** Added a DB acceptance test (`supabase/tests/
+  playlist_delete_contract_test.sql`) + Hive local-removal/restart tests; verified
+  every read path filters `deleted_at`.
+- **Admin-only purge + one-time cleanup.** Added `private.purge_soft_deleted_
+  playlist` (admin-only: EXECUTE revoked from all client roles, private schema;
+  refuses to purge a live playlist) as a maintenance tool separate from the user
+  delete contract. Used it once to hard-purge the 5 confirmed soft-deleted test
+  playlists (Bad Bunny, bad bunny, prueba, prueba 2, prueba 4) after a dry-run;
+  verified 0 orphans across all dependent tables and the live `prueba 3`
+  untouched. FK cascades clean tracks/collaborators/activity/followers/downloads;
+  notification refs + clone back-refs cleaned explicitly.
+- **Activity timeline (Phase 3.4.1.2A).** The activity sheet always showed only
+  "created" because the client called `fetchLatestActivity … limit(1)` and
+  rendered one event — the **DB already logs the full history** (verified:
+  `prueba 3` = 1 created + 3 visibility + 6 tracks_added, each with track titles +
+  group id). Replaced the single-event peek with a **paginated, realtime,
+  newest-first timeline**: ≥30 initial + keyset load-more, realtime append deduped
+  by id, actor avatar + username (never a UUID; "Deleted user" fallback), distinct
+  icons via the shared presentation mapper, and **presentation-only 5-minute
+  grouping** (same actor + same track add/remove type + adjacent within 5 min;
+  create/rename/visibility/ownership never grouped; add never groups with remove).
+  Grouping is UI-only — the DB persists every action immediately and atomically
+  inside its mutation RPC. `playlist_created` no longer suppresses later events.
+- **Song-level Party entry (consistency fix).** Added "Start a Party with this
+  song" to the track overflow menu, routed through the **same** shared Party seam
+  (`showPartyEntrySheet`, now seed-track aware) as the Library "+" — no second
+  creation path. Both entries are gated by `AppConfig.partyEnabled` (default OFF →
+  hidden in production, consistently), auth-guaranteed by AuthGate, with a
+  screen-reader label naming the track. No full Party backend was built.
+- **Tests:** +~20 (activity grouping rules, timeline controller pagination/
+  realtime/dedupe, delete local removal + restart, Party seed/gating) → **272
+  pass**; `flutter analyze` clean; no new security advisor; delete + purge
+  verified in production (disposable users, rolled-back).
+
 ### Phase 3.4.1.2 — Follow notifications, avatars, notification deep-nav, activity polish, integrity audit (2026-08-04)
 
 Completion/stabilization pass before Phase 3.4.2 Cloud Likes. **DB: additive

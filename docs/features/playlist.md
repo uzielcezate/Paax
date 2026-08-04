@@ -338,6 +338,47 @@ disposable). Two accounts share the "uziel" identity: the active
 latter is why a session could show no playlists. Hydration is correct for the
 active account.
 
+### Delete contract (verified — Phase 3.4.1.2B)
+
+`playlist_delete` is a **soft-delete**: owner-checked, sets `deleted_at`,
+`version+1`, logs one `playlist_deleted` activity, atomically. This is the
+intended contract (kept — not switched to hard-delete). Verified end-to-end:
+
+- The Flutter path is **RPC-first with rollback** — the local cache/pin is
+  removed only after the RPC succeeds; a failure keeps the playlist + shows an
+  error (never a false success).
+- Every read path excludes soft-deleted rows: `can_view_playlist` returns false
+  when `deleted_at is not null` (RLS), and `fetchOwnedPlaylists`/
+  `fetchPlaylistsByIds` filter `deleted_at is null`. So a deleted playlist
+  disappears from Library/search/counts and cannot be opened by collaborators or
+  followers; pending invites for it stop being actionable; realtime cannot
+  resurrect it.
+- Dependents (`playlist_tracks`, collaborators, activity) are **retained** for
+  audit. The row **remains in `public.playlists` with a non-null `deleted_at`** —
+  that is soft-delete, not a failure.
+
+A separate **admin-only** `private.purge_soft_deleted_playlist` (EXECUTE revoked
+from all client roles; refuses to purge a live playlist) exists for one-off hard
+removal of already-soft-deleted junk data — it is **not** the user delete path.
+
+### Activity timeline (Phase 3.4.1.2A)
+
+"Last modified…" now opens a **paginated, realtime, newest-first timeline** (not
+just the latest event — the previous `limit(1)` peek was the bug; the DB already
+logged the full history). ≥30 events initial + keyset load-more, realtime append
+deduped by activity id, actor avatar + username (never a UUID), distinct icons.
+**Grouping is presentation-only** — the DB persists every action immediately and
+atomically inside its mutation RPC; the UI groups only adjacent same-actor,
+same-type track add/remove events within 5 minutes. `playlist_created` never
+suppresses later events.
+
+### Song-level Party entry (Phase 3.4.1.2)
+
+Track overflow menus expose "Start a Party with this song", routed through the
+**same** shared Party seam as the Library "+" (seed-track aware) — one creation
+path, no duplicate. Both are gated by `AppConfig.partyEnabled` (default OFF →
+hidden in production). No Party backend was built.
+
 ---
 
 *Last updated: 2026-08-04*

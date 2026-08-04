@@ -558,6 +558,22 @@ commit). Remaining LOW items, accepted for this phase:
 - **Follower `+1/-1` across two devices and audible playback remain on-device QA**
   — not verifiable headless.
 
+### Phase 3.4.1.2B (2026-08-04)
+
+- **Soft-delete keeps the row.** A deleted playlist remains in `public.playlists`
+  with a non-null `deleted_at` by design. The Table Editor showing it is expected;
+  the app never treats it as active. This is the delete contract, not a bug.
+- **Activity timeline grouping is presentation-only.** The DB stores each event
+  separately; the sheet groups adjacent same-actor/same-type track events within
+  5 minutes. Group boundaries are a UI convenience, not persisted.
+- **Party is still backend-less.** The track "Start a Party with this song" and
+  the Library "Start a Party" are both gated by `AppConfig.partyEnabled` (OFF in
+  production → hidden) and, when enabled in dev, open the informational prep sheet
+  — no Party session is created (full Party not implemented).
+- **On-device QA still required:** notification-tap navigation, activity-timeline
+  realtime append in an open sheet, and audible playback are not verifiable
+  headless.
+
 ---
 
 *Last updated: 2026-08-04*
