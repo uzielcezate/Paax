@@ -56,8 +56,19 @@ class AuthValidators {
 
   static final RegExp _usernameRe = RegExp(r'^[a-z0-9_.]{3,30}$');
 
-  /// Canonical form: trimmed + lowercased (case-insensitive uniqueness).
-  static String normalizeUsername(String value) => value.trim().toLowerCase();
+  /// Canonical username-normalization contract (Phase 3.4.1.2C) — MUST match the
+  /// DB `private.normalize_username`: strip one optional leading '@' (+ spaces),
+  /// trim, lowercase. Case-insensitive uniqueness + invitation lookup rely on
+  /// both sides agreeing. Internal characters are never altered.
+  static String normalizeUsername(String value) {
+    final stripped = value.replaceFirst(RegExp(r'^\s*@?\s*'), '');
+    return stripped.trim().toLowerCase();
+  }
+
+  /// True when [value] normalizes to a non-blank handle worth sending to the
+  /// server for an exact invitation lookup.
+  static bool isResolvableUsername(String value) =>
+      normalizeUsername(value).isNotEmpty;
 
   static String? username(String? value) {
     final v = normalizeUsername(value ?? '');

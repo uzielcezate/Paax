@@ -10,27 +10,53 @@
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/auth/validators.dart';
 import '../../core/policy/playlist_permissions.dart';
 import '../../domain/entities/playlist_activity.dart';
 import '../../domain/entities/playlist_contributors.dart';
 import '../../data/remote/playlist_realtime_service.dart';
-import '../../data/remote/playlist_remote_data_source.dart' show PlaylistConflictException;
+import '../../data/remote/playlist_remote_data_source.dart'
+    show PlaylistConflictException, PlaylistForbiddenException;
 import '../../data/repositories/playlist_repository.dart';
 
 /// A collaborator row for the owner's management sheet (accepted or pending).
 class ManagedCollaborator {
   final String userId;
   final String username;
+  final String? displayName;
+  final String? avatarUrl;
   final String role;
   final String status;
   const ManagedCollaborator({
     required this.userId,
     required this.username,
+    this.displayName,
+    this.avatarUrl,
     required this.role,
     required this.status,
   });
   bool get isPending => status == 'pending';
   bool get isAccepted => status == 'accepted';
+}
+
+/// A search result in the collaborator people picker (invitation-safe fields).
+class PeoplePickerResult {
+  final String userId;
+  final String username;
+  final String? displayName;
+  final String? avatarUrl;
+  const PeoplePickerResult({
+    required this.userId,
+    required this.username,
+    this.displayName,
+    this.avatarUrl,
+  });
+  factory PeoplePickerResult.fromRow(Map<String, dynamic> m) => PeoplePickerResult(
+        userId: m['user_id']?.toString() ?? '',
+        username: m['username']?.toString() ?? '',
+        displayName: m['display_name']?.toString(),
+        avatarUrl: m['avatar_url']?.toString(),
+      );
 }
 
 class PlaylistDetailController extends ChangeNotifier {
@@ -58,6 +84,7 @@ class PlaylistDetailController extends ChangeNotifier {
   bool _isCloud = false;
   String? _ownerId;
   String? _ownerUsername;
+  String? _ownerAvatarUrl;
   List<PlaylistCollaborator> _collaborators = const [];
   String _visibility;
   int? _followerCount;
@@ -85,6 +112,7 @@ class PlaylistDetailController extends ChangeNotifier {
   bool get isCloud => _isCloud;
   String? get ownerId => _ownerId;
   String? get ownerUsername => _ownerUsername;
+  String? get ownerAvatarUrl => _ownerAvatarUrl;
   List<PlaylistCollaborator> get collaborators => _collaborators;
   String get visibility => _visibility;
   int? get followerCount => _followerCount;
@@ -136,21 +164,48 @@ class PlaylistDetailController extends ChangeNotifier {
           DateTime.tryParse(row['last_modified_at']?.toString() ?? '')?.toLocal();
 
       final collabRows = await _repo.fetchCollaborators(playlistId);
+
+      // Resolve every participant's public profile (username/display/avatar) via
+      // the public_profiles view — the base `profiles` table is own-row-only
+      // under RLS, so the embedded join returns null for OTHER users (this is
+      // also why invitees/collaborators used to render as generic "user").
+      final ids = <String>{
+        if (_ownerId != null) _ownerId!,
+        for (final c in collabRows) (c['user_id']?.toString() ?? ''),
+      }..removeWhere((e) => e.isEmpty);
+      final profileRows = await _repo.fetchPublicProfiles(ids);
+      final profiles = <String, Map<String, dynamic>>{
+        for (final p in profileRows) (p['id']?.toString() ?? ''): p,
+      };
+
       final accepted = <PlaylistCollaborator>[];
       final managed = <ManagedCollaborator>[];
       var myPending = false;
       for (final c in collabRows) {
         final status = c['status']?.toString() ?? '';
         final userId = c['user_id']?.toString() ?? '';
-        final prof = c['profiles'];
-        final username = (prof is Map)
-            ? (prof['username'] ?? prof['display_name'] ?? '').toString()
-            : '';
+        final p = profiles[userId];
+        // Fallback to the (self-only) embed if the public profile is unavailable
+        // (e.g. a private account) so the current user still sees their own row.
+        final embed = c['profiles'];
+        final username = (p?['username'] ??
+                (embed is Map ? (embed['username'] ?? embed['display_name']) : null) ??
+                '')
+            .toString();
+        final displayName =
+            (p?['display_name'] ?? (embed is Map ? embed['display_name'] : null))
+                ?.toString();
+        final avatarUrl = p?['avatar_url']?.toString();
         final role = c['role']?.toString() ?? CollaboratorRole.editor;
         if (status == 'pending' && userId == currentUserId) myPending = true;
         if (status == 'accepted' || status == 'pending') {
           managed.add(ManagedCollaborator(
-              userId: userId, username: username, role: role, status: status));
+              userId: userId,
+              username: username,
+              displayName: displayName,
+              avatarUrl: avatarUrl,
+              role: role,
+              status: status));
         }
         if (status != 'accepted') continue;
         accepted.add(PlaylistCollaborator(
@@ -168,16 +223,16 @@ class PlaylistDetailController extends ChangeNotifier {
       _allCollaborators = managed;
       _myPendingInvite = myPending;
 
-      // Owner username + activity actor name (batched).
-      final ids = <String>{if (_ownerId != null) _ownerId!};
       _isFollowing = await _repo.isFollowing(playlistId);
 
       final activityRow = await _repo.fetchLatestActivity(playlistId);
       if (activityRow != null) {
         _latestActivity = PlaylistActivity.fromRpcRow(activityRow);
       }
-      final names = await _repo.resolveUsernames(ids);
-      _ownerUsername = names[_ownerId] ?? _ownerUsername;
+      final ownerProfile = _ownerId == null ? null : profiles[_ownerId!];
+      _ownerUsername =
+          (ownerProfile?['username'] ?? _ownerUsername)?.toString();
+      _ownerAvatarUrl = ownerProfile?['avatar_url']?.toString() ?? _ownerAvatarUrl;
 
       _loaded = true;
       notifyListeners();
@@ -327,22 +382,63 @@ class PlaylistDetailController extends ChangeNotifier {
 
   // ── collaboration management (owner) ──
   /// Invite by username. Returns null on success, or a short error message.
-  Future<String?> inviteByUsername(String username) async {
-    final name = username.trim();
-    if (name.isEmpty) return 'Enter a username';
+  /// Invite by typed username. Normalizes with the shared contract, then resolves
+  /// + invites entirely server-side (SECURITY DEFINER RPC) — no client `profiles`
+  /// SELECT (that was blocked by own-row-only RLS → the "No user" bug). Returns
+  /// null on success, or a user-facing message. On failure the caller keeps the
+  /// entered text; on success the caller clears it.
+  Future<String?> inviteByUsername(String rawUsername) async {
+    final norm = AuthValidators.normalizeUsername(rawUsername);
+    if (norm.isEmpty) return 'Enter a username';
     try {
-      final id = await _repo.resolveUserIdByUsername(name);
-      if (id == null) return 'No user "$name"';
-      if (id == _ownerId) return 'That user is the owner';
-      await _repo.invite(playlistId, id);
+      await _repo.inviteByUsername(playlistId, norm);
       await refresh();
       return null;
     } catch (e) {
-      final s = e.toString();
-      if (s.contains('ALREADY_INVITED')) return 'Already invited';
-      if (s.contains('USER_BLOCKED')) return 'Cannot invite this user';
-      return 'Could not send invite';
+      return _mapInviteError(e);
     }
+  }
+
+  /// Invite the resolved profile UUID (people-picker path). The UUID is the
+  /// authoritative identity; the server re-checks all eligibility rules.
+  Future<String?> inviteByUserId(String userId) async {
+    if (userId.isEmpty) return 'Could not send invitation. Try again.';
+    try {
+      await _repo.invite(playlistId, userId);
+      await refresh();
+      return null;
+    } catch (e) {
+      return _mapInviteError(e);
+    }
+  }
+
+  /// Map a trusted-RPC failure to a safe user-facing message (never a raw
+  /// Postgres/RPC string; never leaks whether a private account exists).
+  String _mapInviteError(Object e) {
+    if (e is PlaylistForbiddenException) {
+      return 'Only the playlist owner can invite collaborators';
+    }
+    final s = e.toString();
+    if (s.contains('CANNOT_INVITE_SELF')) return 'You cannot invite yourself';
+    if (s.contains('CANNOT_INVITE_OWNER')) return 'You cannot invite yourself';
+    if (s.contains('ALREADY_COLLABORATOR')) return 'Already a collaborator';
+    if (s.contains('INVITATION_PENDING')) return 'Invitation already pending';
+    if (s.contains('USER_BLOCKED')) return 'You cannot invite this user';
+    if (s.contains('ONLY_OWNER')) {
+      return 'Only the playlist owner can invite collaborators';
+    }
+    if (s.contains('USER_NOT_FOUND')) return 'User not found';
+    return 'Could not send invitation. Try again.';
+  }
+
+  /// Bounded people search for the collaborator picker. Returns [] for queries
+  /// shorter than 2 chars; throws on a transport error so the UI can show a
+  /// distinct "Couldn't search people" state (vs an empty result).
+  Future<List<PeoplePickerResult>> searchPeople(String query) async {
+    final q = query.trim();
+    if (AuthValidators.normalizeUsername(q).length < 2) return const [];
+    final rows = await _repo.searchInvitableProfiles(playlistId, q, limit: 10);
+    return rows.map(PeoplePickerResult.fromRow).toList();
   }
 
   Future<void> removeCollaborator(String userId) async {

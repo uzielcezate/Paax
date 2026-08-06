@@ -180,6 +180,14 @@ class PlaylistRepository {
       _remote.resolveUserIdByUsername(username);
   Future<void> invite(String playlistId, String userId, {String role = 'editor'}) =>
       _remote.invite(playlistId, userId, role: role);
+  Future<void> inviteByUsername(String playlistId, String username,
+          {String role = 'editor'}) =>
+      _remote.inviteByUsername(playlistId, username, role: role);
+  Future<List<Map<String, dynamic>>> searchInvitableProfiles(
+          String playlistId, String query, {int limit = 10}) =>
+      _remote.searchInvitableProfiles(playlistId, query, limit: limit);
+  Future<List<Map<String, dynamic>>> fetchPublicProfiles(Iterable<String> ids) =>
+      _remote.fetchPublicProfiles(ids);
   Future<void> respondInvitation(String playlistId, bool accept) =>
       _remote.respondInvitation(playlistId, accept);
   Future<void> leave(String playlistId) => _remote.leave(playlistId);
