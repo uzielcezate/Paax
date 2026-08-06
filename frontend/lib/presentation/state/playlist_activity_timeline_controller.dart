@@ -58,8 +58,14 @@ class PlaylistActivityTimelineController extends ChangeNotifier {
         ..clear()
         ..addAll(page);
       _hasMore = page.length >= pageSize;
-    } catch (_) {
-      _error = _raw.isEmpty;
+    } catch (e, st) {
+      // Non-release: surface the real Supabase/PostgREST/RPC error (message,
+      // code) instead of swallowing it behind the generic UI failure state.
+      if (kDebugMode) {
+        debugPrint('[PlaylistActivity] load($playlistId) failed: $e');
+        debugPrintStack(stackTrace: st, label: '[PlaylistActivity]');
+      }
+      _error = _raw.isEmpty; // release: safe user-facing "Couldn't load activity"
     }
     _loading = false;
     notifyListeners();
@@ -76,7 +82,10 @@ class PlaylistActivityTimelineController extends ChangeNotifier {
       final seen = _raw.map((e) => e.id).toSet();
       _raw.addAll(page.where((e) => !seen.contains(e.id)));
       _hasMore = page.length >= pageSize;
-    } catch (_) {/* keep what we have */}
+    } catch (e) {
+      if (kDebugMode) debugPrint('[PlaylistActivity] loadMore($playlistId) failed: $e');
+      /* keep what we have */
+    }
     _loadingMore = false;
     notifyListeners();
   }
@@ -108,7 +117,9 @@ class PlaylistActivityTimelineController extends ChangeNotifier {
       _raw.insertAll(0, fresh);
       _raw.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       notifyListeners();
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('[PlaylistActivity] realtime merge($playlistId) failed: $e');
+    }
   }
 
   @override

@@ -18,6 +18,7 @@ import 'presentation/state/auth_controller.dart';
 import 'presentation/state/home_controller.dart';
 import 'presentation/state/library_controller.dart';
 import 'presentation/state/notification_controller.dart';
+import 'presentation/state/party_controller.dart';
 import 'presentation/state/playback_controller.dart';
 import 'presentation/state/search_controller.dart' as app_search;
 import 'presentation/state/theme_state.dart';
@@ -131,6 +132,11 @@ class PaaxApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),
         ChangeNotifierProvider(create: (_) => PlaybackController()),
         ChangeNotifierProvider(create: (_) => ThemeState()),
+        // Phase 3.4.1.2C: single source of truth for (future) live Party
+        // session state. No runtime yet → hasActiveParty is always false, so
+        // "Add to Party" resolves to the start-a-party scaffold. App-scoped so
+        // every track menu shares one resolver.
+        ChangeNotifierProvider(create: (_) => PartyController()),
         // Phase 3.3.5: authoritative, realtime-synced global follower counts.
         // App-scoped singleton so multiple ArtistDetailScreen instances (e.g.
         // via Related Artists) share one realtime channel per artist. Driven by
