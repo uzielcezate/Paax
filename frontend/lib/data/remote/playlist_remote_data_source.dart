@@ -248,31 +248,35 @@ class PlaylistRemoteDataSource {
       });
 
   Future<Map<String, dynamic>?> fetchLatestActivity(String playlistId) => _guard(() async {
-        final row = await _client
-            .from('playlist_activity')
-            .select('*, profiles:actor_id(username, display_name, avatar_url, avatar_original_url)')
-            .eq('playlist_id', playlistId)
-            .order('created_at', ascending: false)
-            .limit(1)
-            .maybeSingle();
-        return row == null ? null : (row as Map).cast<String, dynamic>();
+        final rows = await _client.rpc('playlist_get_activity', params: {
+          'p_playlist_id': playlistId,
+          'p_limit': 1,
+        });
+        final list = (rows as List).cast<Map<String, dynamic>>();
+        return list.isEmpty ? null : list.first;
       });
 
-  /// One page of activity, newest-first, with the actor profile joined. Keyset
-  /// pagination: pass the oldest loaded `created_at` (ISO) as [beforeIso] to get
-  /// the next older page. Includes avatar fields for the timeline.
+  /// One page of activity, newest-first, with the actor's display fields
+  /// resolved. Keyset pagination: pass the oldest loaded `created_at` (ISO) as
+  /// [beforeIso] to get the next older page.
+  ///
+  /// Reads through the SECURITY DEFINER `playlist_get_activity` RPC (not a
+  /// PostgREST embed): `playlist_activity.actor_id` has no FK to `profiles`, so
+  /// the old `profiles:actor_id(...)` embed 400'd (PGRST200), and even with an
+  /// FK the own-row-only `profiles` RLS would hide other actors from non-owner
+  /// viewers. The RPC authorizes via `can_view_playlist` (soft-deleted /
+  /// unauthorized → FORBIDDEN) and returns flat `actor_*` display columns.
   Future<List<Map<String, dynamic>>> fetchActivityPage(
     String playlistId, {
     int limit = 30,
     String? beforeIso,
   }) =>
       _guard(() async {
-        var q = _client
-            .from('playlist_activity')
-            .select('*, profiles:actor_id(username, display_name, avatar_url, avatar_original_url)')
-            .eq('playlist_id', playlistId);
-        if (beforeIso != null) q = q.lt('created_at', beforeIso);
-        final rows = await q.order('created_at', ascending: false).limit(limit);
+        final rows = await _client.rpc('playlist_get_activity', params: {
+          'p_playlist_id': playlistId,
+          'p_limit': limit,
+          if (beforeIso != null) 'p_before': beforeIso,
+        });
         return (rows as List).cast<Map<String, dynamic>>();
       });
 

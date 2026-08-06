@@ -210,7 +210,7 @@ class PlaylistRepository {
       limit: limit,
       beforeIso: before?.toUtc().toIso8601String(),
     );
-    return rows.map(PlaylistActivity.fromJoinedRow).toList();
+    return rows.map(PlaylistActivity.fromRpcRow).toList();
   }
   Future<bool> isFollowing(String playlistId) async {
     final uid = currentUserId;

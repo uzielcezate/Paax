@@ -174,13 +174,7 @@ class PlaylistDetailController extends ChangeNotifier {
 
       final activityRow = await _repo.fetchLatestActivity(playlistId);
       if (activityRow != null) {
-        String? actorName;
-        final prof = activityRow['profiles'];
-        if (prof is Map) {
-          actorName = (prof['username'] ?? prof['display_name'])?.toString();
-        }
-        _latestActivity =
-            PlaylistActivity.fromMap(activityRow, actorUsername: actorName);
+        _latestActivity = PlaylistActivity.fromRpcRow(activityRow);
       }
       final names = await _repo.resolveUsernames(ids);
       _ownerUsername = names[_ownerId] ?? _ownerUsername;
@@ -309,12 +303,7 @@ class PlaylistDetailController extends ChangeNotifier {
     try {
       final row = await _repo.fetchLatestActivity(playlistId);
       if (row != null) {
-        String? actorName;
-        final prof = row['profiles'];
-        if (prof is Map) {
-          actorName = (prof['username'] ?? prof['display_name'])?.toString();
-        }
-        _latestActivity = PlaylistActivity.fromMap(row, actorUsername: actorName);
+        _latestActivity = PlaylistActivity.fromRpcRow(row);
         notifyListeners();
         return _latestActivity;
       }

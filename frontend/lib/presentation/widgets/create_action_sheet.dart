@@ -164,8 +164,10 @@ class _PartyEntrySheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final seedTitle = seedTrack?.title.trim();
-    // The flag gates the eventual live flow; while OFF this stays informational.
-    final available = AppConfig.partyEnabled;
+    // The RUNTIME flag gates the eventual live flow; while OFF this stays
+    // informational (entry points are visible via AppConfig.partyEnabled, but
+    // no session can be created yet).
+    final available = AppConfig.partyRuntimeEnabled;
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.surface,
@@ -243,9 +245,24 @@ class _PartyEntrySheet extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(24)),
               ),
-              child: Text(available ? 'Create Party' : 'Coming soon',
+              child: Text(
+                  available
+                      ? ((seedTitle != null && seedTitle.isNotEmpty)
+                          ? 'Start a Party with this song'
+                          : 'Start a Party')
+                      : 'Coming soon',
                   style: const TextStyle(
                       fontWeight: FontWeight.w700, fontSize: 15)),
+            ),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel',
+                  style: TextStyle(
+                      color: AppColors.mutedText, fontWeight: FontWeight.w600)),
             ),
           ),
         ],

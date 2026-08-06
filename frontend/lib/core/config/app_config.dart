@@ -45,15 +45,31 @@ class AppConfig {
     defaultValue: 'hybrid',
   );
 
-  /// Party (temporary shared listening session) feature flag — Phase 3.4.1.1 §G.
+  /// Party ENTRY-POINT visibility — Phase 3.4.1.2C.
   ///
-  /// Injected via --dart-define=PARTY_ENABLED=true. Defaults to OFF: Party is an
-  /// entry scaffold only. When OFF, "Start a Party" opens an informational prep
-  /// sheet (no session is created) and the track-overflow "Add to Party" action
-  /// is hidden. No Party backend/migrations exist yet — do not build against a
-  /// live session assuming this flag is on.
+  /// Injected via --dart-define=PARTY_ENABLED=false to hide. Defaults to ON: the
+  /// "Add to Party" track-overflow action and the Library "+" → "Start a Party"
+  /// entry are visible in production. This flag ONLY controls whether the entry
+  /// points appear — it does NOT assert a live Party runtime exists. Tapping an
+  /// entry routes into the Party scaffold, which communicates availability via
+  /// [partyRuntimeEnabled]. It never creates a persistent playlist or an empty
+  /// Party.
   static const bool partyEnabled = bool.fromEnvironment(
     'PARTY_ENABLED',
+    defaultValue: true,
+  );
+
+  /// Party RUNTIME availability — Phase 3.4.1.2C.
+  ///
+  /// Injected via --dart-define=PARTY_RUNTIME_ENABLED=true. Defaults to OFF:
+  /// there is no live Party-session backend yet, so the Party scaffold shows a
+  /// "coming soon" state and starting a Party is disabled (nothing is created).
+  /// Flip to true only once a real Party runtime (session backend + join/queue)
+  /// ships — then the scaffold's "Start a Party with this song" CTA becomes
+  /// live. Keep this OFF until then so entry points are discoverable without
+  /// promising a broken experience.
+  static const bool partyRuntimeEnabled = bool.fromEnvironment(
+    'PARTY_RUNTIME_ENABLED',
     defaultValue: false,
   );
 }

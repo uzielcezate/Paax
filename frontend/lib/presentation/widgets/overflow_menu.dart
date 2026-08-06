@@ -5,7 +5,7 @@ import '../../core/config/app_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/entities/track.dart';
 import 'add_to_playlist_sheet.dart';
-import 'create_action_sheet.dart';
+import 'party_actions.dart';
 import '../../domain/entities/saved_album.dart';
 import '../../domain/entities/artist.dart';
 import '../../domain/entities/playlist.dart';
@@ -323,6 +323,22 @@ class _MenuContent extends StatelessWidget {
           builder: (context) => AddToPlaylistSheet(tracks: [effectiveTrack]),
         );
       }),
+      // "Add to Party" — placed immediately after "Add to Playlist" and before
+      // "Add to Queue". Gated by AppConfig.partyEnabled (default ON). Routes
+      // through the SINGLE shared resolver (PartyActions.addToParty) so every
+      // track menu behaves identically: with an active Party it adds to the live
+      // queue; with none it offers to start one seeded with this song. Uses the
+      // stable parentContext (the overflow sheet is popped first). Playback,
+      // queue, likes, hidden-state and playlist membership are untouched.
+      if (AppConfig.partyEnabled)
+        _actionItem(context,
+            icon: Icons.celebration_rounded,
+            label: "Add to Party",
+            color: sheetFg, onTap: () {
+          Navigator.pop(context);
+          // ignore: discarded_futures
+          PartyActions.addToParty(parentContext, effectiveTrack);
+        }),
       _actionItem(context, icon: Icons.queue_music, label: "Add to Queue", color: sheetFg, onTap: () {
         final playback = context.read<PlaybackController>();
         if (playback.currentTrack == null) {
@@ -333,22 +349,6 @@ class _MenuContent extends StatelessWidget {
         }
         Navigator.pop(context);
       }),
-      // Song-level Party entry — gated by AppConfig.partyEnabled (default OFF →
-      // hidden in production, consistent with the Library "+" entry). Routes
-      // through the SAME shared Party seam (showPartyEntrySheet), seeded with
-      // this track. No second Party creation path; playback is untouched.
-      if (AppConfig.partyEnabled)
-        Semantics(
-          button: true,
-          label: 'Start a Party with ${effectiveTrack.title}',
-          child: _actionItem(context,
-              icon: Icons.celebration_rounded,
-              label: "Start a Party with this song",
-              color: sheetFg, onTap: () {
-            Navigator.pop(context);
-            showPartyEntrySheet(context, seedTrack: effectiveTrack);
-          }),
-        ),
       _actionItem(context, icon: Icons.album, label: "Go to Album", color: sheetFg, onTap: () {
         Navigator.pop(context); 
         

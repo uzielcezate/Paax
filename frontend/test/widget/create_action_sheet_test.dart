@@ -1,10 +1,11 @@
 // test/widget/create_action_sheet_test.dart — Phase 3.4.1.1 §G + 3.4.1.2 Party entry.
 //
-// The "+" menu offers Create playlist and (flag-gated) Start a Party. With
-// AppConfig.partyEnabled OFF — the default in tests and production — the Party
-// row is HIDDEN (consistent with the track-menu entry). The shared prep sheet
-// (showPartyEntrySheet) is the single Party seam for both Library and track
-// entries; it accepts an optional seed track and creates nothing.
+// The "+" menu offers Create playlist and (flag-gated) Start a Party. Phase
+// 3.4.1.2C: AppConfig.partyEnabled defaults ON (entry points visible) while
+// AppConfig.partyRuntimeEnabled defaults OFF (no live session yet), so the
+// shared prep/scaffold sheet (showPartyEntrySheet) stays informational and its
+// CTA reads "Coming soon". It is the single Party seam for both Library and
+// track entries; it accepts an optional seed track and creates nothing.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -44,7 +45,7 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     expect(find.text('Create playlist'), findsOneWidget);
-    // partyEnabled is false in tests → the Party row is hidden.
+    // partyEnabled defaults ON → the "Start a Party" row is visible.
     expect(find.text('Start a Party'), AppConfig.partyEnabled ? findsOneWidget : findsNothing);
 
     await tester.tap(find.text('Create playlist'));
@@ -72,8 +73,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('temporary shared listening session'), findsOneWidget);
     expect(find.textContaining('MONACO'), findsOneWidget); // seeded title shown
-    // Flag OFF → the CTA is disabled ("Coming soon"); nothing is created.
-    expect(find.text('Coming soon'), AppConfig.partyEnabled ? findsNothing : findsOneWidget);
+    // Runtime flag OFF → the CTA is disabled ("Coming soon"); nothing created.
+    expect(find.text('Coming soon'),
+        AppConfig.partyRuntimeEnabled ? findsNothing : findsOneWidget);
+    // An explicit dismiss is always offered.
+    expect(find.text('Cancel'), findsOneWidget);
   });
 
   testWidgets('prep sheet without a seed shows the generic copy', (tester) async {

@@ -59,7 +59,8 @@ class PlaylistActivity {
 
   /// Build from a row that joined `profiles:actor_id(username, display_name,
   /// avatar_url, avatar_original_url)` — resolves the actor's display name +
-  /// avatar in one place.
+  /// avatar in one place. Retained for backward-compat; new reads use
+  /// [fromRpcRow].
   factory PlaylistActivity.fromJoinedRow(Map<String, dynamic> m) {
     final prof = m['profiles'];
     String? name;
@@ -67,6 +68,22 @@ class PlaylistActivity {
     if (prof is Map) {
       name = (prof['username'] ?? prof['display_name'])?.toString();
       avatar = (prof['avatar_url'] ?? prof['avatar_original_url'])?.toString();
+    }
+    return PlaylistActivity.fromMap(m, actorUsername: name, actorAvatarUrl: avatar);
+  }
+
+  /// Build from a `playlist_get_activity` RPC row, whose actor fields are FLAT
+  /// (`actor_username`, `actor_display_name`, `actor_avatar_url`,
+  /// `actor_avatar_original_url`). Falls back to a nested `profiles` map so a
+  /// legacy/embedded row still parses. Never surfaces a raw UUID.
+  factory PlaylistActivity.fromRpcRow(Map<String, dynamic> m) {
+    String? name = (m['actor_username'] ?? m['actor_display_name'])?.toString();
+    String? avatar =
+        (m['actor_avatar_url'] ?? m['actor_avatar_original_url'])?.toString();
+    if ((name == null || name.trim().isEmpty) && m['profiles'] is Map) {
+      final prof = m['profiles'] as Map;
+      name = (prof['username'] ?? prof['display_name'])?.toString();
+      avatar ??= (prof['avatar_url'] ?? prof['avatar_original_url'])?.toString();
     }
     return PlaylistActivity.fromMap(m, actorUsername: name, actorAvatarUrl: avatar);
   }
