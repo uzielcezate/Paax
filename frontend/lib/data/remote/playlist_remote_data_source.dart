@@ -134,6 +134,43 @@ class PlaylistRemoteDataSource {
       _guard(() async => _client.rpc('playlist_invite_collaborator',
           params: {'p_playlist_id': playlistId, 'p_user_id': userId, 'p_role': role}));
 
+  /// Invite by (normalized) username — resolution happens SERVER-SIDE inside a
+  /// SECURITY DEFINER RPC (the client can't SELECT other users' `profiles` rows
+  /// under own-row-only RLS; that was the "No user" bug). Pass the value already
+  /// normalized via AuthValidators.normalizeUsername.
+  Future<void> inviteByUsername(String playlistId, String username,
+          {String role = 'editor'}) =>
+      _guard(() async => _client.rpc('playlist_invite_collaborator_by_username',
+          params: {'p_playlist_id': playlistId, 'p_username': username, 'p_role': role}));
+
+  /// Bounded, privacy-safe people search for the collaborator picker. Returns
+  /// only invitation-safe public fields (user_id, username, display_name,
+  /// avatar_url); server enforces owner-only, min length, exclusions, limit.
+  Future<List<Map<String, dynamic>>> searchInvitableProfiles(
+          String playlistId, String query, {int limit = 10}) =>
+      _guard(() async {
+        final rows = await _client.rpc('search_invitable_profiles', params: {
+          'p_playlist_id': playlistId,
+          'p_query': query,
+          'p_limit': limit,
+        });
+        return (rows as List).cast<Map<String, dynamic>>();
+      });
+
+  /// Batch id→public profile (username/display_name/avatar) via the
+  /// `public_profiles` view (readable for non-private users), used to render
+  /// collaborator/owner rows without relying on the RLS-restricted base table.
+  Future<List<Map<String, dynamic>>> fetchPublicProfiles(Iterable<String> ids) =>
+      _guard(() async {
+        final list = ids.where((i) => i.trim().isNotEmpty).toSet().toList();
+        if (list.isEmpty) return <Map<String, dynamic>>[];
+        final rows = await _client
+            .from('public_profiles')
+            .select('id, username, display_name, avatar_url')
+            .inFilter('id', list);
+        return (rows as List).cast<Map<String, dynamic>>();
+      });
+
   Future<void> respondInvitation(String playlistId, bool accept) =>
       _guard(() async => _client.rpc('playlist_respond_invitation',
           params: {'p_playlist_id': playlistId, 'p_accept': accept}));
