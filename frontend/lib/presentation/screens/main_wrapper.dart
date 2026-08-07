@@ -12,6 +12,7 @@ import 'library_screen.dart';
 import 'profile_screen.dart';
 import 'player_screen.dart';
 import '../../core/utils/safe_insets.dart';
+import '../widgets/offline_banner.dart';
 
 class MainWrapper extends StatefulWidget {
   const MainWrapper({super.key});
@@ -248,6 +249,17 @@ class MainWrapperState extends State<MainWrapper>
                   },
                 );
               }).toList(),
+            ),
+
+            // ── Offline indicator (Phase 3.4.2) ──
+            // Overlaid rather than inserted into the layout, so it cannot shift
+            // any existing spacing, header measurement, or collage geometry.
+            // Renders nothing when online.
+            Positioned(
+              left: 0,
+              right: 0,
+              top: MediaQuery.of(context).padding.top,
+              child: const IgnorePointer(child: OfflineBanner()),
             ),
 
             // ── Bottom Chrome: fade + mini player + nav icons ──

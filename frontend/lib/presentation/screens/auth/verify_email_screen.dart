@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/auth/auth_errors.dart';
+import '../../../core/startup/startup_state.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../state/auth_controller.dart';
 import '../../widgets/auth/auth_widgets.dart';
@@ -67,7 +68,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
     if (mounted) {
       setState(() {
         _busy = false;
-        if (context.read<AuthController>().state == AppAuthState.unverified) {
+        if (context.read<AuthController>().phase == StartupPhase.unverified) {
           _message = 'Still not verified yet. Open the link in your email.';
         }
       });

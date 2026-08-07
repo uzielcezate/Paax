@@ -28,22 +28,42 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:audio_service/audio_service.dart';
 import 'core/playback/paax_audio_handler.dart';
 
+/// Set when local storage could not be initialized. The startup state machine
+/// turns this into [StartupPhase.fatalStartupError] (a recoverable screen with
+/// retry + sign-out) instead of a crash on launch.
+bool localStorageFailed = false;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await HiveStorage.init();
+
+  // Phase 3.4.2 — local storage is the ONLY hard startup dependency, and even it
+  // degrades to a recoverable screen rather than a crash.
+  try {
+    await HiveStorage.init();
+  } catch (e) {
+    localStorageFailed = true;
+    // ignore: avoid_print
+    if (!kIsWeb) print('[Paax] Local storage init failed: $e');
+  }
 
   // Initialize Supabase (public anon key only; RLS-protected). Auth deep links
-  // (paax://auth/...) are handled by the SDK. Fail gracefully if misconfigured.
+  // (paax://auth/...) are handled by the SDK.
+  //
+  // Phase 3.4.2: bounded. This call restores the persisted session from local
+  // storage and does not require the network, but it must not be able to hold
+  // the shell hostage if a platform channel or storage read stalls. On timeout
+  // we continue unauthenticated-but-running rather than blocking on splash —
+  // the session is re-resolved once the SDK settles.
   try {
     await Supabase.initialize(
       url: SupabaseConfig.url,
       anonKey: SupabaseConfig.anonKey,
       authOptions:
           const FlutterAuthClientOptions(authFlowType: AuthFlowType.pkce),
-    );
+    ).timeout(const Duration(seconds: 8));
   } catch (e) {
     // ignore: avoid_print
-    if (!kIsWeb) print('[Paax] Supabase init failed: $e');
+    if (!kIsWeb) print('[Paax] Supabase init failed/timed out: $e');
   }
 
   // ── Edge-to-edge rendering ──
@@ -57,17 +77,28 @@ void main() async {
     systemNavigationBarIconBrightness: Brightness.light,
   ));
 
-  // Initialize Foreground Service for background audio (mobile only)
+  // Initialize Foreground Service for background audio (mobile only).
+  //
+  // Phase 3.4.2: this is a LOCAL platform-channel call (no network), so it is
+  // not one of the remote startup dependencies the offline-first rule targets.
+  // It is nonetheless bounded and non-fatal: if the channel stalls or throws we
+  // still open the app, with `globalAudioHandler` null — playback degrades to
+  // no OS media notification rather than the whole app failing to launch.
   if (!kIsWeb) {
-    globalAudioHandler = await AudioService.init(
-      builder: () => PaaxAudioHandler(),
-      config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.paax.music.audio',
-        androidNotificationChannelName: 'Paax Music',
-        androidNotificationOngoing: false,
-        androidStopForegroundOnPause: false,
-      ),
-    );
+    try {
+      globalAudioHandler = await AudioService.init(
+        builder: () => PaaxAudioHandler(),
+        config: const AudioServiceConfig(
+          androidNotificationChannelId: 'com.paax.music.audio',
+          androidNotificationChannelName: 'Paax Music',
+          androidNotificationOngoing: false,
+          androidStopForegroundOnPause: false,
+        ),
+      ).timeout(const Duration(seconds: 10));
+    } catch (e) {
+      // ignore: avoid_print
+      print('[Paax] AudioService init failed/timed out: $e');
+    }
   }
 
   // Print active API environment (debug only — no-op in release builds)
@@ -107,7 +138,9 @@ class PaaxApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AuthController()),
+        ChangeNotifierProvider(
+          create: (_) => AuthController(localStorageFailed: localStorageFailed),
+        ),
         // Phase 3.2A: LibraryController gets a cloud-sync repository and is
         // driven by the auth session — on sign-in/restore it flushes pending
         // ops, hydrates cloud data, and runs the one-time Hive→cloud migration;

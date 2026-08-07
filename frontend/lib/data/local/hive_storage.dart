@@ -20,6 +20,8 @@ class HiveStorage {
   static const String streamCandidatesBox  = 'stream_candidates';
   /// Phase 3.4.1 — pending cloud-playlist operations journal (offline replay).
   static const String playlistOpsBox        = 'playlist_ops';
+  /// Phase 3.4.2 — account-scoped profile bootstrap cache (offline-first start).
+  static const String profileBootstrapBox   = 'profile_bootstrap';
 
   static Future<void> init() async {
     await Hive.initFlutter();
@@ -49,6 +51,9 @@ class HiveStorage {
     await Hive.openBox(streamCandidatesBox);
     // Phase 3.4.1 — pending cloud-playlist ops journal (offline replay).
     await Hive.openBox(playlistOpsBox);
+    // Phase 3.4.2 — account-scoped profile bootstrap cache. Opened here so the
+    // startup state machine can read it synchronously with zero network I/O.
+    await Hive.openBox(profileBootstrapBox);
 
     // Run one-time migration to fix duplicates from old .add() calls
     await _deduplicateLikedTracks();
