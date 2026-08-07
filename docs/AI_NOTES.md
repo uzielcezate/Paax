@@ -260,3 +260,35 @@ Per [`ai/memory.md`](ai/memory.md), these are settled and should only change via
 ---
 
 *Last updated: 2026-07-17*
+
+## Phase 3.4.2 — startup gotchas (2026-08-07)
+
+**Never route on a nullable remote value.** `ProfileRepository.fetchOwn` returns
+`Profile?`, where null means "server reached, no row". It is retained for
+non-routing callers. **Startup routing MUST use `fetchOwnResult`**, which returns
+`RemoteResult<Profile?>` and distinguishes an authoritative absence from an
+unreachable server. Using `fetchOwn` in a routing path reintroduces the exact
+production defect (503/504 → "Complete profile").
+
+**`initialSession` is deliberately dropped** in `AuthController._onAuthEvent`
+once `bootstrap()` has run. It is not dead code — removing the guard restores the
+duplicate-request behaviour (paired requests 3 ms apart in the production logs).
+
+**`tokenRefreshed` deliberately does NOT refetch the profile.** It previously did,
+producing a profile read every ~50 minutes per device, forever.
+
+**Privileged profile fields are NOT cached** (`app_role`, `subscription_*`).
+`ProfileBootstrapRecord.toProfile()` reconstructs them at safe defaults, so a
+premium user shows as free while offline. This is intentional — a stale or
+tampered local cache must not be able to grant a role or paid tier.
+
+**The 100% CPU was never the app.** If Supabase CPU spikes again, check
+`pg_stat_statements` for the PostgREST preamble (`set_config('request.method'…)`)
+call count versus actual data-query counts. A huge ratio (662 M vs ≤193) means
+PostgREST is looping, not that the app is chatty — the fix is a project restart,
+not a code change. `realtime.subscription` was 0 throughout; pg_cron/pg_net have
+no queue tables in this project.
+
+**No `Timer.periodic` exists in the startup path.** The repeated
+`playlist_get_activity` calls in the API logs were user-driven sheet opens.
+
