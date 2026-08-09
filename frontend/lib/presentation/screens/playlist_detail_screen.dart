@@ -1,4 +1,5 @@
 
+import '../../domain/entities/playlist_mutation_result.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:provider/provider.dart';
@@ -194,33 +195,66 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     );
   }
 
+  /// Membership + order captured when Edit Order OPENED. Diffed against the
+  /// staged list on Save so Activity records what actually changed. Nothing is
+  /// emitted before Save, and Cancel discards this with the staged copy.
+  List<Track>? _editOrderSnapshot;
+
   void _enterEditMode(List<Track> current) {
     setState(() {
       _isEditMode = true;
       _editOrder = List<Track>.from(current); // staged copy
+      _editOrderSnapshot = List<Track>.from(current); // immutable baseline
     });
   }
 
-  /// Cancel / back — discard the staged order, keeping the committed one.
+  /// Cancel / back — discard the staged order AND the snapshot, keeping the
+  /// committed order. Emits no activity: nothing was ever committed.
   void _exitEditMode() {
     setState(() {
       _isEditMode = false;
       _editOrder = null;
+      _editOrderSnapshot = null;
     });
   }
 
   /// Save — commit the staged order (normalizes explicit positions + persists).
   Future<void> _saveOrder(LibraryController library, Playlist playlist) async {
     final staged = _editOrder;
+    final snapshot = _editOrderSnapshot;
+    PlaylistMutationResult? result;
     if (staged != null) {
-      await library.commitPlaylistOrder(playlist, staged,
-          expectedVersion: (_cloud?.isCloud == true) ? _cloud?.version : null);
+      // Pass the open-time snapshot so removals/additions are committed through
+      // their own RPCs and recorded as tracks_removed / tracks_added, with
+      // tracks_reordered only when relative order actually changed.
+      result = await library.commitPlaylistOrder(
+        playlist,
+        staged,
+        expectedVersion: (_cloud?.isCloud == true) ? _cloud?.version : null,
+        originalOrder: snapshot,
+      );
     }
-    if (mounted) {
-      setState(() {
-        _isEditMode = false;
-        _editOrder = null;
-      });
+    if (!mounted) return;
+    setState(() {
+      _isEditMode = false;
+      _editOrder = null;
+      _editOrderSnapshot = null;
+    });
+    if (result != null && result != PlaylistMutationResult.applied) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(switch (result) {
+          PlaylistMutationResult.queuedOffline =>
+            'Saved — will sync when you\'re back online',
+          PlaylistMutationResult.conflict =>
+            'This playlist changed on another device. Reopen it to see the latest.',
+          PlaylistMutationResult.forbidden =>
+            'You no longer have permission to edit this playlist',
+          _ => 'Couldn\'t save the new order',
+        }),
+        duration: const Duration(seconds: 3),
+      ));
+      // ignore: discarded_futures
+      if (result == PlaylistMutationResult.conflict) _cloud?.load();
     }
   }
 
@@ -782,14 +816,38 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                         foregroundColor: Colors.white,
                         allowSwipeActions: true,
                         isPlaylistContext: true,
+                        // Phase 3.4.4 — enables "Remove from this playlist" in the
+                        // SHARED track overflow menu, gated on edit permission so
+                        // a follower/read-only viewer never sees it.
+                        playlistContext: currentPlaylist,
+                        canEditPlaylistContext:
+                            _cloud == null || _cloud!.isCloud != true
+                                ? true
+                                : _cloud!.permissions.isEditorMember,
                         onRemoveFromPlaylist: () {
-                          library.removeFromPlaylist(currentPlaylist!, track);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Removed "${track.title}" from playlist'),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
+                          // Same canonical mutation path as the menu action, so
+                          // swipe and menu can never diverge.
+                          // ignore: discarded_futures
+                          library
+                              .removeFromPlaylist(currentPlaylist!, track)
+                              .then((result) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(switch (result) {
+                                PlaylistMutationResult.applied =>
+                                  'Removed "${track.title}" from playlist',
+                                PlaylistMutationResult.queuedOffline =>
+                                  'Removed — will sync when you\'re back online',
+                                PlaylistMutationResult.conflict =>
+                                  'This playlist changed on another device. Reopen it to see the latest.',
+                                PlaylistMutationResult.forbidden =>
+                                  'You no longer have permission to edit this playlist',
+                                PlaylistMutationResult.failed =>
+                                  'Couldn\'t remove that song',
+                              }),
+                              duration: const Duration(seconds: 3),
+                            ));
+                          });
                         },
                         onTap: () {
                           context.read<PlaybackController>().playQueue(displayTracks, index: index);

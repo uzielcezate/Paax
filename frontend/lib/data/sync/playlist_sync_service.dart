@@ -23,6 +23,7 @@
 
 import '../local/playlist_ops_journal.dart';
 import 'playlist_op.dart';
+import 'playlist_op_failure.dart';
 
 /// Outcome of executing one queued op.
 ///
@@ -47,7 +48,16 @@ enum OpOutcome {
 }
 
 /// Why an op was quarantined, for UI and diagnostics.
-enum QuarantineReason { conflict, forbidden, blockedByConflict, retriesExhausted }
+enum QuarantineReason {
+  conflict,
+  forbidden,
+  blockedByConflict,
+  retriesExhausted,
+
+  /// An unrecognised failure hit its conservative attempt cap. Phase 3.4.4:
+  /// we refuse to keep repeating a request whose failure we cannot explain.
+  unclassified,
+}
 
 class QuarantinedOp {
   final PlaylistOp op;
@@ -176,12 +186,50 @@ class PlaylistSyncService {
 
       OpOutcome outcome;
       int? actualVersion;
+      PlaylistFailureKind? failureKind;
       try {
         outcome = await execute(op);
       } on _ConflictSignal catch (s) {
         outcome = OpOutcome.conflict;
         actualVersion = s.actualVersion;
-      } catch (_) {
+        failureKind = PlaylistFailureKind.versionConflict;
+      } on PlaylistOpFailure catch (f) {
+        // Phase 3.4.4 — explicit taxonomy. No failure reaches a retry path
+        // unless its kind was reviewed and assigned that policy.
+        failureKind = f.kind;
+        actualVersion = f.actualVersion;
+        switch (f.policy) {
+          case FailurePolicy.retryBounded:
+            outcome = OpOutcome.retry;
+          case FailurePolicy.terminal:
+            outcome = f.kind == PlaylistFailureKind.versionConflict
+                ? OpOutcome.conflict
+                : OpOutcome.forbidden;
+          case FailurePolicy.discard:
+            outcome = OpOutcome.drop;
+          case FailurePolicy.retryOnceThenQuarantine:
+            // Tolerate a single blip, then stop. Uses the persisted retryCount
+            // so the cap survives process restarts — an unknown failure can
+            // never be retried indefinitely across sessions.
+            if (op.retryCount + 1 >= PlaylistOpFailure.unknownAttemptCap) {
+              outcome = OpOutcome.drop;
+              quarantine.add(
+                  QuarantinedOp(op, QuarantineReason.unclassified));
+              dropped.add(op);
+              continue; // already recorded — skip the switch below
+            }
+            outcome = OpOutcome.retry;
+        }
+      } catch (e) {
+        // Anything that reached here was NOT classified upstream. Treat it as
+        // `unknown`, which is deliberately NOT "transient". This is the default
+        // that used to silently mean "safe to repeat".
+        failureKind = PlaylistFailureKind.unknown;
+        if (op.retryCount + 1 >= PlaylistOpFailure.unknownAttemptCap) {
+          dropped.add(op);
+          quarantine.add(QuarantinedOp(op, QuarantineReason.unclassified));
+          continue;
+        }
         outcome = OpOutcome.retry;
       }
 
@@ -202,6 +250,13 @@ class PlaylistSyncService {
         case OpOutcome.forbidden:
           forbidden.add(op);
           quarantine.add(QuarantinedOp(op, QuarantineReason.forbidden));
+          poisonedPlaylists.add(op.playlistId);
+          break;
+
+        case OpOutcome.drop when failureKind?.poisonsPlaylist == true:
+          // e.g. NOT_FOUND: the playlist is gone, so every later op for it is
+          // meaningless. Drop them together instead of failing one per pass.
+          dropped.add(op);
           poisonedPlaylists.add(op.playlistId);
           break;
 

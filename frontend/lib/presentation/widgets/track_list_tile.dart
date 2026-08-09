@@ -1,3 +1,4 @@
+import '../../domain/entities/playlist.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../domain/entities/track.dart';
@@ -26,6 +27,15 @@ class TrackListTile extends StatelessWidget {
   final bool allowSwipeActions;
   /// When true, swipe-left = Remove from Playlist (red). Overrides add-to-playlist.
   final bool isPlaylistContext;
+
+  /// Phase 3.4.4 — when set, the shared track overflow menu additionally offers
+  /// "Remove from this playlist". Threaded through rather than duplicated so
+  /// there remains exactly ONE track-action implementation.
+  final Playlist? playlistContext;
+
+  /// Whether the current user may edit [playlistContext]. False for followed /
+  /// read-only playlists.
+  final bool canEditPlaylistContext;
   /// Called when swipe-left remove-from-playlist fires.
   final VoidCallback? onRemoveFromPlaylist;
 
@@ -40,6 +50,8 @@ class TrackListTile extends StatelessWidget {
     this.foregroundColor = Colors.white,
     this.allowSwipeActions = false,
     this.isPlaylistContext = false,
+    this.playlistContext,
+    this.canEditPlaylistContext = false,
     this.onRemoveFromPlaylist,
   });
 
@@ -125,7 +137,12 @@ class TrackListTile extends StatelessWidget {
                           onPressed: () => lib.toggleLike(track),
                         ),
                       ),
-                       OverflowMenu(type: MenuType.track, track: track, iconColor: foregroundColor.withOpacity(0.5)),
+                       OverflowMenu(
+                         type: MenuType.track,
+                         track: track,
+                         playlistContext: playlistContext,
+                         canEditPlaylistContext: canEditPlaylistContext,
+                         iconColor: foregroundColor.withOpacity(0.5)),
                     ],
                   ),
                 ),
