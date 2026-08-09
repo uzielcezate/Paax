@@ -166,6 +166,41 @@ class PlaylistRepository {
 
   Future<void> deletePlaylist(String playlistId) => _remote.deletePlaylist(playlistId);
 
+  /// True when [playlistId] exists ONLY locally: it was created offline and its
+  /// `create` op is still queued, so no cloud row exists yet.
+  ///
+  /// A client-generated UUID is indistinguishable from a cloud UUID by shape, so
+  /// "looks like a UUID" is NOT sufficient to decide whether the cloud knows
+  /// about a playlist. Without this check, deleting an offline-created playlist
+  /// calls `playlist_delete` for a non-existent row, gets NOT_FOUND, throws, and
+  /// the user is left with an undeletable ghost.
+  bool isLocalOnly(String playlistId) {
+    final uid = currentUserId;
+    if (uid == null) return false;
+    return _sync
+        .pending(uid)
+        .any((o) => o.playlistId == playlistId && o.type == PlaylistOpType.create);
+  }
+
+  /// Cancels a never-synced playlist: drops its queued `create` and every
+  /// dependent op, so nothing is ever created remotely.
+  ///
+  /// Implemented by enqueueing a `delete` and letting
+  /// [PlaylistOpsJournal.compact] collapse the create+delete pair to nothing —
+  /// one code path for "born and died offline", exhaustively unit-tested, rather
+  /// than a second hand-rolled removal routine that could drift.
+  Future<void> cancelLocalOnly(String playlistId) async {
+    final uid = currentUserId;
+    if (uid == null) return;
+    await _sync.enqueue(PlaylistOp(
+      opId: _newOpId(),
+      userId: uid,
+      playlistId: playlistId,
+      type: PlaylistOpType.delete,
+      createdAt: DateTime.now(),
+    ));
+  }
+
   Future<int> setFollow(String playlistId, bool follow) =>
       _remote.setFollow(playlistId, follow);
 
@@ -359,8 +394,11 @@ class PlaylistRepository {
           break;
       }
       return OpOutcome.success;
-    } on PlaylistConflictException {
-      return OpOutcome.conflict;
+    } on PlaylistConflictException catch (e) {
+      // TERMINAL. Reported with the authoritative version so the sync engine can
+      // quarantine it with enough context to rebase. Deliberately NOT mapped to
+      // `retry` under any circumstance — see playlist_sync_service.dart.
+      signalConflict(e.actualVersion);
     } on PlaylistForbiddenException {
       return OpOutcome.forbidden;
     } on PlaylistRemoteException catch (e) {

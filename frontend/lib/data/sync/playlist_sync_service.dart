@@ -1,31 +1,82 @@
 // lib/data/sync/playlist_sync_service.dart
 //
-// Phase 3.4.1 — offline-first replay engine for queued playlist mutations.
-// Pure orchestration (the actual remote call is injected as `execute`), so it is
-// fully unit-testable. Replays a user's pending ops IN ORDER; a network failure
-// stops replay to preserve ordering; a version conflict or lost permission drops
-// the stale op (the authoritative cloud state wins) and is surfaced so the caller
-// can reconcile/roll back the optimistic local mirror.
+// Offline-first replay engine for queued playlist mutations (Phase 3.4.1 →
+// 3.4.3 incident hardening).
+//
+// WHY THIS FILE IS DEFENSIVE
+// -------------------------
+// On 2026-08-08 a stale playlist reorder produced ~2,565 executions/sec against
+// production for hours. The multiplication was server-side (SQLSTATE 40001 made
+// PostgREST retry a deterministic conflict forever), and this replay engine was
+// NOT the cause. But it is the component best placed to make a recurrence
+// impossible from the client, so it now enforces four hard invariants:
+//
+//   1. SINGLE FLIGHT — at most one replay pass runs per process, ever.
+//      Concurrent callers join the in-flight pass instead of starting another.
+//   2. CONFLICTS ARE TERMINAL — a version conflict is quarantined, never
+//      retried, and never re-enqueued. It is an authoritative answer.
+//   3. PER-PLAYLIST PAUSE — after a conflict, remaining ops for that SAME
+//      playlist are quarantined too: they were computed against a base state
+//      the server has already moved past, so replaying them would corrupt.
+//   4. HARD RETRY CAP — transient network retries are bounded and the count is
+//      persisted, so a queue can never cycle indefinitely.
 
 import '../local/playlist_ops_journal.dart';
 import 'playlist_op.dart';
 
-/// `drop` = a PERMANENT non-conflict failure (NOT_FOUND / validation) that can
-/// never succeed on retry — removed without blocking the queue (vs `retry`,
-/// which is a transient network stall that stops replay to preserve order).
-enum OpOutcome { success, conflict, forbidden, retry, drop }
+/// Outcome of executing one queued op.
+///
+/// `conflict` and `forbidden` are TERMINAL — the server gave an authoritative
+/// answer. `retry` is the only outcome that may be re-attempted, and only
+/// within [PlaylistSyncService.maxRetries].
+enum OpOutcome {
+  success,
+
+  /// Version conflict. Authoritative and deterministic — MUST NOT be retried.
+  conflict,
+
+  /// Permission lost/never held. Authoritative — MUST NOT be retried.
+  forbidden,
+
+  /// Transient (network/timeout). Bounded retry allowed.
+  retry,
+
+  /// Permanent non-conflict failure (NOT_FOUND / validation) that can never
+  /// succeed. Dropped without blocking the queue.
+  drop,
+}
+
+/// Why an op was quarantined, for UI and diagnostics.
+enum QuarantineReason { conflict, forbidden, blockedByConflict, retriesExhausted }
+
+class QuarantinedOp {
+  final PlaylistOp op;
+  final QuarantineReason reason;
+
+  /// Authoritative server version when known (conflict only) — lets the UI
+  /// offer a deterministic rebase without another round trip.
+  final int? actualVersion;
+
+  const QuarantinedOp(this.op, this.reason, {this.actualVersion});
+}
 
 class PlaylistFlushResult {
   final List<PlaylistOp> conflicts;
   final List<PlaylistOp> forbidden;
-  final List<PlaylistOp> dropped; // permanent failures / gave-up poison pills
+  final List<PlaylistOp> dropped;
+  final List<QuarantinedOp> quarantined;
   final int remaining;
+
+  /// True when this call joined an already-running pass instead of replaying.
+  final bool skippedInFlight;
 
   const PlaylistFlushResult({
     this.conflicts = const [],
     this.forbidden = const [],
     this.dropped = const [],
+    this.quarantined = const [],
     this.remaining = 0,
+    this.skippedInFlight = false,
   });
 
   bool get hadConflicts => conflicts.isNotEmpty;
@@ -35,80 +86,182 @@ class PlaylistFlushResult {
 class PlaylistSyncService {
   final PlaylistOpsJournal _journal;
 
-  /// After this many failed network retries, a stuck op is dropped so it can
-  /// never permanently block later ops for the same user.
+  /// After this many transient failures an op is quarantined so it can never
+  /// block later ops — or cycle forever.
   static const int maxRetries = 8;
+
+  /// Single-flight guard. Static because there is one journal per device and
+  /// one logical replay worker per process; making it an instance field would
+  /// let two accidentally-constructed services replay the same queue
+  /// concurrently (exactly the duplicate-worker failure mode this prevents).
+  static Future<PlaylistFlushResult>? _inFlight;
+
+  /// Diagnostics: how many replay passes have actually executed.
+  static int passCount = 0;
 
   PlaylistSyncService(this._journal);
 
   bool hasPending(String userId) => _journal.hasPending(userId);
   List<PlaylistOp> pending(String userId) => _journal.pending(userId);
+  List<QuarantinedOp> quarantined(String userId) => _journal.quarantined(userId);
 
   Future<void> enqueue(PlaylistOp op) => _journal.enqueue(op);
 
-  /// Replay [userId]'s pending ops in order. [execute] performs one op and
-  /// returns its outcome (or throws → treated as a retryable network error).
+  /// True when a replay pass is currently running.
+  static bool get isFlushing => _inFlight != null;
+
+  /// Replay [userId]'s pending ops in order.
+  ///
+  /// SINGLE FLIGHT: if a pass is already running, this returns that pass's
+  /// result rather than starting a second one. Reconnect events, controller
+  /// rebuilds, resume callbacks and account restores can therefore all call
+  /// this freely — the work happens once.
   Future<PlaylistFlushResult> flush(
     String userId,
     Future<OpOutcome> Function(PlaylistOp op) execute,
+  ) {
+    final existing = _inFlight;
+    if (existing != null) {
+      return existing.then((r) => PlaylistFlushResult(
+            conflicts: r.conflicts,
+            forbidden: r.forbidden,
+            dropped: r.dropped,
+            quarantined: r.quarantined,
+            remaining: r.remaining,
+            skippedInFlight: true,
+          ));
+    }
+    final future = _flushOnce(userId, execute);
+    _inFlight = future;
+    // ignore: discarded_futures
+    future.whenComplete(() {
+      if (identical(_inFlight, future)) _inFlight = null;
+    });
+    return future;
+  }
+
+  Future<PlaylistFlushResult> _flushOnce(
+    String userId,
+    Future<OpOutcome> Function(PlaylistOp op) execute,
   ) async {
+    passCount++;
     final ops = _journal.pending(userId);
     final remaining = <PlaylistOp>[];
     final conflicts = <PlaylistOp>[];
     final forbidden = <PlaylistOp>[];
     final dropped = <PlaylistOp>[];
+    final quarantine = <QuarantinedOp>[];
+
+    /// Playlists whose server state has moved past our queued base state. Every
+    /// later op for such a playlist was computed against a stale base, so
+    /// replaying it would push wrong data. They are quarantined for the user to
+    /// resolve, never silently applied and never retried.
+    final poisonedPlaylists = <String>{};
     var stopped = false;
 
     for (final op in ops) {
       if (stopped) {
-        remaining.add(op); // preserve strict FIFO order after a network stall
+        remaining.add(op); // preserve strict FIFO after a network stall
         continue;
       }
-      // Give up on a poison pill so it can't block the queue forever.
+      if (poisonedPlaylists.contains(op.playlistId)) {
+        quarantine.add(QuarantinedOp(op, QuarantineReason.blockedByConflict));
+        continue;
+      }
       if (op.retryCount >= maxRetries) {
         dropped.add(op);
+        quarantine.add(QuarantinedOp(op, QuarantineReason.retriesExhausted));
         continue;
       }
+
       OpOutcome outcome;
+      int? actualVersion;
       try {
         outcome = await execute(op);
+      } on _ConflictSignal catch (s) {
+        outcome = OpOutcome.conflict;
+        actualVersion = s.actualVersion;
       } catch (_) {
         outcome = OpOutcome.retry;
       }
+
       switch (outcome) {
         case OpOutcome.success:
-          break; // drop (applied on the cloud)
+          break; // applied on the cloud — drop from the queue
+
         case OpOutcome.conflict:
-          conflicts.add(op); // drop — authoritative state supersedes it
+          // TERMINAL. Not re-enqueued, not retried, not counted toward
+          // retryCount. The server has spoken; the local intent is preserved in
+          // quarantine for the user to keep or discard.
+          conflicts.add(op);
+          quarantine.add(QuarantinedOp(op, QuarantineReason.conflict,
+              actualVersion: actualVersion));
+          poisonedPlaylists.add(op.playlistId); // pause this playlist
           break;
+
         case OpOutcome.forbidden:
-          forbidden.add(op); // drop — permission lost; caller rolls back
+          forbidden.add(op);
+          quarantine.add(QuarantinedOp(op, QuarantineReason.forbidden));
+          poisonedPlaylists.add(op.playlistId);
           break;
+
         case OpOutcome.drop:
-          dropped.add(op); // permanent (NOT_FOUND/validation) — remove, keep going
+          dropped.add(op); // permanent, non-conflict — remove and keep going
           break;
+
         case OpOutcome.retry:
           op.retryCount += 1;
-          remaining.add(op);
+          if (op.retryCount >= maxRetries) {
+            dropped.add(op);
+            quarantine.add(QuarantinedOp(op, QuarantineReason.retriesExhausted));
+          } else {
+            remaining.add(op);
+          }
           stopped = true; // stop so later ops for this playlist keep order
           break;
       }
     }
 
     await _journal.replaceAll(userId, remaining);
+    if (quarantine.isNotEmpty) {
+      await _journal.quarantineAll(userId, quarantine);
+    }
     return PlaylistFlushResult(
       conflicts: conflicts,
       forbidden: forbidden,
       dropped: dropped,
+      quarantined: quarantine,
       remaining: remaining.length,
     );
   }
 
-  /// On account switch / sign-out, drop the previous user's queue reference
-  /// (their ops remain namespaced under their own id and never replay for
-  /// another account).
+  /// Discards a quarantined op (user chose "discard my change").
+  Future<void> discardQuarantined(String userId, String opId) =>
+      _journal.removeQuarantined(userId, opId);
+
+  Future<void> clearQuarantine(String userId) => _journal.clearQuarantine(userId);
+
+  /// On account switch / sign-out. The journal is keyed by userId so ops can
+  /// never replay under another account; this also drops the single-flight
+  /// guard so the next account can replay its own queue immediately.
   Future<void> onUserSession(String? userId) async {
-    // No global state to reset — the journal is keyed by userId. Provided for
-    // symmetry with the other services and future use.
+    _inFlight = null;
+  }
+
+  /// Test hook — resets process-wide single-flight state.
+  static void resetForTest() {
+    _inFlight = null;
+    passCount = 0;
   }
 }
+
+/// Internal carrier so `execute` can report the authoritative version alongside
+/// a conflict without widening the public callback signature.
+class _ConflictSignal implements Exception {
+  final int? actualVersion;
+  const _ConflictSignal(this.actualVersion);
+}
+
+/// Thrown by an `execute` implementation to report a conflict WITH the
+/// authoritative server version attached.
+Never signalConflict(int? actualVersion) => throw _ConflictSignal(actualVersion);

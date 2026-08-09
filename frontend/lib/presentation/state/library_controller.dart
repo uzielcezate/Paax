@@ -326,7 +326,14 @@ class LibraryController extends ChangeNotifier {
   /// shows an error). Legacy local (non-UUID) playlists delete locally only.
   Future<void> deletePlaylist(Playlist playlist) async {
     final id = playlist.id;
-    if (_cloudEnabled && isUuid(id)) {
+    // A playlist created OFFLINE already has a client UUID, so `isUuid` alone
+    // cannot tell us whether the cloud knows about it. Calling the delete RPC
+    // for a row that was never created returns NOT_FOUND and throws, leaving an
+    // undeletable ghost. Cancel the queued create instead — nothing was ever
+    // created remotely, so nothing needs deleting remotely.
+    if (_cloudEnabled && _cloud!.isLocalOnly(id)) {
+      await _cloud!.cancelLocalOnly(id);
+    } else if (_cloudEnabled && isUuid(id)) {
       await _cloud!.deletePlaylist(id); // authoritative first; throws on failure
     }
     await HiveStorage.deletePlaylist(id);

@@ -292,3 +292,33 @@ no queue tables in this project.
 **No `Timer.periodic` exists in the startup path.** The repeated
 `playlist_get_activity` calls in the API logs were user-driven sheet opens.
 
+## Phase 3.4.3 — the 40001 retry storm (2026-08-08/09)
+
+**NEVER raise an application-level conflict with SQLSTATE class 40 (`40001`
+serialization_failure, `40P01` deadlock).** PostgREST maps class 40* to HTTP 500
+and the request is RETRIED. A deterministic business conflict signalled this way
+retries forever: one stale playlist Save produced ~2,565 DB executions/sec for
+hours, 872M transactions, 99.92% rollbacks, ~92% CPU — with ZERO matching API
+Gateway requests, because the multiplication was entirely inside PostgREST.
+
+Measured with a self-limiting probe (sequence counter, which survives rollback),
+one HTTP request each: `40001` -> 21+ executions and still looping; `P0001` -> 1;
+`sqlstate PGRST` (409) -> 1. Use `private.raise_playlist_version_conflict`.
+
+**`pg_stat_statements` does NOT record statements that error.** During this
+incident the RPC showed ~0 calls while executing thousands of times per second.
+Use `pg_stat_database.xact_rollback` and the PostgREST preamble
+(`set_config('request.method'...)`, queryid 5360251647081715348) as the real
+signal. A huge preamble-to-data-query ratio means requests are aborting, not that
+the app is idle. This is what made me wrongly conclude "infrastructure, not code"
+on 2026-08-07.
+
+**A client UUID does not mean the cloud knows the playlist.** Offline-created
+playlists get a client-generated UUID, so `isUuid(id)` cannot decide whether to
+call `playlist_delete`. Use `PlaylistRepository.isLocalOnly` (checks for a queued
+`create` op) or the delete throws NOT_FOUND and the playlist becomes undeletable.
+
+**Conflicts are terminal on the client too.** `PlaylistSyncService` quarantines a
+conflict, pauses that playlist, and never maps it to `retry`. Do not "helpfully"
+add a retry path for `OpOutcome.conflict`.
+
