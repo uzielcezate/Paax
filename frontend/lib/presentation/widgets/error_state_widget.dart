@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/network/offline_status.dart';
+import 'offline_notice.dart';
+
 /// Friendly error state widget for when the server is down or internet is off.
 /// 
 /// Detects the type of error from the raw error string and shows an
@@ -21,8 +24,20 @@ class ErrorStateWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Phase 3.4.5 — a KNOWN connectivity failure is not an error, it is a state
+    // the user can fix. Routing it here (rather than in each screen) means Home,
+    // Artist, Album, Genre and Search all get the exact offline copy from ONE
+    // change, and the wording can never drift between them.
+    if (isKnownOfflineError(rawError)) {
+      return Center(
+        child: OfflineNotice(
+          onRetry: onRetry == null ? null : () async => onRetry!(),
+        ),
+      );
+    }
+
     final errorType = _classifyError(rawError ?? '');
-    
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 32),

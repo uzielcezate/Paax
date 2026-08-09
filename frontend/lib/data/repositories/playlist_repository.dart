@@ -9,7 +9,11 @@
 // Track identity is resolved from local Deezer ids → catalog UUIDs here so the
 // UI keeps working with local Track objects.
 
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/entities/playlist.dart';
 import '../../domain/entities/playlist_activity.dart';
@@ -18,6 +22,7 @@ import '../local/playlist_ops_journal.dart';
 import '../remote/catalog_resolver.dart';
 import '../remote/playlist_remote_data_source.dart';
 import '../sync/playlist_op.dart';
+import '../sync/playlist_op_failure.dart';
 import '../sync/playlist_sync_service.dart';
 
 class PlaylistRepository {
@@ -399,17 +404,95 @@ class PlaylistRepository {
       // quarantine it with enough context to rebase. Deliberately NOT mapped to
       // `retry` under any circumstance — see playlist_sync_service.dart.
       signalConflict(e.actualVersion);
-    } on PlaylistForbiddenException {
-      return OpOutcome.forbidden;
-    } on PlaylistRemoteException catch (e) {
-      // Permanent, non-retryable failures — drop so they can't block the queue.
-      const permanent = ['NOT_FOUND', 'ORDER_SET_MISMATCH', 'EMPTY_RESULT',
-        'INVALID', 'NAME_REQUIRED', 'MISMATCH', 'CANNOT_', 'ALREADY_', 'USER_NOT_FOUND'];
-      final msg = e.message;
-      if (permanent.any(msg.contains)) return OpOutcome.drop;
-      return OpOutcome.retry; // transient (network)
-    } catch (_) {
-      return OpOutcome.retry;
+    } catch (e) {
+      // Phase 3.4.4 — every failure is classified explicitly. There is no
+      // "assume transient" default: an unrecognised error becomes `unknown`,
+      // whose policy is conservative (see playlist_op_failure.dart).
+      throw classifyPlaylistOpError(e);
     }
+  }
+
+  /// Maps a thrown error to an explicit [PlaylistOpFailure].
+  ///
+  /// Exposed (and pure) so the taxonomy can be exhaustively unit-tested without
+  /// a network. Ordering matters: typed exceptions first, then message
+  /// signatures, then `unknown`.
+  static PlaylistOpFailure classifyPlaylistOpError(Object e) {
+    if (e is PlaylistConflictException) {
+      return PlaylistOpFailure(PlaylistFailureKind.versionConflict,
+          actualVersion: e.actualVersion, cause: e);
+    }
+    if (e is PlaylistForbiddenException) {
+      return PlaylistOpFailure(PlaylistFailureKind.authorization, cause: e);
+    }
+    if (e is AuthException) {
+      return PlaylistOpFailure(PlaylistFailureKind.authentication, cause: e);
+    }
+    if (e is SocketException || e is TimeoutException || e is HttpException) {
+      return PlaylistOpFailure(PlaylistFailureKind.transientNetwork, cause: e);
+    }
+
+    if (e is PostgrestException) {
+      final code = e.code ?? '';
+      if (code == PlaylistConflictException.code) {
+        return PlaylistOpFailure(PlaylistFailureKind.versionConflict, cause: e);
+      }
+      if (code == '42501' || code == '401' || code == '403') {
+        return PlaylistOpFailure(PlaylistFailureKind.authorization, cause: e);
+      }
+      // 3-digit gateway statuses: 5xx is transient, other 4xx is validation.
+      if (code.length == 3) {
+        final s = int.tryParse(code);
+        if (s != null) {
+          return PlaylistOpFailure(
+            s >= 500
+                ? PlaylistFailureKind.transientNetwork
+                : PlaylistFailureKind.validation,
+            cause: e,
+          );
+        }
+      }
+      // SQLSTATE classes: 08/53/57 = server-side transient.
+      if (code.length == 5 &&
+          (code.startsWith('08') ||
+              code.startsWith('53') ||
+              code.startsWith('57'))) {
+        return PlaylistOpFailure(PlaylistFailureKind.transientNetwork, cause: e);
+      }
+    }
+
+    final msg = e is PlaylistRemoteException ? e.message : e.toString();
+    if (msg.contains('NOT_FOUND')) {
+      return PlaylistOpFailure(PlaylistFailureKind.notFound, cause: e);
+    }
+    const validationSignatures = [
+      'ORDER_SET_MISMATCH', 'EMPTY_RESULT', 'INVALID', 'NAME_REQUIRED',
+      'MISMATCH', 'CANNOT_', 'ALREADY_', 'USER_NOT_FOUND', 'SELF_INVITE',
+    ];
+    if (validationSignatures.any(msg.contains)) {
+      return PlaylistOpFailure(PlaylistFailureKind.validation, cause: e);
+    }
+    if (msg.contains('FORBIDDEN') || msg.contains('NOT_OWNER')) {
+      return PlaylistOpFailure(PlaylistFailureKind.authorization, cause: e);
+    }
+    if (msg.contains('UNRESOLVED_TRACK') || msg.contains('FormatException')) {
+      return PlaylistOpFailure(PlaylistFailureKind.localIntegrity, cause: e);
+    }
+    final lower = msg.toLowerCase();
+    if (lower.contains('failed host lookup') ||
+        lower.contains('network is unreachable') ||
+        lower.contains('connection closed') ||
+        lower.contains('connection reset') ||
+        lower.contains('connection refused') ||
+        lower.contains('timed out') ||
+        lower.contains('timeout') ||
+        lower.contains('503') ||
+        lower.contains('504') ||
+        lower.contains('service unavailable')) {
+      return PlaylistOpFailure(PlaylistFailureKind.transientNetwork, cause: e);
+    }
+
+    // Explicitly unknown — conservative policy, never "assume transient".
+    return PlaylistOpFailure(PlaylistFailureKind.unknown, cause: e);
   }
 }

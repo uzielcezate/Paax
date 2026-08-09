@@ -1,3 +1,7 @@
+import '../../domain/entities/edit_order_diff.dart';
+import '../../domain/entities/playlist_mutation_result.dart';
+import '../../data/sync/playlist_op_failure.dart';
+import '../../data/remote/playlist_remote_data_source.dart';
 import 'package:flutter/material.dart';
 import '../../core/utils/uuid.dart';
 import '../../data/local/hive_storage.dart';
@@ -273,28 +277,111 @@ class LibraryController extends ChangeNotifier {
     }
   }
 
-  Future<void> removeFromPlaylist(Playlist playlist, Track track) async {
+  /// Removes [track] from [playlist] and reports the CANONICAL outcome.
+  ///
+  /// Phase 3.4.4: returns a [PlaylistMutationResult] instead of silently
+  /// swallowing failures, so the caller can tell "removed", "queued offline"
+  /// and "the server refused" apart. Local state is updated optimistically and
+  /// ROLLED BACK on an authoritative refusal (conflict/forbidden), so the UI can
+  /// never diverge from the server on a rejected mutation.
+  Future<PlaylistMutationResult> removeFromPlaylist(
+      Playlist playlist, Track track) async {
+    final index = playlist.tracks.indexWhere((t) => t.id == track.id);
+    if (index < 0) return PlaylistMutationResult.applied; // already absent
+    final removed = playlist.tracks[index];
+
     // Removal never corrupts the remaining order — positions are re-normalized.
-    playlist.tracks.removeWhere((t) => t.id == track.id);
+    playlist.tracks.removeAt(index);
     await _persistPlaylist(playlist);
-    await _pushCloud(playlist.id, () => _cloud!.removeTracks(playlist.id, [track]));
+
+    if (!_cloudEnabled || !isUuid(playlist.id)) {
+      return PlaylistMutationResult.applied; // local-only playlist
+    }
+    try {
+      await _cloud!.removeTracks(playlist.id, [track]);
+      return PlaylistMutationResult.applied;
+    } on PlaylistConflictException {
+      await _restoreTrack(playlist, removed, index);
+      return PlaylistMutationResult.conflict;
+    } on PlaylistForbiddenException {
+      await _restoreTrack(playlist, removed, index);
+      return PlaylistMutationResult.forbidden;
+    } catch (e) {
+      // Journalled by the repository on a network error — the removal stands
+      // locally and replays later. Anything else is a genuine failure.
+      final kind = PlaylistRepository.classifyPlaylistOpError(e).kind;
+      if (kind == PlaylistFailureKind.transientNetwork) {
+        return PlaylistMutationResult.queuedOffline;
+      }
+      await _restoreTrack(playlist, removed, index);
+      return PlaylistMutationResult.failed;
+    }
+  }
+
+  /// Puts an optimistically-removed track back at its original position.
+  Future<void> _restoreTrack(Playlist playlist, Track track, int index) async {
+    final at = index.clamp(0, playlist.tracks.length);
+    playlist.tracks.insert(at, track);
+    await _persistPlaylist(playlist);
   }
 
   /// Commit a manually-reordered track list (Phase 3.3.6). Called ONLY when the
   /// user presses Save in Edit Order mode. Persists to Hive, then pushes the
   /// atomic reorder to the cloud (best-effort; journaled offline).
-  Future<void> commitPlaylistOrder(Playlist playlist, List<Track> newOrder,
-      {int? expectedVersion}) async {
+  Future<PlaylistMutationResult> commitPlaylistOrder(
+      Playlist playlist, List<Track> newOrder,
+      {int? expectedVersion, List<Track>? originalOrder}) async {
     final ordered = List<Track>.from(newOrder);
+
+    // Phase 3.4.4 — decompose the Save into the operations that actually
+    // happened, so Activity reflects reality.
+    //
+    // `playlist_save_order` REJECTS a changed membership (ORDER_SET_MISMATCH)
+    // and logs only `tracks_reordered`, so a removal made in Edit Order could
+    // neither be committed through it nor be seen in Activity. Removals go
+    // through removeTracks, additions through addTracks, and the reorder runs
+    // only when the surviving tracks' relative order actually changed.
+    final diff = originalOrder == null
+        ? null
+        : EditOrderDiff.between(originalOrder, ordered);
+
     playlist.tracks
       ..clear()
       ..addAll(ordered);
     await _persistPlaylist(playlist);
-    // Review L13: pass the expected cloud version so a stale device cannot
-    // overwrite a newer collaborative order (the server rejects the conflict;
-    // hydration reconciles the local mirror).
-    await _pushCloud(playlist.id,
-        () => _cloud!.saveOrder(playlist.id, ordered, expectedVersion));
+
+    if (!_cloudEnabled || !isUuid(playlist.id)) {
+      return PlaylistMutationResult.applied;
+    }
+
+    try {
+      if (diff != null && diff.removed.isNotEmpty) {
+        await _cloud!.removeTracks(playlist.id, diff.removed);
+      }
+      if (diff != null && diff.added.isNotEmpty) {
+        await _cloud!.addTracks(playlist.id, diff.added);
+      }
+      // Only reorder when order genuinely changed. After a membership change the
+      // server version has moved, so the caller's expectedVersion is stale by
+      // design — pass null and let the membership RPCs' own authorization stand.
+      if (diff == null || diff.reordered) {
+        await _cloud!.saveOrder(
+          playlist.id,
+          ordered,
+          diff != null && diff.hasMembershipChange ? null : expectedVersion,
+        );
+      }
+      return PlaylistMutationResult.applied;
+    } on PlaylistConflictException {
+      return PlaylistMutationResult.conflict;
+    } on PlaylistForbiddenException {
+      return PlaylistMutationResult.forbidden;
+    } catch (e) {
+      final kind = PlaylistRepository.classifyPlaylistOpError(e).kind;
+      return kind == PlaylistFailureKind.transientNetwork
+          ? PlaylistMutationResult.queuedOffline
+          : PlaylistMutationResult.failed;
+    }
   }
 
   /// Locally unfollow a non-owned (followed) playlist: remove it from the local

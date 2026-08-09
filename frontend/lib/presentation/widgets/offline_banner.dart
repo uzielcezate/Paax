@@ -8,6 +8,7 @@
 // explains why remote-only actions may be unavailable, and it disappears on its
 // own once connectivity returns and the background sync reconciles.
 
+import '../../core/network/offline_status.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -19,8 +20,14 @@ class OfflineBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Watches only the boolean, so online→offline is the sole rebuild trigger.
-    final offline = context.select<AuthController, bool>((c) => c.isOffline);
+    // Offline if EITHER signal says so: the startup/profile state machine
+    // (Phase 3.4.2) or the request-outcome-derived status (Phase 3.4.5). Both
+    // are watched as plain booleans, so an online↔offline flip is the only
+    // thing that rebuilds this strip.
+    final authOffline = context.select<AuthController, bool>((c) => c.isOffline);
+    final networkOffline =
+        context.select<OfflineStatus, bool>((s) => s.isOffline);
+    final offline = authOffline || networkOffline;
 
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 220),

@@ -1,3 +1,4 @@
+import 'core/network/offline_status.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -160,6 +161,21 @@ class PaaxApp extends StatelessWidget {
             // ignore: discarded_futures
             lib!.onUserSession(uid);
             return lib;
+          },
+        ),
+        // Phase 3.4.5 — ONE app-scoped offline signal, derived from real request
+        // outcomes rather than an OS connectivity flag (which is true on a
+        // captive portal and while the backend is unreachable). Also owns the
+        // single-flight reconnect-refresh registry, so no screen needs its own
+        // connectivity subscription or its own "refresh once" guard.
+        ChangeNotifierProxyProvider<AuthController, OfflineStatus>(
+          create: (_) => OfflineStatus(),
+          update: (_, auth, status) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            status!.onUserSession(uid);
+            return status;
           },
         ),
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),

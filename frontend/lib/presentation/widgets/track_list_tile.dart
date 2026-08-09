@@ -1,3 +1,4 @@
+import '../../domain/entities/playlist.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../domain/entities/track.dart';
@@ -26,8 +27,24 @@ class TrackListTile extends StatelessWidget {
   final bool allowSwipeActions;
   /// When true, swipe-left = Remove from Playlist (red). Overrides add-to-playlist.
   final bool isPlaylistContext;
+
+  /// Phase 3.4.4 — when set, the shared track overflow menu additionally offers
+  /// "Remove from this playlist". Threaded through rather than duplicated so
+  /// there remains exactly ONE track-action implementation.
+  final Playlist? playlistContext;
+
+  /// Whether the current user may edit [playlistContext]. False for followed /
+  /// read-only playlists.
+  final bool canEditPlaylistContext;
   /// Called when swipe-left remove-from-playlist fires.
   final VoidCallback? onRemoveFromPlaylist;
+
+  /// Phase 3.4.5 — the track is KNOWN but cannot be streamed right now
+  /// (offline, and no local/downloaded source). It stays VISIBLE so the user
+  /// can still see their library, but is dimmed and non-playable rather than
+  /// silently failing on tap. Hiding it would make the library look corrupted;
+  /// leaving it enabled would produce a dead tap.
+  final bool unavailableOffline;
 
   const TrackListTile({
     super.key,
@@ -40,6 +57,9 @@ class TrackListTile extends StatelessWidget {
     this.foregroundColor = Colors.white,
     this.allowSwipeActions = false,
     this.isPlaylistContext = false,
+    this.playlistContext,
+    this.canEditPlaylistContext = false,
+    this.unavailableOffline = false,
     this.onRemoveFromPlaylist,
   });
 
@@ -62,7 +82,15 @@ class TrackListTile extends StatelessWidget {
     final fontSizeSubtitle = Responsive.fontSize(context, 12, min: 11, max: 14);
     final iconSize = Responsive.iconSize(context, base: 20, min: 18, max: 24);
 
-    final tileOpacity = isHidden ? 0.38 : 1.0;
+    // Dim for hidden OR unavailable-offline. Both remain VISIBLE — the user's
+    // library should never look like it lost content just because the network
+    // did. Unavailable-offline is dimmed slightly less than hidden so the two
+    // states stay visually distinguishable.
+    final tileOpacity = isHidden
+        ? 0.38
+        : unavailableOffline
+            ? 0.45
+            : 1.0;
 
     Widget tile = Opacity(
       opacity: tileOpacity,
@@ -125,11 +153,18 @@ class TrackListTile extends StatelessWidget {
                           onPressed: () => lib.toggleLike(track),
                         ),
                       ),
-                       OverflowMenu(type: MenuType.track, track: track, iconColor: foregroundColor.withOpacity(0.5)),
+                       OverflowMenu(
+                         type: MenuType.track,
+                         track: track,
+                         playlistContext: playlistContext,
+                         canEditPlaylistContext: canEditPlaylistContext,
+                         iconColor: foregroundColor.withOpacity(0.5)),
                     ],
                   ),
                 ),
-          onTap: isHidden ? null : onTap,
+          // A dead tap is worse than a disabled row: an unavailable track
+          // cannot start playback, so it is not tappable.
+          onTap: (isHidden || unavailableOffline) ? null : onTap,
         ),
       ),
     );

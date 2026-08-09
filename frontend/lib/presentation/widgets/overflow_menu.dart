@@ -1,4 +1,5 @@
 
+import '../../domain/entities/playlist_mutation_result.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/config/app_config.dart';
@@ -37,7 +38,13 @@ class OverflowMenu extends StatelessWidget {
   final VoidCallback? onEditOrder; // For playlist reorder mode
   final bool isNowPlaying; // Flag to enable dynamic current track resolution
   final VoidCallback? onNavigation;
-  final Playlist? playlistContext; // When non-null, adds 'Remove from Playlist'
+  /// When non-null the menu was opened from inside this playlist, enabling
+  /// "Remove from this playlist" (subject to [canEditPlaylistContext]).
+  final Playlist? playlistContext;
+
+  /// Whether the current user may EDIT [playlistContext]. False for followed /
+  /// read-only playlists, which must never show the remove action.
+  final bool canEditPlaylistContext;
   final Color? iconColor;
   // Phase 3.4.1 role gating: owner/editor sees manage items; a non-member sees
   // Unfollow + Add-to-playlist instead of Edit Order / Edit / Delete.
@@ -69,6 +76,7 @@ class OverflowMenu extends StatelessWidget {
     this.onNavigation,
     this.isNowPlaying = false, // Default false
     this.playlistContext,
+    this.canEditPlaylistContext = false,
     this.iconColor,
     this.canManage = true,
     this.onUnfollow,
@@ -101,6 +109,7 @@ class OverflowMenu extends StatelessWidget {
         onNavigation: onNavigation,
         isNowPlaying: isNowPlaying,
         playlistContext: playlistContext,
+        canEditPlaylistContext: canEditPlaylistContext,
         canManage: canManage,
         onUnfollow: onUnfollow,
         isFollowing: isFollowing,
@@ -139,6 +148,7 @@ class _MenuContent extends StatelessWidget {
   final bool isNowPlaying;
   final BuildContext parentContext;
   final Playlist? playlistContext;
+  final bool canEditPlaylistContext;
   final bool canManage;
   final VoidCallback? onUnfollow;
   final bool isFollowing;
@@ -164,6 +174,7 @@ class _MenuContent extends StatelessWidget {
     this.onNavigation,
     this.isNowPlaying = false,
     this.playlistContext,
+    this.canEditPlaylistContext = false,
     this.canManage = true,
     this.onUnfollow,
     this.isFollowing = false,
@@ -445,20 +456,45 @@ class _MenuContent extends StatelessWidget {
           );
         },
       ),
-      // Remove from Playlist (only shown when inside a playlist)
-      if (playlistContext != null)
-        _actionItem(context, icon: Icons.playlist_remove, label: "Remove from Playlist",
+      // "Remove from this playlist" — Phase 3.4.4.
+      //
+      // Additive: every global action above is preserved. Shown ONLY when all
+      // three hold, so a follower/read-only viewer never sees it:
+      //   * the menu was opened from inside a playlist (playlistContext != null),
+      //   * the current user can edit that playlist (canEditPlaylistContext),
+      //   * the track actually belongs to it.
+      //
+      // Permission here is a UI convenience only — the RPC + RLS remain
+      // authoritative, and a conflict is surfaced rather than swallowed.
+      if (playlistContext != null &&
+          canEditPlaylistContext &&
+          playlistContext!.tracks.any((t) => t.id == effectiveTrack.id))
+        _actionItem(context,
+          icon: Icons.playlist_remove,
+          label: "Remove from this playlist",
           color: Colors.redAccent,
           onTap: () {
             final lib = context.read<LibraryController>();
-            lib.removeFromPlaylist(playlistContext!, effectiveTrack);
+            final playlist = playlistContext!;
             Navigator.pop(context);
-            ScaffoldMessenger.of(parentContext).showSnackBar(
-              const SnackBar(
-                content: Text('Removed from playlist'),
-                duration: Duration(seconds: 2),
-              ),
-            );
+            // ignore: discarded_futures
+            lib.removeFromPlaylist(playlist, effectiveTrack).then((result) {
+              if (!parentContext.mounted) return;
+              ScaffoldMessenger.of(parentContext).showSnackBar(SnackBar(
+                content: Text(switch (result) {
+                  PlaylistMutationResult.applied => 'Removed from playlist',
+                  PlaylistMutationResult.queuedOffline =>
+                    'Removed — will sync when you\'re back online',
+                  PlaylistMutationResult.conflict =>
+                    'This playlist changed on another device. Reopen it to see the latest.',
+                  PlaylistMutationResult.forbidden =>
+                    'You no longer have permission to edit this playlist',
+                  PlaylistMutationResult.failed => 'Couldn\'t remove that song',
+                }),
+                duration: const Duration(seconds: 3),
+                behavior: SnackBarBehavior.floating,
+              ));
+            });
           },
         ),
     ];
