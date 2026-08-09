@@ -5,14 +5,49 @@
 // permission-/version-checked SECURITY DEFINER RPC (never raw table writes).
 // Errors are mapped to typed exceptions the sync layer understands.
 
+import 'dart:convert';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// The playlist row changed on the server since the client's expected version.
+///
+/// TERMINAL BY CONTRACT (Phase 3.4.3). This is an authoritative, deterministic
+/// answer: the server compared versions and they differ. Re-sending the same
+/// request cannot change the outcome, so this exception must NEVER be routed
+/// into a retry path.
+///
+/// That rule is not stylistic. Until 2026-08-08 the server raised this conflict
+/// with SQLSTATE 40001 (`serialization_failure`), which PostgREST treats as a
+/// transient race and retries — one stale Save produced ~2,565 executions/sec
+/// for hours. The server now returns HTTP 409 with a machine-readable code, and
+/// this type carries the authoritative version so the client can reconcile in a
+/// single round trip instead of guessing (or retrying).
 class PlaylistConflictException implements Exception {
+  /// Stable machine-readable identifier from the server (`error.code`).
+  static const String code = 'PLAYLIST_VERSION_CONFLICT';
+
   final String message;
-  const PlaylistConflictException([this.message = 'PLAYLIST_VERSION_CONFLICT']);
+
+  /// The version the client believed was current.
+  final int? expectedVersion;
+
+  /// The AUTHORITATIVE current version, straight from the server. Reconciling
+  /// against this needs no extra fetch.
+  final int? actualVersion;
+
+  const PlaylistConflictException({
+    this.message = code,
+    this.expectedVersion,
+    this.actualVersion,
+  });
+
+  /// True when the server told us the current version, so a deterministic
+  /// rebase is possible without another round trip.
+  bool get canRebase => actualVersion != null;
+
   @override
-  String toString() => 'PlaylistConflictException($message)';
+  String toString() =>
+      'PlaylistConflictException(expected=$expectedVersion, actual=$actualVersion)';
 }
 
 /// The caller lost/never had permission for the attempted action.
@@ -40,15 +75,50 @@ class PlaylistRemoteDataSource {
   String? get currentUserId => _client.auth.currentUser?.id;
 
   // ── error mapping ──
+  //
+  // Branches on the machine-readable `code` FIRST and only falls back to
+  // message text. Supabase's own guidance is to branch on `code`, because
+  // message text changes between Postgres/PostgREST versions while codes are
+  // stable. The text fallback exists solely so an app build that predates the
+  // 409 migration still recognises the conflict.
   Never _map(Object e) {
+    if (e is PostgrestException) {
+      if (e.code == PlaylistConflictException.code) {
+        final v = _parseConflictVersions(e.details);
+        throw PlaylistConflictException(
+          expectedVersion: v.$1,
+          actualVersion: v.$2,
+        );
+      }
+      if (e.code == '42501' || e.code == '403' || e.code == '401') {
+        throw const PlaylistForbiddenException();
+      }
+    }
     final s = e.toString();
-    if (s.contains('PLAYLIST_VERSION_CONFLICT')) throw const PlaylistConflictException();
-    if (s.contains('FORBIDDEN') ||
-        s.contains('NOT_OWNER') ||
-        s.contains('42501')) {
+    if (s.contains(PlaylistConflictException.code)) {
+      throw const PlaylistConflictException(); // legacy/no-version fallback
+    }
+    if (s.contains('FORBIDDEN') || s.contains('NOT_OWNER') || s.contains('42501')) {
       throw const PlaylistForbiddenException();
     }
     throw PlaylistRemoteException(s);
+  }
+
+  /// Extracts `(expected_version, actual_version)` from the 409 `details`
+  /// payload. Tolerant of shape: the server sends a JSON string, but a future
+  /// version could send an object. Unparseable → (null, null), which simply
+  /// means "reconcile by refetching" rather than an error.
+  static (int?, int?) _parseConflictVersions(dynamic details) {
+    try {
+      final map = details is String
+          ? jsonDecode(details) as Map<String, dynamic>
+          : (details is Map ? details.cast<String, dynamic>() : null);
+      if (map == null) return (null, null);
+      int? asInt(dynamic v) => v is int ? v : int.tryParse('${v ?? ''}');
+      return (asInt(map['expected_version']), asInt(map['actual_version']));
+    } catch (_) {
+      return (null, null);
+    }
   }
 
   Future<T> _guard<T>(Future<T> Function() run) async {
