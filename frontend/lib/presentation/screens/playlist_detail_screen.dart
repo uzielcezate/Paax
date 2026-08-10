@@ -219,7 +219,30 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
   }
 
   /// Save — commit the staged order (normalizes explicit positions + persists).
+  /// Guards Edit Order's Save against repeated taps.
+  ///
+  /// Offline, the local write + enqueue takes long enough that the user can tap
+  /// the check several times, producing several journal rows and several
+  /// "will sync when online" snackbars for ONE intent. Set synchronously before
+  /// the first await so no second tap can slip through.
+  bool _savingOrder = false;
+
   Future<void> _saveOrder(LibraryController library, Playlist playlist) async {
+    if (_savingOrder) return; // ignore additional taps until this completes
+    setState(() => _savingOrder = true);
+    try {
+      await _saveOrderInner(library, playlist);
+    } finally {
+      if (mounted) {
+        setState(() => _savingOrder = false);
+      } else {
+        _savingOrder = false;
+      }
+    }
+  }
+
+  Future<void> _saveOrderInner(
+      LibraryController library, Playlist playlist) async {
     final staged = _editOrder;
     final snapshot = _editOrderSnapshot;
     PlaylistMutationResult? result;
@@ -936,8 +959,16 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                           child: Center(
                             child: _isEditMode
                                 ? IconButton(
-                                    icon: const Icon(Icons.check_rounded, color: Colors.white, size: 26),
-                                    onPressed: () => _saveOrder(library, currentPlaylist!),
+                                    icon: Icon(Icons.check_rounded,
+                                        color: _savingOrder
+                                            ? Colors.white38
+                                            : Colors.white,
+                                        size: 26),
+                                    // Visibly disabled while saving, in addition
+                                    // to the in-flight guard inside _saveOrder.
+                                    onPressed: _savingOrder
+                                        ? null
+                                        : () => _saveOrder(library, currentPlaylist!),
                                   )
                                 : SizedBox(
                                     width: 48,

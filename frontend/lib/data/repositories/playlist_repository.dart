@@ -9,6 +9,7 @@
 // Track identity is resolved from local Deezer ids → catalog UUIDs here so the
 // UI keeps working with local Track objects.
 
+import '../../core/network/offline_status.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -43,30 +44,86 @@ class PlaylistRepository {
   static String _newOpId() =>
       '${DateTime.now().microsecondsSinceEpoch}_${identityHashCode(Object())}';
 
-  // Resolve local tracks → ordered catalog UUIDs (unresolvable ones dropped).
-  Future<List<String>> _resolveTrackUuids(List<Track> tracks) async {
+  /// Resolve local tracks → ordered catalog UUIDs.
+  ///
+  /// SILENT DROPS ARE A DATA-LOSS BUG (fixed 2026-08-09). This previously
+  /// discarded unresolvable tracks and returned a shorter list. A track with no
+  /// numeric `deezerTrackId` can NEVER resolve, so the caller ended up invoking
+  /// `playlist_add_tracks(playlist_id, '{}')` — and that RPC gates its insert,
+  /// version bump and activity behind `if v_count > 0`, so an empty array is a
+  /// SILENT SUCCESS that returns the playlist row unchanged.
+  ///
+  /// Net effect in production: the UI showed 4 tracks while the server had 1,
+  /// with no error anywhere. Verified in the activity log — only 2 distinct
+  /// track UUIDs ever reached the server across 13 versions of one playlist.
+  ///
+  /// Now the caller is told exactly what could not be resolved so it can refuse
+  /// to report success. See [_resolveOrThrow].
+  Future<({List<String> uuids, List<Track> unresolved})> _resolveTracks(
+      List<Track> tracks) async {
     final deezerIds = tracks.map((t) => t.deezerTrackId).toList();
     final map = await _resolver.resolveTracks(deezerIds);
-    final out = <String>[];
+    final uuids = <String>[];
+    final unresolved = <Track>[];
     for (final t in tracks) {
       final u = map[(t.deezerTrackId ?? '').trim()];
-      if (u != null) out.add(u);
+      if (u != null) {
+        uuids.add(u);
+      } else {
+        unresolved.add(t);
+      }
     }
-    return out;
+    return (uuids: uuids, unresolved: unresolved);
   }
+
+  /// Resolves [tracks], throwing rather than silently losing any of them.
+  ///
+  /// Throws [PlaylistOpFailure] with `localIntegrity` when ANY track cannot be
+  /// mapped to a catalog UUID. `localIntegrity` is deliberate: this is not a
+  /// network problem and retrying cannot fix it, so the op is discarded rather
+  /// than queued forever — and, critically, the caller rolls the optimistic UI
+  /// back instead of leaving a phantom track on screen.
+  Future<List<String>> _resolveOrThrow(List<Track> tracks) async {
+    final r = await _resolveTracks(tracks);
+    if (r.unresolved.isNotEmpty) {
+      final titles = r.unresolved.map((t) => t.title).take(3).join(', ');
+      throw PlaylistOpFailure(
+        PlaylistFailureKind.localIntegrity,
+        cause: 'UNRESOLVED_TRACK: ${r.unresolved.length} track(s) are not in '
+            'the Paax catalog and cannot be synced ($titles)',
+      );
+    }
+    return r.uuids;
+  }
+
+  /// Back-compat shim for read paths that legitimately tolerate partial
+  /// resolution (e.g. best-effort hydration). Mutations must use
+  /// [_resolveOrThrow].
+  Future<List<String>> _resolveTrackUuids(List<Track> tracks) async =>
+      (await _resolveTracks(tracks)).uuids;
 
   Future<T> _online<T>(
     Future<T> Function() run, {
     PlaylistOp? journalOnNetworkError,
   }) async {
     try {
-      return await run();
+      final r = await run();
+      OfflineStatus.report(succeeded: true); // proves reachability
+      return r;
     } on PlaylistConflictException {
+      // The server answered — we are demonstrably online.
+      OfflineStatus.report(succeeded: true);
       rethrow;
     } on PlaylistForbiddenException {
+      OfflineStatus.report(succeeded: true);
       rethrow;
-    } catch (_) {
-      if (journalOnNetworkError != null) {
+    } catch (e) {
+      final kind = classifyPlaylistOpError(e).kind;
+      final isNetwork = kind == PlaylistFailureKind.transientNetwork;
+      OfflineStatus.report(succeeded: false, wasNetworkFailure: isNetwork);
+      // Journal ONLY genuine connectivity failures. Queuing a validation or
+      // localIntegrity failure would replay a doomed operation forever.
+      if (journalOnNetworkError != null && isNetwork) {
         await _sync.enqueue(journalOnNetworkError);
       }
       rethrow;
@@ -100,7 +157,10 @@ class PlaylistRepository {
 
   Future<Map<String, dynamic>> saveOrder(
       String playlistId, List<Track> orderedTracks, int? expectedVersion) async {
-    final uuids = await _resolveTrackUuids(orderedTracks);
+    // A short array here would fail ORDER_SET_MISMATCH server-side anyway, but
+    // failing locally gives the user an accurate reason instead of a generic
+    // validation error.
+    final uuids = await _resolveOrThrow(orderedTracks);
     final uid = currentUserId;
     return _online(
       () => _remote.saveOrder(playlistId, uuids, expectedVersion),
@@ -119,7 +179,9 @@ class PlaylistRepository {
   }
 
   Future<Map<String, dynamic>> addTracks(String playlistId, List<Track> tracks) async {
-    final uuids = await _resolveTrackUuids(tracks);
+    // Throws localIntegrity rather than sending an empty/short array, which the
+    // RPC would accept as a silent no-op success.
+    final uuids = await _resolveOrThrow(tracks);
     final uid = currentUserId;
     return _online(
       () => _remote.addTracks(playlistId, uuids),
@@ -137,7 +199,7 @@ class PlaylistRepository {
   }
 
   Future<Map<String, dynamic>> removeTracks(String playlistId, List<Track> tracks) async {
-    final uuids = await _resolveTrackUuids(tracks);
+    final uuids = await _resolveOrThrow(tracks);
     final uid = currentUserId;
     return _online(
       () => _remote.removeTracks(playlistId, uuids),
@@ -169,7 +231,54 @@ class PlaylistRepository {
           collaborative: collaborative,
           expectedVersion: expectedVersion);
 
-  Future<void> deletePlaylist(String playlistId) => _remote.deletePlaylist(playlistId);
+  /// Soft-deletes a cloud playlist, JOURNALLING when offline.
+  ///
+  /// This previously called the RPC directly with no `_online` wrapper, so an
+  /// offline delete threw straight to the UI ("Couldn't delete the playlist")
+  /// and nothing was queued — the only playlist mutation that bypassed the
+  /// offline-first path entirely.
+  Future<void> deletePlaylist(String playlistId) async {
+    final uid = currentUserId;
+    return _online(
+      () => _remote.deletePlaylist(playlistId),
+      journalOnNetworkError: uid == null
+          ? null
+          : PlaylistOp(
+              opId: _newOpId(),
+              userId: uid,
+              playlistId: playlistId,
+              type: PlaylistOpType.delete,
+              createdAt: DateTime.now(),
+            ),
+    );
+  }
+
+  /// Changes visibility, JOURNALLING when offline so private↔public works
+  /// offline and becomes authoritative on reconnect.
+  Future<Map<String, dynamic>> setVisibility(
+    String playlistId,
+    String visibility, {
+    int? expectedVersion,
+  }) async {
+    final uid = currentUserId;
+    return _online(
+      () => _remote.updateMetadata(playlistId,
+          visibility: visibility, expectedVersion: expectedVersion),
+      journalOnNetworkError: uid == null
+          ? null
+          : PlaylistOp(
+              opId: _newOpId(),
+              userId: uid,
+              playlistId: playlistId,
+              type: PlaylistOpType.updateMetadata,
+              createdAt: DateTime.now(),
+              // No expectedVersion when queued: by replay time the local
+              // version is certainly stale, and a version check would turn a
+              // legitimate offline intent into a permanent conflict.
+              payload: {'visibility': visibility},
+            ),
+    );
+  }
 
   /// True when [playlistId] exists ONLY locally: it was created offline and its
   /// `create` op is still queued, so no cloud row exists yet.
@@ -393,6 +502,18 @@ class PlaylistRepository {
           break;
         case PlaylistOpType.setFollow:
           await _remote.setFollow(op.playlistId, op.payload['follow'] == true);
+          break;
+        case PlaylistOpType.updateMetadata:
+          // Replayed WITHOUT expectedVersion: the queued version is stale by
+          // definition, and a version check here would convert a legitimate
+          // offline intent into a permanent conflict. Ownership is still
+          // enforced by the RPC.
+          await _remote.updateMetadata(
+            op.playlistId,
+            name: op.payload['name']?.toString(),
+            description: op.payload['description']?.toString(),
+            visibility: op.payload['visibility']?.toString(),
+          );
           break;
         default:
           // Other op types are executed inline (not queued) in this phase.
