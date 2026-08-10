@@ -153,7 +153,12 @@ class PaaxApp extends StatelessWidget {
         // single-flight reconnect-refresh registry, so no screen needs its own
         // connectivity subscription or its own "refresh once" guard.
         ChangeNotifierProxyProvider<AuthController, OfflineStatus>(
-          create: (_) => OfflineStatus.instance = OfflineStatus(),
+          create: (_) {
+            // ONE app-scoped connectivity observer for the whole app. Started
+            // here so no screen ever needs its own subscription.
+            final status = OfflineStatus()..startObserving();
+            return OfflineStatus.instance = status;
+          },
           update: (_, auth, status) {
             final uid = auth.isAuthenticated
                 ? Supabase.instance.client.auth.currentUser?.id

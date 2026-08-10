@@ -108,7 +108,31 @@ class PlaylistRepository {
   /// than queued forever — and, critically, the caller rolls the optimistic UI
   /// back instead of leaving a phantom track on screen.
   Future<List<String>> _resolveOrThrow(List<Track> tracks) async {
-    final r = await _resolveTracks(tracks);
+    var r = await _resolveTracks(tracks);
+
+    // INGEST-ON-MISS (Phase 3.4.8). Artist Top Tracks was the only add-to-
+    // playlist entry point that never triggers catalog ingestion — Album,
+    // Search and Player all reach paax-api endpoints that upsert the catalog
+    // graph as a side effect. So the SAME song was addable from an album and
+    // not from the artist's Top Tracks, purely because its row did not exist
+    // yet. (Verified: the Top Tracks payload carries the correct deezer id and
+    // videoId; the catalog simply had no row. The catalog grew 544→584 during
+    // one debugging session just by opening albums.)
+    //
+    // Asking paax-api for the track ingests it, so we retry resolution ONCE.
+    // Bounded and non-recursive: one ingest attempt, one re-resolve, then an
+    // explicit failure.
+    if (r.unresolved.isNotEmpty) {
+      final ingestable = r.unresolved
+          .where((t) => int.tryParse((t.deezerTrackId ?? '').trim()) != null)
+          .toList();
+      if (ingestable.isNotEmpty) {
+        await _resolver.ingestTracks(
+            ingestable.map((t) => t.deezerTrackId!.trim()));
+        r = await _resolveTracks(tracks);
+      }
+    }
+
     if (r.unresolved.isNotEmpty) {
       final titles = r.unresolved.map((t) => t.title).take(3).join(', ');
       throw PlaylistOpFailure(
@@ -551,10 +575,30 @@ class PlaylistRepository {
     final videoId = t['preferred_youtube_video_id']?.toString();
     if (videoId == null || videoId.isEmpty) return null; // unplayable — skip
     final dur = t['duration_seconds'];
+
+    // Artist names from the canonical track_artists graph. This used to be
+    // hardcoded `artistName: ''`, which is THE source of "Unknown Artist"
+    // after an offline replay: hydration overwrote fully-populated local
+    // Tracks with artist-less skeletons.
+    final artistsList = <Map<String, String>>[];
+    final ta = t['track_artists'];
+    if (ta is List) {
+      for (final row in ta) {
+        if (row is! Map) continue;
+        final a = row['artists'];
+        if (a is! Map) continue;
+        final name = a['name']?.toString() ?? '';
+        if (name.isEmpty) continue;
+        artistsList.add({'name': name, 'id': a['id']?.toString() ?? ''});
+      }
+    }
+
     return Track(
       id: videoId,
       title: t['title']?.toString() ?? '',
-      artistName: '',
+      artistName: artistsList.map((a) => a['name']!).join(', '),
+      artistId: artistsList.isNotEmpty ? artistsList.first['id'] : null,
+      artists: artistsList.isEmpty ? null : artistsList,
       albumId: '',
       albumTitle: '',
       artworkUrl:
@@ -562,6 +606,39 @@ class PlaylistRepository {
       duration: dur is int ? dur : int.tryParse('${dur ?? ''}') ?? 0,
       deezerTrackId: t['deezer_id']?.toString(),
     );
+  }
+
+  /// Merges an authoritative cloud track list onto locally-cached tracks.
+  ///
+  /// RECONCILIATION INVARIANT (Phase 3.4.8): the server is authoritative for
+  /// MEMBERSHIP and ORDER; the local cache is usually richer for METADATA
+  /// (artist names, artwork, album). Replacing local tracks wholesale is what
+  /// produced "Unknown Artist" and lost artwork after a replay.
+  ///
+  /// So: take membership + order from [cloud], but for each track prefer the
+  /// cached object when it carries metadata the cloud row lacks. A cloud row is
+  /// only allowed to ADD information, never to erase it.
+  static List<Track> reconcileTracks({
+    required List<Track> cached,
+    required List<Track> cloud,
+  }) {
+    final byId = {for (final t in cached) t.id: t};
+    return [
+      for (final c in cloud)
+        () {
+          final local = byId[c.id];
+          if (local == null) return c; // genuinely new membership
+          final cloudHasArtists = c.artistName.trim().isNotEmpty;
+          final localHasArtists = local.artistName.trim().isNotEmpty;
+          // Keep the richer metadata; the cloud row still defines position by
+          // virtue of its place in this list.
+          if (!cloudHasArtists && localHasArtists) return local;
+          if (cloudHasArtists && !localHasArtists) return c;
+          // Both (or neither) have artists — prefer local, which also carries
+          // album/artwork the membership query does not select.
+          return local;
+        }()
+    ];
   }
 
   // ── offline replay ──

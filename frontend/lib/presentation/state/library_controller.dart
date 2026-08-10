@@ -151,8 +151,30 @@ class LibraryController extends ChangeNotifier {
 
   Future<void> _hydrateAfterFlush(String uid) async {
     final hydrated = await _cloud!.hydrateLibrary();
+    final localById = {for (final p in HiveStorage.getPlaylists()) p.id: p};
     for (final h in hydrated) {
-      await HiveStorage.savePlaylist(h);
+      final existing = localById[h.id];
+      if (existing == null) {
+        await HiveStorage.savePlaylist(h);
+        continue;
+      }
+      // METADATA-PRESERVING RECONCILIATION. This previously did an
+      // unconditional `savePlaylist(h)`, replacing fully-populated local Tracks
+      // with the membership query's artist-less skeletons — the "Unknown
+      // Artist after replay" bug. Membership and ORDER come from the server;
+      // per-track metadata is kept from the local cache where it is richer.
+      final merged = PlaylistRepository.reconcileTracks(
+        cached: existing.tracks,
+        cloud: h.tracks,
+      );
+      await HiveStorage.savePlaylist(existing.copyWith(
+        ownerId: h.ownerId,
+        ownerUsername: h.ownerUsername,
+        visibility: h.visibility,
+        isCollaborative: h.isCollaborative,
+        collaboratorsJson: h.collaboratorsJson,
+        tracks: merged,
+      ));
     }
   }
 
@@ -481,7 +503,19 @@ class LibraryController extends ChangeNotifier {
     if (_cloudEnabled && _cloud!.isLocalOnly(id)) {
       await _cloud!.cancelLocalOnly(id);
     } else if (_cloudEnabled && isUuid(id)) {
-      await _cloud!.deletePlaylist(id); // authoritative first; throws on failure
+      try {
+        await _cloud!.deletePlaylist(id); // authoritative when reachable
+      } catch (e) {
+        // OFFLINE-FIRST DELETE (Phase 3.4.8). The repository has already
+        // journalled the delete for replay, so a connectivity failure is NOT a
+        // failure from the user's point of view — showing "Couldn't delete the
+        // playlist" was wrong. Hide it locally and let replay soft-delete it.
+        //
+        // Anything that is NOT a connectivity failure (forbidden, not-found,
+        // conflict) still propagates so the UI can surface a real refusal.
+        final kind = PlaylistRepository.classifyPlaylistOpError(e).kind;
+        if (kind != PlaylistFailureKind.transientNetwork) rethrow;
+      }
     }
     await HiveStorage.deletePlaylist(id);
     await HiveStorage.unpinPlaylist(id); // remove device-local pin (spec H)

@@ -329,9 +329,14 @@ class PlaylistRemoteDataSource {
         final rows = await _client
             .from('playlist_tracks')
             .select(
-                'position, track_id, added_by, tracks(id, deezer_id, title, duration_seconds, preferred_youtube_video_id, image_cached_url, image_original_url)')
+                'position, track_id, added_by, tracks(id, deezer_id, title, duration_seconds, preferred_youtube_video_id, image_cached_url, image_original_url, track_artists(artist_id, artists(id, name)))')
             .eq('playlist_id', playlistId)
-            .order('position');
+            // ASCENDING. postgrest-dart's `order()` defaults to DESCENDING, so
+            // the previous `.order('position')` returned the playlist REVERSED
+            // — visible in production logs as `order=position.desc.nullslast`.
+            // That is the "tracks reshuffle after reconciliation" bug: the
+            // server positions were correct all along, the read reversed them.
+            .order('position', ascending: true);
         return (rows as List).cast<Map<String, dynamic>>();
       });
 

@@ -294,6 +294,25 @@ class _FakeJournal implements PlaylistOpsJournal {
   @override
   bool hasPending(String userId) => pending(userId).isNotEmpty;
 
+  final Map<String, String> _adoptions = {};
+
+  @override
+  Map<String, String> adoptions(String userId) =>
+      Map<String, String>.from(_adoptions);
+
+  @override
+  Future<void> recordAdoption(
+      String userId, String localId, String cloudId) async {
+    if (localId != cloudId) _adoptions[localId] = cloudId;
+  }
+
+  @override
+  Future<void> pruneAdoptions(String userId) async {
+    final live = pending(userId).map((o) => o.playlistId).toSet();
+    _adoptions.removeWhere((localId, _) => !live.contains(localId));
+  }
+
+
   @override
   List<QuarantinedOp> quarantined(String userId) =>
       List<QuarantinedOp>.from(_quarantine[userId] ?? const []);

@@ -66,6 +66,7 @@ dependencies:
   image: ^4.2.0              # decode/resize/encode avatar before Storage upload
   image_picker: ^1.1.2      # pick an avatar image from gallery/camera
   http: ^1.2.0              # normalized /v2 onboarding search/resolve calls
+  connectivity_plus: ^7.3.1
 
 dev_dependencies:
   flutter_test:
