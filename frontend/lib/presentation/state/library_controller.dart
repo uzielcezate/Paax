@@ -213,20 +213,30 @@ class LibraryController extends ChangeNotifier {
       final localById = {for (final p in HiveStorage.getPlaylists()) p.id: p};
       for (final h in hydrated) {
         final existing = localById[h.id];
-        final ownedByMe = h.ownerId == uid;
-        if (ownedByMe && existing != null) {
-          // Keep the local (richer) track copy; refresh cloud metadata only.
-          await HiveStorage.savePlaylist(existing.copyWith(
-            ownerId: h.ownerId,
-            ownerUsername: h.ownerUsername,
-            visibility: h.visibility,
-            isCollaborative: h.isCollaborative,
-            collaboratorsJson: h.collaboratorsJson,
-          ));
-        } else {
-          // Followed / collaborating / created-elsewhere → full upsert.
-          await HiveStorage.savePlaylist(h);
+        if (existing == null) {
+          await HiveStorage.savePlaylist(h); // nothing local to preserve
+          continue;
         }
+        // Same metadata-preserving reconciliation as the post-flush path.
+        //
+        // This branch previously did one of two wrong things: for an OWNED
+        // playlist it kept the local track list wholesale (so a membership
+        // change made elsewhere — or by the flush on the line above — never
+        // appeared), and for a COLLABORATING playlist it did a full
+        // `savePlaylist(h)`, replacing rich local Tracks with the membership
+        // query's artist-less skeletons. The second is the Unknown-Artist bug
+        // on the sign-in path, which the post-flush fix alone did not cover.
+        await HiveStorage.savePlaylist(existing.copyWith(
+          ownerId: h.ownerId,
+          ownerUsername: h.ownerUsername,
+          visibility: h.visibility,
+          isCollaborative: h.isCollaborative,
+          collaboratorsJson: h.collaboratorsJson,
+          tracks: PlaylistRepository.reconcileTracks(
+            cached: existing.tracks,
+            cloud: h.tracks,
+          ),
+        ));
       }
       _loadData();
     } catch (_) {

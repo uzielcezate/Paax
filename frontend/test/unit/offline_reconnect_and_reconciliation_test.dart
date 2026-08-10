@@ -212,4 +212,60 @@ void main() {
       expect(merged, isEmpty);
     });
   });
+
+  group('ADVERSARIAL — guards must actually guard', () {
+    late OfflineStatus status;
+    setUp(() => status = OfflineStatus());
+    tearDown(() => status.dispose());
+
+    test('onUserSession does NOT reset the refresh guard for the SAME account',
+        () async {
+      // ProxyProvider.update() runs on every AuthController notification, not
+      // only on account change. Clearing unconditionally erased the guard and
+      // "one flush per reconnect" silently stopped holding.
+      status.debugSetOffline(true);
+      status.debugSetOffline(false); // reconnect
+
+      var flushes = 0;
+      Future<void> flush() async => flushes++;
+
+      for (var i = 0; i < 30; i++) {
+        status.onUserSession('user-A'); // same identity, repeatedly
+        await status.refreshOnce('library:playlist-journal', flush);
+      }
+
+      expect(flushes, 1,
+          reason: 'repeated auth notifications must not re-arm the guard');
+    });
+
+    test('a genuine account switch DOES reset the guard', () async {
+      status.debugSetOffline(true);
+      status.debugSetOffline(false);
+
+      var flushes = 0;
+      Future<void> flush() async => flushes++;
+
+      status.onUserSession('user-A');
+      await status.refreshOnce('library:playlist-journal', flush);
+      expect(flushes, 1);
+
+      status.onUserSession('user-B'); // real switch
+      await status.refreshOnce('library:playlist-journal', flush);
+      expect(flushes, 2, reason: 'the new account must replay its own journal');
+    });
+
+    test('sign-out then back in to the same account resets once', () async {
+      status.debugSetOffline(true);
+      status.debugSetOffline(false);
+      var flushes = 0;
+      Future<void> flush() async => flushes++;
+
+      status.onUserSession('user-A');
+      await status.refreshOnce('journal', flush);
+      status.onUserSession(null); // sign-out
+      status.onUserSession('user-A'); // sign back in
+      await status.refreshOnce('journal', flush);
+      expect(flushes, 2);
+    });
+  });
 }

@@ -164,8 +164,26 @@ class OfflineStatus extends ChangeNotifier {
     return future;
   }
 
+  /// The account this refresh state belongs to.
+  String? _boundUserId;
+  bool _boundUserSet = false;
+
   /// Drops per-account state on sign-out / account switch.
+  ///
+  /// IDEMPOTENT PER IDENTITY. This is called from a ProxyProvider `update`,
+  /// which runs on EVERY AuthController notification — state transitions,
+  /// isSubmitting toggles, background reconciliation — not just on an account
+  /// change. Clearing unconditionally erased [_refreshedThisGeneration] over
+  /// and over, so "at most one flush per reconnect" silently stopped holding:
+  /// the guard was reset faster than it could guard.
+  ///
+  /// That is the same shape as the defect behind the 2026-08-08 incident — a
+  /// guard that looks present but never actually blocks — so it is worth being
+  /// explicit: state is dropped ONLY when the identity genuinely changes.
   void onUserSession(String? userId) {
+    if (_boundUserSet && userId == _boundUserId) return; // same identity
+    _boundUserId = userId;
+    _boundUserSet = true;
     _refreshedThisGeneration.clear();
     _inFlight.clear();
   }
