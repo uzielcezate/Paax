@@ -22,6 +22,7 @@ import '../../domain/entities/track.dart';
 import '../local/playlist_ops_journal.dart';
 import '../remote/catalog_resolver.dart';
 import '../remote/playlist_remote_data_source.dart';
+import '../sync/playlist_mutation_lane.dart';
 import '../sync/playlist_op.dart';
 import '../sync/playlist_op_failure.dart';
 import '../sync/playlist_sync_service.dart';
@@ -59,14 +60,37 @@ class PlaylistRepository {
   ///
   /// Now the caller is told exactly what could not be resolved so it can refuse
   /// to report success. See [_resolveOrThrow].
+  /// TWO-STAGE IDENTITY (Phase 3.4.7). Deezer identity is NOT mandatory for
+  /// playlist membership:
+  ///
+  ///   1. `deezerTrackId` → `tracks.deezer_id`   (fast path, numeric ids only)
+  ///   2. `Track.id` (the YouTube videoId) → `tracks.preferred_youtube_video_id`
+  ///
+  /// Stage 2 exists because a track surfaced from search/album often carries no
+  /// numeric `deezerTrackId`, and stage 1 alone silently produced an EMPTY uuid
+  /// list — which `playlist_add_tracks` accepts as a no-op success.
+  ///
+  /// Anything still unresolved after both stages is returned to the caller so it
+  /// can fail loudly. Nothing is ever silently dropped.
   Future<({List<String> uuids, List<Track> unresolved})> _resolveTracks(
       List<Track> tracks) async {
-    final deezerIds = tracks.map((t) => t.deezerTrackId).toList();
-    final map = await _resolver.resolveTracks(deezerIds);
+    final byDeezer =
+        await _resolver.resolveTracks(tracks.map((t) => t.deezerTrackId));
+
+    // Only tracks stage 1 missed go to stage 2, so the extra query is skipped
+    // entirely in the common all-resolved case.
+    final needVideoId = tracks
+        .where((t) => byDeezer[(t.deezerTrackId ?? '').trim()] == null)
+        .toList();
+    final byVideoId = needVideoId.isEmpty
+        ? const <String, String>{}
+        : await _resolver.resolveTracksByVideoId(needVideoId.map((t) => t.id));
+
     final uuids = <String>[];
     final unresolved = <Track>[];
     for (final t in tracks) {
-      final u = map[(t.deezerTrackId ?? '').trim()];
+      final u = byDeezer[(t.deezerTrackId ?? '').trim()] ??
+          byVideoId[t.id.trim()];
       if (u != null) {
         uuids.add(u);
       } else {
@@ -163,7 +187,12 @@ class PlaylistRepository {
     final uuids = await _resolveOrThrow(orderedTracks);
     final uid = currentUserId;
     return _online(
-      () => _remote.saveOrder(playlistId, uuids, expectedVersion),
+      // Reorder is NOT auto-rebasable: replaying an order against a membership
+      // the server has since changed would push a wrong list. A 409 here is
+      // terminal and surfaces for user recovery.
+      () => _versioned(playlistId,
+          (expected) => _remote.saveOrder(playlistId, uuids, expected ?? expectedVersion),
+          rebasable: false),
       journalOnNetworkError: uid == null
           ? null
           : PlaylistOp(
@@ -178,13 +207,70 @@ class PlaylistRepository {
     );
   }
 
+  /// The per-playlist mutation lane. Shared across the repository so every
+  /// version-checked mutation for one playlist is ordered.
+  static final PlaylistMutationLane mutationLane = PlaylistMutationLane();
+
+  /// Runs a version-checked mutation inside this playlist's lane, applying the
+  /// once-only 409 rebase policy.
+  ///
+  /// Sequence guaranteed here:
+  ///   add A (expected 7) → 8 persisted → add B (expected 8)
+  ///
+  /// On 409 we do NOT retry blindly. We refetch the authoritative version
+  /// exactly once and re-run the SAME intent against it, but only when
+  /// [rebasable] says the intent is still safely applicable. Anything else is
+  /// terminal.
+  Future<Map<String, dynamic>> _versioned(
+    String playlistId,
+    Future<Map<String, dynamic>> Function(int? expectedVersion) run, {
+    bool rebasable = true,
+  }) {
+    final uid = currentUserId ?? 'anon';
+    return mutationLane.run<Map<String, dynamic>>(uid, playlistId,
+        (expected) async {
+      try {
+        final row = await run(expected);
+        return (result: row, version: _versionOf(row));
+      } on PlaylistConflictException catch (e) {
+        if (!rebasable) rethrow; // e.g. reorder with changed membership
+        // ONE authoritative read, then ONE rebased attempt. Never a loop.
+        final actual = e.actualVersion ?? await _fetchVersion(playlistId);
+        if (actual == null) rethrow;
+        final row = await run(actual);
+        return (result: row, version: _versionOf(row));
+      }
+    });
+  }
+
+  static int? _versionOf(Map<String, dynamic> row) {
+    final v = row['version'];
+    return v is int ? v : int.tryParse('${v ?? ''}');
+  }
+
+  Future<int?> _fetchVersion(String playlistId) async {
+    try {
+      final row = await _remote.fetchPlaylist(playlistId);
+      return row == null ? null : _versionOf(row);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<Map<String, dynamic>> addTracks(String playlistId, List<Track> tracks) async {
     // Throws localIntegrity rather than sending an empty/short array, which the
     // RPC would accept as a silent no-op success.
     final uuids = await _resolveOrThrow(tracks);
     final uid = currentUserId;
     return _online(
-      () => _remote.addTracks(playlistId, uuids),
+      // playlist_add_tracks is idempotent (it skips tracks already present) and
+      // takes no expected_version, so it needs the lane for ORDERING — so each
+      // add sees the previous one's committed state — but cannot 409.
+      () => mutationLane.run<Map<String, dynamic>>(
+          uid ?? 'anon', playlistId, (expected) async {
+        final row = await _remote.addTracks(playlistId, uuids);
+        return (result: row, version: _versionOf(row));
+      }),
       journalOnNetworkError: uid == null
           ? null
           : PlaylistOp(
@@ -202,7 +288,11 @@ class PlaylistRepository {
     final uuids = await _resolveOrThrow(tracks);
     final uid = currentUserId;
     return _online(
-      () => _remote.removeTracks(playlistId, uuids),
+      () => mutationLane.run<Map<String, dynamic>>(
+          uid ?? 'anon', playlistId, (expected) async {
+        final row = await _remote.removeTracks(playlistId, uuids);
+        return (result: row, version: _versionOf(row));
+      }),
       journalOnNetworkError: uid == null
           ? null
           : PlaylistOp(
@@ -262,8 +352,13 @@ class PlaylistRepository {
   }) async {
     final uid = currentUserId;
     return _online(
-      () => _remote.updateMetadata(playlistId,
-          visibility: visibility, expectedVersion: expectedVersion),
+      // Visibility is safely rebasable: the intent ("make it public") does not
+      // depend on the rest of the playlist state.
+      () => _versioned(
+          playlistId,
+          (expected) => _remote.updateMetadata(playlistId,
+              visibility: visibility,
+              expectedVersion: expected ?? expectedVersion)),
       journalOnNetworkError: uid == null
           ? null
           : PlaylistOp(
@@ -470,10 +565,27 @@ class PlaylistRepository {
   }
 
   // ── offline replay ──
+  /// Called after a queued `create` commits, to atomically re-key every
+  /// account-scoped reference from the local UUID to the authoritative cloud
+  /// UUID. Injected by the controller, which owns Hive/pins/navigation.
+  Future<void> Function(String localId, String cloudId, int? version)?
+      onPlaylistAdopted;
+
   Future<PlaylistFlushResult> flushPending() async {
     final uid = currentUserId;
     if (uid == null) return const PlaylistFlushResult();
-    return _sync.flush(uid, _execute);
+    return _sync.flush(
+      uid,
+      _execute,
+      onAdopted: (localId, cloudId, version) async {
+        // Persist the authoritative version into the lane BEFORE dependents
+        // run, so the first dependent mutation uses it rather than a stale one.
+        if (version != null) mutationLane.recordVersion(uid, cloudId, version);
+        await onPlaylistAdopted?.call(localId, cloudId, version);
+      },
+      onVersion: (playlistId, version) async =>
+          mutationLane.recordVersion(uid, playlistId, version),
+    );
   }
 
   Future<OpOutcome> _execute(PlaylistOp op) async {
@@ -481,11 +593,17 @@ class PlaylistRepository {
       final ids = (op.payload['ids'] as List?)?.cast<String>() ?? const <String>[];
       switch (op.type) {
         case PlaylistOpType.create:
-          await _remote.createPlaylist(
+          final row = await _remote.createPlaylist(
             name: op.payload['name']?.toString() ?? '',
             visibility: op.payload['visibility']?.toString() ?? 'private',
             trackUuids: ids,
+            // Passing the client id makes create IDEMPOTENT: a replay after a
+            // crash upserts the same row instead of creating a second playlist.
             id: op.payload['clientId']?.toString(),
+          );
+          signalApplied(
+            cloudPlaylistId: row['id']?.toString(),
+            version: _versionOf(row),
           );
           break;
         case PlaylistOpType.saveOrder:

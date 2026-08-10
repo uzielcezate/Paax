@@ -116,8 +116,21 @@ class LibraryController extends ChangeNotifier {
   Future<void> flushPendingNow() async {
     final uid = _sessionUid;
     if (!_cloudEnabled || uid == null) return;
+    // The adoption transaction: re-key every LOCAL reference to the cloud UUID
+    // before dependent operations are released. Idempotent — rekeyPlaylist and
+    // the pin move are both no-ops if already applied.
+    _cloud!.onPlaylistAdopted = (localId, cloudId, version) async {
+      if (localId == cloudId) return;
+      final wasPinned = HiveStorage.isPlaylistPinned(localId);
+      await HiveStorage.rekeyPlaylist(localId, cloudId);
+      if (wasPinned) {
+        await HiveStorage.unpinPlaylist(localId);
+        await HiveStorage.pinPlaylist(cloudId);
+      }
+      _loadData();
+    };
     try {
-      await _cloud!.flushPending();
+      await _cloud.flushPending();
       // Re-hydrate so the UI reflects whatever the server now holds (adopted
       // UUIDs, applied removals, rejected ops).
       await _hydrateAfterFlush(uid);
