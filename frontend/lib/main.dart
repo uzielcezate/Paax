@@ -147,35 +147,51 @@ class PaaxApp extends StatelessWidget {
         // ops, hydrates cloud data, and runs the one-time Hive→cloud migration;
         // on sign-out it clears session state. onUserSession is idempotent per
         // identity, so calling it on every AuthController notification is safe.
-        ChangeNotifierProxyProvider<AuthController, LibraryController>(
-          create: (_) => LibraryController(
-            LibraryRepository(),
-            // Phase 3.4.1 — cloud playlist repository (best-effort; local Hive
-            // stays authoritative). Shares the offline ops journal.
-            PlaylistRepository(sync: PlaylistSyncService(PlaylistOpsJournal())),
-          ),
-          update: (_, auth, lib) {
-            final uid = auth.isAuthenticated
-                ? Supabase.instance.client.auth.currentUser?.id
-                : null;
-            // ignore: discarded_futures
-            lib!.onUserSession(uid);
-            return lib;
-          },
-        ),
         // Phase 3.4.5 — ONE app-scoped offline signal, derived from real request
         // outcomes rather than an OS connectivity flag (which is true on a
         // captive portal and while the backend is unreachable). Also owns the
         // single-flight reconnect-refresh registry, so no screen needs its own
         // connectivity subscription or its own "refresh once" guard.
         ChangeNotifierProxyProvider<AuthController, OfflineStatus>(
-          create: (_) => OfflineStatus(),
+          create: (_) => OfflineStatus.instance = OfflineStatus(),
           update: (_, auth, status) {
             final uid = auth.isAuthenticated
                 ? Supabase.instance.client.auth.currentUser?.id
                 : null;
             status!.onUserSession(uid);
             return status;
+          },
+        ),
+        // Phase 3.4.6 — LibraryController is driven by BOTH auth and
+        // connectivity. The second dependency is the fix for the reconnect bug:
+        // `flushPending` used to be reachable only from `onUserSession`, which
+        // early-returns when the user id is unchanged, so the offline journal
+        // was replayed exactly once per account per app session and queued
+        // mutations never synced after regaining connectivity.
+        //
+        // `OfflineStatus.refreshOnce` makes the trigger idempotent: at most one
+        // flush per offline→online transition no matter how often this
+        // ProxyProvider's update() runs.
+        ChangeNotifierProxyProvider2<AuthController, OfflineStatus,
+            LibraryController>(
+          create: (_) => LibraryController(
+            LibraryRepository(),
+            // Phase 3.4.1 — cloud playlist repository (best-effort; local Hive
+            // stays authoritative). Shares the offline ops journal.
+            PlaylistRepository(sync: PlaylistSyncService(PlaylistOpsJournal())),
+          ),
+          update: (_, auth, offline, lib) {
+            final uid = auth.isAuthenticated
+                ? Supabase.instance.client.auth.currentUser?.id
+                : null;
+            // ignore: discarded_futures
+            lib!.onUserSession(uid);
+            if (!offline.isOffline && uid != null) {
+              // ignore: discarded_futures
+              offline.refreshOnce(
+                  'library:playlist-journal', lib.onConnectivityRestored);
+            }
+            return lib;
           },
         ),
         ChangeNotifierProvider(create: (_) => app_search.SearchController()),

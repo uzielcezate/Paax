@@ -143,6 +143,10 @@ class CatalogResolver {
   Future<Map<String, String>> resolveAlbums(Iterable<String> deezerIds) =>
       _resolveMany('albums', deezerIds, _albumCache, _kAlbumsCache);
 
+  /// videoId → track UUID cache (second identity path).
+  final Map<String, String> _videoIdCache = {};
+  static const String _kVideoIdsCache = 'catalog_resolver_video_ids';
+
   Future<Map<String, String>> resolveTracks(Iterable<String?> deezerIds) =>
       _resolveMany(
         'tracks',
@@ -150,6 +154,57 @@ class CatalogResolver {
         _trackCache,
         _kTracksCache,
       );
+
+  /// Resolve YouTube videoIds → canonical Paax track UUIDs.
+  ///
+  /// The SECOND identity path (Phase 3.4.7). Deezer identity must not be
+  /// mandatory for playlist membership: `Track.id` in this app IS the YouTube
+  /// videoId, and `tracks.preferred_youtube_video_id` stores it, so a track with
+  /// no numeric `deezerTrackId` can still be resolved. Before this existed,
+  /// such a track silently produced an EMPTY uuid array and
+  /// `playlist_add_tracks` accepted it as a no-op success — the UI kept a song
+  /// the server never received.
+  ///
+  /// Backed by `idx_tracks_preferred_youtube_video_id`.
+  Future<Map<String, String>> resolveTracksByVideoId(
+      Iterable<String?> videoIds) async {
+    await _ensureLoaded();
+    final result = <String, String>{};
+    final toQuery = <String>{};
+
+    for (final raw in videoIds) {
+      final key = (raw ?? '').trim();
+      if (key.isEmpty) continue;
+      final cached = _videoIdCache[key];
+      if (cached != null) {
+        result[key] = cached;
+      } else {
+        toQuery.add(key);
+      }
+    }
+    if (toQuery.isEmpty) return result;
+
+    try {
+      final rows = await _client
+          .from('tracks')
+          .select('id, preferred_youtube_video_id')
+          .inFilter('preferred_youtube_video_id', toQuery.toList());
+      var changed = false;
+      for (final row in (rows as List)) {
+        final uuid = row['id']?.toString();
+        final vid = row['preferred_youtube_video_id']?.toString();
+        if (uuid == null || uuid.isEmpty || vid == null || vid.isEmpty) continue;
+        _videoIdCache[vid] = uuid;
+        result[vid] = uuid;
+        changed = true;
+      }
+      if (changed) await _persist(_kVideoIdsCache, _videoIdCache);
+    } catch (_) {
+      // Return whatever was cached; the caller reports unresolved tracks
+      // explicitly rather than dropping them.
+    }
+    return result;
+  }
 
   Future<Map<String, String>> resolveGenres(Iterable<String> deezerIds) =>
       _resolveMany('genres', deezerIds, _genreCache, _kGenresCache);

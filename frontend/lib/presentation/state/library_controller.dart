@@ -96,6 +96,66 @@ class LibraryController extends ChangeNotifier {
     }
   }
 
+  /// Replays the offline journal NOW.
+  ///
+  /// THE RECONNECT BUG (fixed 2026-08-09). `flushPending` had exactly one
+  /// caller: `_syncCloudPlaylists`, which had exactly one caller:
+  /// `onUserSession` — which early-returns when the user id is unchanged
+  /// (`if (_sessionUidSet && userId == _sessionUid) return;`).
+  ///
+  /// So the journal was flushed EXACTLY ONCE per account per app session, at
+  /// sign-in. Regaining connectivity, resuming the app, or opening the playlist
+  /// again triggered nothing, and queued reorders/removals/creates sat in Hive
+  /// until the app was restarted or the account changed. That is precisely what
+  /// manual QA saw: "the app says it will sync later" and it never does.
+  ///
+  /// This is the public entry point the connectivity source calls on
+  /// offline→online. It is safe to call repeatedly: PlaylistSyncService applies
+  /// process-wide single-flight, and a failed flush releases that guard so a
+  /// later reconnect can retry.
+  Future<void> flushPendingNow() async {
+    final uid = _sessionUid;
+    if (!_cloudEnabled || uid == null) return;
+    // The adoption transaction: re-key every LOCAL reference to the cloud UUID
+    // before dependent operations are released. Idempotent — rekeyPlaylist and
+    // the pin move are both no-ops if already applied.
+    _cloud!.onPlaylistAdopted = (localId, cloudId, version) async {
+      if (localId == cloudId) return;
+      final wasPinned = HiveStorage.isPlaylistPinned(localId);
+      await HiveStorage.rekeyPlaylist(localId, cloudId);
+      if (wasPinned) {
+        await HiveStorage.unpinPlaylist(localId);
+        await HiveStorage.pinPlaylist(cloudId);
+      }
+      _loadData();
+    };
+    try {
+      await _cloud.flushPending();
+      // Re-hydrate so the UI reflects whatever the server now holds (adopted
+      // UUIDs, applied removals, rejected ops).
+      await _hydrateAfterFlush(uid);
+    } catch (_) {
+      // Best-effort; local Hive remains authoritative and the ops stay queued.
+    }
+    _loadData();
+  }
+
+  /// Called by the shared connectivity source on an offline→online transition.
+  ///
+  /// Gated on readiness: replaying before auth/Hive are ready would fail every
+  /// op and burn retry budget for no reason.
+  Future<void> onConnectivityRestored() async {
+    if (!_sessionUidSet || _sessionUid == null) return; // auth not ready yet
+    await flushPendingNow();
+  }
+
+  Future<void> _hydrateAfterFlush(String uid) async {
+    final hydrated = await _cloud!.hydrateLibrary();
+    for (final h in hydrated) {
+      await HiveStorage.savePlaylist(h);
+    }
+  }
+
   /// Phase 3.4.1 — reconcile local playlists with the cloud. Never throws;
   /// the local Hive library stays authoritative for the UI throughout.
   Future<void> _syncCloudPlaylists(String uid) async {

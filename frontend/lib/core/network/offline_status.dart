@@ -27,6 +27,23 @@
 import 'package:flutter/foundation.dart';
 
 class OfflineStatus extends ChangeNotifier {
+  /// The single app-scoped instance, set by `main()`'s provider.
+  ///
+  /// A static sink is used deliberately. Reporting outcomes is a cross-cutting
+  /// concern touched by every repository and data source; threading a
+  /// dependency through all of them would be far more invasive than one
+  /// well-documented registration, and the alternative (each layer owning its
+  /// own connectivity notion) is exactly the duplication this class exists to
+  /// prevent. Null in tests that never register one, so [report] is a no-op
+  /// there rather than a crash.
+  static OfflineStatus? instance;
+
+  /// Records an outcome from anywhere without needing a BuildContext.
+  static void report({required bool succeeded, bool wasNetworkFailure = false}) {
+    instance?.reportOutcome(
+        succeeded: succeeded, wasNetworkFailure: wasNetworkFailure);
+  }
+
   bool _offline = false;
 
   /// Monotonic counter, bumped on every offline→online transition. Surfaces

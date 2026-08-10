@@ -1,3 +1,4 @@
+import '../../core/network/offline_status.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -41,6 +42,10 @@ class YouTubeMusicDataSource {
     try {
       final response = await _client.get(uri);
       if (response.statusCode == 200) {
+        // Reaching paax-api proves the device is online. This is the single
+        // choke point for catalog/search traffic, so reporting here keeps the
+        // shared offline signal accurate for Home, Artist, Album and Search.
+        OfflineStatus.report(succeeded: true);
         final bytes = response.bodyBytes;
         // Offload large payloads (search results carry per-track match blocks)
         // to a background isolate so decoding never janks the UI thread.
@@ -49,9 +54,20 @@ class YouTubeMusicDataSource {
         }
         return json.decode(utf8.decode(bytes));
       } else {
+        // The server ANSWERED — online, it just said no. Reporting success is
+        // what stops a 404 from being mistaken for "offline".
+        OfflineStatus.report(succeeded: true);
         throw Exception('API Error ${response.statusCode}: ${response.body}');
       }
     } catch (e) {
+      // Everything below is rewrapped as "Network Error: ...", which is exactly
+      // why the UI could not classify offline from the message alone — a 404
+      // became "Network Error: Exception: API Error 404". Classify HERE, where
+      // the original exception type is still intact.
+      final isTransport = !e.toString().contains('API Error');
+      if (isTransport) {
+        OfflineStatus.report(succeeded: false, wasNetworkFailure: true);
+      }
       throw Exception('Network Error: $e');
     }
   }

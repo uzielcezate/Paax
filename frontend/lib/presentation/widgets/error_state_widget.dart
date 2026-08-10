@@ -24,11 +24,20 @@ class ErrorStateWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Phase 3.4.5 — a KNOWN connectivity failure is not an error, it is a state
-    // the user can fix. Routing it here (rather than in each screen) means Home,
-    // Artist, Album, Genre and Search all get the exact offline copy from ONE
-    // change, and the wording can never drift between them.
-    if (isKnownOfflineError(rawError)) {
+    // Phase 3.4.6 — decide "offline" from the GLOBAL reachability state as well
+    // as the error text.
+    //
+    // Classifying by exception message alone was not enough: manual QA hit the
+    // generic "Something went wrong" while genuinely offline, because errors
+    // arrive here already wrapped ("Network Error: Exception: API Error ...") or
+    // reduced to a message matching none of the signatures. If the shared
+    // OfflineStatus says the backend is unreachable, then a failure on a
+    // network-backed surface is an offline failure regardless of its text.
+    //
+    // Routing this through the ONE shared error widget means Home, Artist,
+    // Album, Genre and Search all get the exact copy, and it cannot drift.
+    final globallyOffline = OfflineStatus.instance?.isOffline ?? false;
+    if (globallyOffline || isKnownOfflineError(rawError)) {
       return Center(
         child: OfflineNotice(
           onRetry: onRetry == null ? null : () async => onRetry!(),

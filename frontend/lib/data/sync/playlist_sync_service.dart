@@ -128,8 +128,17 @@ class PlaylistSyncService {
   /// this freely — the work happens once.
   Future<PlaylistFlushResult> flush(
     String userId,
-    Future<OpOutcome> Function(PlaylistOp op) execute,
-  ) {
+    Future<OpOutcome> Function(PlaylistOp op) execute, {
+    /// Called after a `create` commits, with (localId, cloudId, version).
+    /// MUST atomically rewrite every account-scoped reference before returning;
+    /// dependents are only released once it completes.
+    Future<void> Function(String localId, String cloudId, int? version)?
+        onAdopted,
+
+    /// Reports the authoritative version returned by a successful mutation, so
+    /// the next mutation for that playlist uses it.
+    Future<void> Function(String playlistId, int version)? onVersion,
+  }) {
     final existing = _inFlight;
     if (existing != null) {
       return existing.then((r) => PlaylistFlushResult(
@@ -141,7 +150,8 @@ class PlaylistSyncService {
             skippedInFlight: true,
           ));
     }
-    final future = _flushOnce(userId, execute);
+    final future =
+        _flushOnce(userId, execute, onAdopted: onAdopted, onVersion: onVersion);
     _inFlight = future;
     // ignore: discarded_futures
     future.whenComplete(() {
@@ -152,8 +162,11 @@ class PlaylistSyncService {
 
   Future<PlaylistFlushResult> _flushOnce(
     String userId,
-    Future<OpOutcome> Function(PlaylistOp op) execute,
-  ) async {
+    Future<OpOutcome> Function(PlaylistOp op) execute, {
+    Future<void> Function(String localId, String cloudId, int? version)?
+        onAdopted,
+    Future<void> Function(String playlistId, int version)? onVersion,
+  }) async {
     passCount++;
     final ops = _journal.pending(userId);
     final remaining = <PlaylistOp>[];
@@ -167,9 +180,17 @@ class PlaylistSyncService {
     /// replaying it would push wrong data. They are quarantined for the user to
     /// resolve, never silently applied and never retried.
     final poisonedPlaylists = <String>{};
+
+    /// local playlist UUID → authoritative cloud UUID, for creates adopted in
+    /// THIS pass. Persisted by [onAdopted] before dependents are released.
+    final adoptions = <String, String>{};
+
+    /// opIds of creates that failed terminally this pass.
+    final failedCreates = <String>{};
+
     var stopped = false;
 
-    for (final op in ops) {
+    for (var op in ops) {
       if (stopped) {
         remaining.add(op); // preserve strict FIFO after a network stall
         continue;
@@ -177,6 +198,29 @@ class PlaylistSyncService {
       if (poisonedPlaylists.contains(op.playlistId)) {
         quarantine.add(QuarantinedOp(op, QuarantineReason.blockedByConflict));
         continue;
+      }
+
+      // ── dependency gate (Phase 3.4.7) ──────────────────────────────────
+      // An op queued against a LOCAL playlist UUID must never be sent: the
+      // server cannot resolve that id. It waits until its create is adopted,
+      // at which point `adoptions` holds local→cloud and we rewrite it.
+      final dep = op.dependsOnOpId;
+      if (dep != null && !op.adopted) {
+        final cloudId = adoptions[op.playlistId];
+        if (cloudId == null) {
+          if (failedCreates.contains(dep)) {
+            // The create will never land — the dependent op is meaningless.
+            dropped.add(op);
+            continue;
+          }
+          remaining.add(op); // create still pending; preserve order
+          continue;
+        }
+        // Adoption happened earlier in THIS pass — rewrite and proceed.
+        op = op.adoptCloudId(cloudId);
+      } else if (adoptions.containsKey(op.playlistId)) {
+        // Defensive: an op that still names a local id after adoption.
+        op = op.adoptCloudId(adoptions[op.playlistId]!);
       }
       if (op.retryCount >= maxRetries) {
         dropped.add(op);
@@ -187,8 +231,10 @@ class PlaylistSyncService {
       OpOutcome outcome;
       int? actualVersion;
       PlaylistFailureKind? failureKind;
+      _ExecResult? exec;
       try {
-        outcome = await execute(op);
+        exec = await _run(execute, op);
+        outcome = exec.outcome;
       } on _ConflictSignal catch (s) {
         outcome = OpOutcome.conflict;
         actualVersion = s.actualVersion;
@@ -235,6 +281,24 @@ class PlaylistSyncService {
 
       switch (outcome) {
         case OpOutcome.success:
+          // ── UUID adoption transaction (Phase 3.4.7) ───────────────────
+          // Order matters and is the whole point: persist the mapping FIRST,
+          // then release dependents. If the app dies between the RPC and
+          // onAdopted, the create is replayed — which is safe because
+          // playlist_create is called with the client id, so the server
+          // upserts the same row rather than creating a second one.
+          if (op.type == PlaylistOpType.create) {
+            final cloudId = exec?.cloudPlaylistId ?? op.playlistId;
+            adoptions[op.playlistId] = cloudId;
+            if (onAdopted != null) {
+              await onAdopted(op.playlistId, cloudId, exec?.version);
+            }
+          }
+          if (exec?.version != null && onVersion != null) {
+            // Persist the authoritative version BEFORE the next op for this
+            // playlist is dequeued, so mutation N+1 uses version N.
+            await onVersion(op.playlistId, exec!.version!);
+          }
           break; // applied on the cloud — drop from the queue
 
         case OpOutcome.conflict:
@@ -248,6 +312,7 @@ class PlaylistSyncService {
           break;
 
         case OpOutcome.forbidden:
+          if (op.type == PlaylistOpType.create) failedCreates.add(op.opId);
           forbidden.add(op);
           quarantine.add(QuarantinedOp(op, QuarantineReason.forbidden));
           poisonedPlaylists.add(op.playlistId);
@@ -261,6 +326,7 @@ class PlaylistSyncService {
           break;
 
         case OpOutcome.drop:
+          if (op.type == PlaylistOpType.create) failedCreates.add(op.opId);
           dropped.add(op); // permanent, non-conflict — remove and keep going
           break;
 
@@ -308,6 +374,55 @@ class PlaylistSyncService {
     _inFlight = null;
     passCount = 0;
   }
+}
+
+/// What one executed operation reported back.
+class _ExecResult {
+  final OpOutcome outcome;
+
+  /// Authoritative cloud playlist id (create only).
+  final String? cloudPlaylistId;
+
+  /// Authoritative playlist version returned by the mutation.
+  final int? version;
+
+  const _ExecResult(this.outcome, {this.cloudPlaylistId, this.version});
+}
+
+/// Adapts the caller's `execute` callback, which returns a plain [OpOutcome],
+/// to the richer [_ExecResult] the adoption/version logic needs.
+///
+/// The extra facts arrive out-of-band via [signalApplied] so the public
+/// callback signature stays a simple `Future<OpOutcome> Function(PlaylistOp)`
+/// — existing callers and every test keep compiling unchanged.
+Future<_ExecResult> _run(
+  Future<OpOutcome> Function(PlaylistOp op) execute,
+  PlaylistOp op,
+) async {
+  _lastApplied = null;
+  final outcome = await execute(op);
+  final applied = _lastApplied;
+  _lastApplied = null;
+  return _ExecResult(
+    outcome,
+    cloudPlaylistId: applied?.cloudPlaylistId,
+    version: applied?.version,
+  );
+}
+
+class _AppliedFacts {
+  final String? cloudPlaylistId;
+  final int? version;
+  const _AppliedFacts({this.cloudPlaylistId, this.version});
+}
+
+_AppliedFacts? _lastApplied;
+
+/// Called by an `execute` implementation immediately after a successful
+/// mutation to report the authoritative cloud id and version.
+void signalApplied({String? cloudPlaylistId, int? version}) {
+  _lastApplied =
+      _AppliedFacts(cloudPlaylistId: cloudPlaylistId, version: version);
 }
 
 /// Internal carrier so `execute` can report the authoritative version alongside
