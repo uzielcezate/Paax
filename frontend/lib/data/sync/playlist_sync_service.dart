@@ -183,7 +183,9 @@ class PlaylistSyncService {
 
     /// local playlist UUID → authoritative cloud UUID, for creates adopted in
     /// THIS pass. Persisted by [onAdopted] before dependents are released.
-    final adoptions = <String, String>{};
+    // Seeded from the DURABLE map so an adoption recorded in a previous pass
+    // still releases its dependents in this one.
+    final adoptions = <String, String>{..._journal.adoptions(userId)};
 
     /// opIds of creates that failed terminally this pass.
     final failedCreates = <String>{};
@@ -290,6 +292,9 @@ class PlaylistSyncService {
           if (op.type == PlaylistOpType.create) {
             final cloudId = exec?.cloudPlaylistId ?? op.playlistId;
             adoptions[op.playlistId] = cloudId;
+            // Durable FIRST: if the process dies here, the next pass still
+            // knows local→cloud and dependents are not stranded.
+            await _journal.recordAdoption(userId, op.playlistId, cloudId);
             if (onAdopted != null) {
               await onAdopted(op.playlistId, cloudId, exec?.version);
             }
@@ -344,6 +349,7 @@ class PlaylistSyncService {
     }
 
     await _journal.replaceAll(userId, remaining);
+    await _journal.pruneAdoptions(userId);
     if (quarantine.isNotEmpty) {
       await _journal.quarantineAll(userId, quarantine);
     }

@@ -2,28 +2,36 @@
 //
 // One app-scoped source of truth for "are we offline?" (Phase 3.4.5).
 //
-// WHY NOT A CONNECTIVITY PLUGIN, AND WHY NOT PER-SCREEN
-// -----------------------------------------------------
-// Two constraints shaped this:
+// TWO SIGNALS, ONE TRUTH (revised Phase 3.4.8)
+// --------------------------------------------
+// Offline status combines two sources, because neither alone is sufficient:
 //
-//   1. Screens must not each open their own connectivity subscription. Five
-//      screens × one listener each is five things to leak, and this codebase
-//      has already been bitten by duplicated listeners.
-//   2. The OS connectivity flag answers the wrong question. It reports "an
-//      interface is up", which is true on a captive portal, on a VPN that is
-//      down, and while Supabase itself is unreachable — all of which are
-//      offline from the user's point of view. During the 2026-08-08 incident
-//      the device had connectivity and the backend still refused everything.
+//   1. REQUEST OUTCOMES (authoritative). The OS connectivity flag answers the
+//      wrong question — it reports "an interface is up", which is true on a
+//      captive portal, on a dead VPN, and while Supabase itself is unreachable.
+//      During the 2026-08-08 incident the device had connectivity and the
+//      backend refused everything. So what we actually believe about
+//      reachability comes from real request results, via [reportOutcome].
 //
-// So offline status is DERIVED FROM ACTUAL REQUEST OUTCOMES, reusing the
-// failure taxonomy from Phase 3.4.4: a `transientNetwork` failure marks us
-// offline, any success marks us online. That is both cheaper and more truthful
-// than asking the platform, and it adds no new subscription anywhere.
+//   2. OS CONNECTIVITY EVENTS (trigger only). Outcomes alone cannot detect
+//      COMING BACK: while offline nothing calls the network, so nothing ever
+//      reports success, so `offline → online` never fires. That was the
+//      reconnect bug — the journal only replayed when the user happened to
+//      perform some unrelated action that hit the network. The connectivity
+//      stream supplies the missing edge. It is event-driven (never polled) and
+//      only a hint; a wrong hint is corrected by the next request outcome.
+//
+// There is exactly ONE subscription, owned here and started by main(). Screens
+// must never open their own — five screens × one listener each is five things
+// to leak, and this codebase has already been bitten by duplicated listeners.
 //
 // This class also owns the single-flight reconnect registry, so a surface can
 // ask to refresh exactly once when connectivity returns without each screen
 // inventing its own guard.
 
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 class OfflineStatus extends ChangeNotifier {
@@ -42,6 +50,48 @@ class OfflineStatus extends ChangeNotifier {
   static void report({required bool succeeded, bool wasNetworkFailure = false}) {
     instance?.reportOutcome(
         succeeded: succeeded, wasNetworkFailure: wasNetworkFailure);
+  }
+
+  /// THE MISSING RECONNECT SIGNAL (Phase 3.4.8).
+  ///
+  /// Until now this class was derived PURELY from request outcomes. That works
+  /// for detecting we went offline (a mutation fails), but it cannot detect
+  /// coming back: nothing calls the network while offline, so nothing ever
+  /// reported success, so `offline → online` never fired and the journal was
+  /// never replayed. The user had to perform some unrelated action that
+  /// happened to hit the network — which is exactly what manual QA observed
+  /// ("performing another server-interacting action can cause the pending
+  /// operation to finally replay").
+  ///
+  /// So we now also observe the OS connectivity stream. It is event-driven —
+  /// no polling — and it is only a HINT: a connectivity event means "an
+  /// interface came up", not "the backend is reachable" (captive portals, VPNs,
+  /// a down backend). We therefore treat it as a trigger to re-verify, and the
+  /// authoritative online/offline decision still comes from real request
+  /// outcomes via [reportOutcome].
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+
+  /// Registers the single app-scoped connectivity observer. Idempotent — a
+  /// second call is a no-op, so there can never be two subscriptions.
+  void startObserving({Stream<List<ConnectivityResult>>? stream}) {
+    if (_connectivitySub != null) return;
+    final source = stream ?? Connectivity().onConnectivityChanged;
+    _connectivitySub = source.listen(_onConnectivityEvent);
+  }
+
+  void _onConnectivityEvent(List<ConnectivityResult> results) {
+    final hasInterface =
+        results.any((r) => r != ConnectivityResult.none);
+    if (!hasInterface) {
+      _setOffline(true);
+      return;
+    }
+    // An interface exists. If we believed we were offline, this is a candidate
+    // reconnect — flip to online so listeners (journal replay, cached
+    // surfaces) run exactly once. If the backend is still unreachable, the
+    // very next failed request flips us back, and the refresh generation
+    // guarantees the retry is bounded rather than a loop.
+    if (_offline) _setOffline(false);
   }
 
   bool _offline = false;
@@ -114,14 +164,43 @@ class OfflineStatus extends ChangeNotifier {
     return future;
   }
 
+  /// The account this refresh state belongs to.
+  String? _boundUserId;
+  bool _boundUserSet = false;
+
   /// Drops per-account state on sign-out / account switch.
+  ///
+  /// IDEMPOTENT PER IDENTITY. This is called from a ProxyProvider `update`,
+  /// which runs on EVERY AuthController notification — state transitions,
+  /// isSubmitting toggles, background reconciliation — not just on an account
+  /// change. Clearing unconditionally erased [_refreshedThisGeneration] over
+  /// and over, so "at most one flush per reconnect" silently stopped holding:
+  /// the guard was reset faster than it could guard.
+  ///
+  /// That is the same shape as the defect behind the 2026-08-08 incident — a
+  /// guard that looks present but never actually blocks — so it is worth being
+  /// explicit: state is dropped ONLY when the identity genuinely changes.
   void onUserSession(String? userId) {
+    if (_boundUserSet && userId == _boundUserId) return; // same identity
+    _boundUserId = userId;
+    _boundUserSet = true;
     _refreshedThisGeneration.clear();
     _inFlight.clear();
   }
 
   @visibleForTesting
   void debugSetOffline(bool value) => _setOffline(value);
+
+  @override
+  void dispose() {
+    // ignore: discarded_futures
+    _connectivitySub?.cancel();
+    _connectivitySub = null;
+    super.dispose();
+  }
+
+  @visibleForTesting
+  bool get isObserving => _connectivitySub != null;
 
   @visibleForTesting
   void resetForTest() {

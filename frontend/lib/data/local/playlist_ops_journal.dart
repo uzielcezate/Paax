@@ -21,6 +21,7 @@ import '../sync/playlist_sync_service.dart';
 class PlaylistOpsJournal {
   static const String boxName = 'playlist_ops';
   static String _quarantineKey(String userId) => '$userId::quarantine';
+  static String _adoptionKey(String userId) => '$userId::adoptions';
 
   Box get _box => Hive.box(boxName);
 
@@ -63,6 +64,7 @@ class PlaylistOpsJournal {
   Future<void> clearUser(String userId) async {
     await _box.delete(userId);
     await _box.delete(_quarantineKey(userId));
+    await _box.delete(_adoptionKey(userId));
   }
 
   bool hasPending(String userId) => pending(userId).isNotEmpty;
@@ -127,6 +129,43 @@ class PlaylistOpsJournal {
 
   Future<void> clearQuarantine(String userId) =>
       _box.delete(_quarantineKey(userId));
+
+  // ── adoption map (local playlist UUID → cloud UUID) ───────────────────────
+  //
+  // MUST be durable. It was previously in-memory for the duration of ONE flush
+  // pass, so if a pass ended between the create succeeding and its dependents
+  // running (a network stall, or the app closing), the next pass had no record
+  // that localId→cloudId. The create was gone from the queue, so dependents
+  // waited forever on a parent that no longer existed and were silently
+  // stranded. That is the "offline create P, add A, reconnect → P exists,
+  // A missing" bug.
+
+  Map<String, String> adoptions(String userId) {
+    final raw = _box.get(_adoptionKey(userId));
+    if (raw is! Map) return {};
+    return raw.map((k, v) => MapEntry(k.toString(), v.toString()));
+  }
+
+  Future<void> recordAdoption(
+      String userId, String localId, String cloudId) async {
+    if (localId == cloudId) return;
+    final map = adoptions(userId)..[localId] = cloudId;
+    await _box.put(_adoptionKey(userId), map);
+  }
+
+  /// Adoptions are only useful while ops still reference the local id. Pruned
+  /// once nothing queued refers to it, so the map cannot grow unbounded.
+  Future<void> pruneAdoptions(String userId) async {
+    final map = adoptions(userId);
+    if (map.isEmpty) return;
+    final live = pending(userId).map((o) => o.playlistId).toSet();
+    map.removeWhere((localId, _) => !live.contains(localId));
+    if (map.isEmpty) {
+      await _box.delete(_adoptionKey(userId));
+    } else {
+      await _box.put(_adoptionKey(userId), map);
+    }
+  }
 
   // ── compaction ─────────────────────────────────────────────────────────────
 

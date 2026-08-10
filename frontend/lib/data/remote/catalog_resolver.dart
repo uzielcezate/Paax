@@ -24,11 +24,18 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../api/youtube_music_data_source.dart';
+
 class CatalogResolver {
   final SupabaseClient _client;
 
-  CatalogResolver([SupabaseClient? client])
-      : _client = client ?? Supabase.instance.client;
+  /// paax-api client, used ONLY to trigger catalog ingestion for a track that
+  /// Supabase does not have yet. Injectable for tests.
+  final YouTubeMusicDataSource _api;
+
+  CatalogResolver([SupabaseClient? client, YouTubeMusicDataSource? api])
+      : _client = client ?? Supabase.instance.client,
+        _api = api ?? YouTubeMusicDataSource();
 
   // ── SharedPreferences cache keys (per entity type) ──
   static const String _kArtistsCache = 'catalog_resolver_artists_v1';
@@ -166,6 +173,31 @@ class CatalogResolver {
   /// the server never received.
   ///
   /// Backed by `idx_tracks_preferred_youtube_video_id`.
+  /// Asks paax-api for each track, which upserts it into the Supabase catalog
+  /// as a side effect, so a subsequent resolve can find it.
+  ///
+  /// Exists because Artist Top Tracks is the only add-to-playlist entry point
+  /// that never triggers ingestion (Album/Search/Player all hit endpoints that
+  /// upsert the catalog graph). Bounded: capped, best-effort, and never
+  /// retried here — the caller re-resolves once and then fails explicitly.
+  Future<void> ingestTracks(Iterable<String> deezerIds) async {
+    final ids = deezerIds
+        .map((e) => e.trim())
+        .where((e) => int.tryParse(e) != null)
+        .toSet()
+        .take(20) // hard cap: never turn one add into a burst of requests
+        .toList();
+    if (ids.isEmpty) return;
+    await Future.wait(ids.map((id) async {
+      try {
+        await _api.getTrackV2(int.parse(id));
+      } catch (_) {
+        // Best-effort. An un-ingestable track becomes an explicit
+        // localIntegrity failure upstream, never a silent drop.
+      }
+    }));
+  }
+
   Future<Map<String, String>> resolveTracksByVideoId(
       Iterable<String?> videoIds) async {
     await _ensureLoaded();
