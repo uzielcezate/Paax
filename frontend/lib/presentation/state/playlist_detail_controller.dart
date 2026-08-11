@@ -89,7 +89,17 @@ class PlaylistDetailController extends ChangeNotifier {
   String _visibility;
   int? _followerCount;
   DateTime? _lastModifiedAt;
-  int _version = 1;
+  /// AUTHORITATIVE version, or null when we have never obtained one.
+  ///
+  /// This used to default to `1`. If `load()`/`refresh()` had not yet populated
+  /// it — the screen opened before the fetch returned, or the fetch failed —
+  /// Save sent `expected_version: 1` against a server at, say, 16. The server
+  /// correctly rejected it and the client showed "This playlist changed on
+  /// another device" for the device's OWN mutation. Null now means "we do not
+  /// know the version, so do not assert one", which preserves optimistic
+  /// concurrency exactly where we genuinely know it and removes the fabricated
+  /// conflict where we do not.
+  int? _version;
   bool _isFollowing = false;
   PlaylistActivity? _latestActivity;
   bool _followBusy = false;
@@ -117,7 +127,7 @@ class PlaylistDetailController extends ChangeNotifier {
   String get visibility => _visibility;
   int? get followerCount => _followerCount;
   DateTime? get lastModifiedAt => _lastModifiedAt;
-  int get version => _version;
+  int? get version => _version;
   bool get isFollowing => _isFollowing;
   PlaylistActivity? get latestActivity => _latestActivity;
 
