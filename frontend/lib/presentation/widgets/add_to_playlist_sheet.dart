@@ -1,7 +1,7 @@
+import '../../domain/entities/playlist_mutation_result.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../domain/entities/track.dart';
-import '../../domain/entities/playlist.dart';
 import '../state/library_controller.dart';
 import '../../core/theme/app_colors.dart';
 import 'playlist_cover.dart';
@@ -104,17 +104,36 @@ class _AddToPlaylistContent extends StatelessWidget {
                       ? Icon(Icons.check, color: sheetFg)
                       : null,
                   onTap: () {
-                    if (!alreadyAdded) {
-                      library.addTracksToPlaylist(pl, tracks);
-                      Navigator.pop(context); 
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text("Added to ${pl.name}", style: TextStyle(color: sheetFg.withOpacity(0.54))),
-                          backgroundColor: sheetBg,
-                          behavior: SnackBarBehavior.floating,
-                        )
-                      );
-                    }
+                    if (alreadyAdded) return;
+                    final messenger = ScaffoldMessenger.of(context);
+                    Navigator.pop(context);
+                    // Report the ACTUAL outcome. This previously announced
+                    // "Added to <playlist>" synchronously, before the mutation
+                    // ran and regardless of whether it succeeded — so a track
+                    // the server never received still looked added.
+                    // ignore: discarded_futures
+                    library.addTracksToPlaylist(pl, tracks).then((result) {
+                      messenger.showSnackBar(SnackBar(
+                        content: Text(
+                          switch (result) {
+                            PlaylistMutationResult.applied =>
+                              "Added to ${pl.name}",
+                            PlaylistMutationResult.queuedOffline =>
+                              "Added — will sync when you're back online",
+                            PlaylistMutationResult.conflict =>
+                              "${pl.name} changed on another device. Reopen it and try again.",
+                            PlaylistMutationResult.forbidden =>
+                              "You no longer have permission to edit ${pl.name}",
+                            PlaylistMutationResult.failed =>
+                              "Couldn't add to ${pl.name} — that song isn't available in Paax yet",
+                          },
+                          style: TextStyle(color: sheetFg.withOpacity(0.54)),
+                        ),
+                        backgroundColor: sheetBg,
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 3),
+                      ));
+                    });
                   },
                 );
               },

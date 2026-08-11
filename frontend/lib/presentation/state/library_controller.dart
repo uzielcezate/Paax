@@ -238,9 +238,56 @@ class LibraryController extends ChangeNotifier {
           ),
         ));
       }
+      await _reconcileRemoteDeletions(uid, hydrated);
       _loadData();
     } catch (_) {
       // Best-effort; local library remains authoritative.
+    }
+  }
+
+  /// Removes locally-cached CLOUD playlists that the server has authoritatively
+  /// deleted.
+  ///
+  /// `hydrateLibrary` filters `deleted_at is null`, so a remotely soft-deleted
+  /// playlist simply does not appear in its result — and the merge loop only
+  /// ADDS and UPDATES. Nothing ever reconciled absence, so a deleted playlist
+  /// stayed in the Library forever and deleting it again could not help (the
+  /// server row was already gone). Confirmed on "aaaaaaa"
+  /// (abd6d153-…, deleted_at set, ONE track — so membership size was never
+  /// the cause).
+  ///
+  /// ABSENCE IS NOT PROOF OF DELETION. A playlist can be missing from hydration
+  /// because of RLS, a permission change, or a failed request. So each absent
+  /// playlist is checked individually with `fetchPlaylist`, which selects by id
+  /// WITHOUT a deleted filter:
+  ///
+  ///   row with deleted_at != null  → authoritatively deleted  → remove locally
+  ///   row with deleted_at == null  → still live (hydration lag) → keep
+  ///   null (RLS/not visible)       → ambiguous                 → keep
+  ///   throws (network)             → unknown                   → keep
+  ///
+  /// Only the first case deletes anything.
+  Future<void> _reconcileRemoteDeletions(
+      String uid, List<Playlist> hydrated) async {
+    if (!_cloudEnabled) return;
+    final hydratedIds = hydrated.map((p) => p.id).toSet();
+    final candidates = HiveStorage.getPlaylists()
+        .where((p) => isUuid(p.id) && !hydratedIds.contains(p.id))
+        // A playlist still awaiting its cloud create is local-only by design.
+        .where((p) => !_cloud!.isLocalOnly(p.id))
+        .toList();
+
+    for (final p in candidates) {
+      try {
+        final row = await _cloud!.fetchPlaylist(p.id);
+        if (row == null) continue; // not visible ≠ deleted
+        if (row['deleted_at'] == null) continue; // still live
+        // Authoritatively deleted — drop it and its device-local pin.
+        await HiveStorage.deletePlaylist(p.id);
+        await HiveStorage.unpinPlaylist(p.id);
+      } catch (_) {
+        // Network/permission failure — keep the cached playlist.
+      }
     }
   }
 
@@ -344,29 +391,99 @@ class LibraryController extends ChangeNotifier {
         _cloud!.createPlaylist(name: name, visibility: 'private', tracks: const [], clientId: id));
   }
 
-  Future<void> addToPlaylist(Playlist playlist, Track track) async {
-    // Check for duplicates
-    if (!playlist.tracks.any((t) => t.id == track.id)) {
-      // Appended after the current maximum position (list end); positions are
-      // re-normalized on persist so they stay contiguous with no duplicates.
-      playlist.tracks.add(track);
-      await _persistPlaylist(playlist);
-      await _pushCloud(playlist.id, () => _cloud!.addTracks(playlist.id, [track]));
+  /// Adds [track] and reports the CANONICAL outcome.
+  ///
+  /// This used to push through `_pushCloud`, which SWALLOWS every error. So a
+  /// track that could not be resolved to a catalog UUID failed silently: no
+  /// error, no rollback, and the optimistic row sat in the UI until some later
+  /// authoritative refresh quietly removed it. That is the "adds from Artist
+  /// Top Tracks don't persist" report — the failure was real and was being
+  /// hidden. Now it surfaces once and the optimistic insert is reverted, so the
+  /// UI never claims a track the server refused.
+  Future<PlaylistMutationResult> addToPlaylist(
+      Playlist playlist, Track track) async {
+    if (playlist.tracks.any((t) => t.id == track.id)) {
+      return PlaylistMutationResult.applied; // already present
+    }
+    // Appended after the current maximum position (list end); positions are
+    // re-normalized on persist so they stay contiguous with no duplicates.
+    playlist.tracks.add(track);
+    await _persistPlaylist(playlist);
+
+    if (!_cloudEnabled || !isUuid(playlist.id)) {
+      return PlaylistMutationResult.applied; // local-only playlist
+    }
+    try {
+      await _cloud!.addTracks(playlist.id, [track]);
+      return PlaylistMutationResult.applied;
+    } on PlaylistConflictException {
+      await _removeTrackLocally(playlist, track);
+      return PlaylistMutationResult.conflict;
+    } on PlaylistForbiddenException {
+      await _removeTrackLocally(playlist, track);
+      return PlaylistMutationResult.forbidden;
+    } catch (e) {
+      final kind = PlaylistRepository.classifyPlaylistOpError(e).kind;
+      if (kind == PlaylistFailureKind.transientNetwork) {
+        return PlaylistMutationResult.queuedOffline; // journalled for replay
+      }
+      await _removeTrackLocally(playlist, track);
+      return PlaylistMutationResult.failed;
     }
   }
 
-  Future<void> addTracksToPlaylist(Playlist playlist, List<Track> tracks) async {
+  /// Reverts an optimistic insert.
+  Future<void> _removeTrackLocally(Playlist playlist, Track track) async {
+    playlist.tracks.removeWhere((t) => t.id == track.id);
+    await _persistPlaylist(playlist);
+  }
+
+  /// Adds [tracks] and reports the CANONICAL outcome.
+  ///
+  /// This is the path the "Add to Playlist" sheet uses, and it had the same
+  /// swallow-everything defect as [addToPlaylist]: `_pushCloud` discarded the
+  /// error, so an unresolvable track produced no error and no rollback while
+  /// the sheet had already told the user "Added to the playlist". The optimistic
+  /// rows then vanished at the next authoritative refresh, which is exactly the
+  /// Artist Top Tracks report.
+  Future<PlaylistMutationResult> addTracksToPlaylist(
+      Playlist playlist, List<Track> tracks) async {
     final added = <Track>[];
-    for (var track in tracks) {
+    for (final track in tracks) {
       if (!playlist.tracks.any((t) => t.id == track.id)) {
         playlist.tracks.add(track);
         added.add(track);
       }
     }
-    if (added.isNotEmpty) {
-      await _persistPlaylist(playlist);
-      await _pushCloud(playlist.id, () => _cloud!.addTracks(playlist.id, added));
+    if (added.isEmpty) return PlaylistMutationResult.applied;
+    await _persistPlaylist(playlist);
+
+    if (!_cloudEnabled || !isUuid(playlist.id)) {
+      return PlaylistMutationResult.applied;
     }
+    try {
+      await _cloud!.addTracks(playlist.id, added);
+      return PlaylistMutationResult.applied;
+    } on PlaylistConflictException {
+      await _removeTracksLocally(playlist, added);
+      return PlaylistMutationResult.conflict;
+    } on PlaylistForbiddenException {
+      await _removeTracksLocally(playlist, added);
+      return PlaylistMutationResult.forbidden;
+    } catch (e) {
+      final kind = PlaylistRepository.classifyPlaylistOpError(e).kind;
+      if (kind == PlaylistFailureKind.transientNetwork) {
+        return PlaylistMutationResult.queuedOffline; // journalled for replay
+      }
+      await _removeTracksLocally(playlist, added);
+      return PlaylistMutationResult.failed;
+    }
+  }
+
+  Future<void> _removeTracksLocally(Playlist playlist, List<Track> tracks) async {
+    final ids = tracks.map((t) => t.id).toSet();
+    playlist.tracks.removeWhere((t) => ids.contains(t.id));
+    await _persistPlaylist(playlist);
   }
 
   /// Removes [track] from [playlist] and reports the CANONICAL outcome.
