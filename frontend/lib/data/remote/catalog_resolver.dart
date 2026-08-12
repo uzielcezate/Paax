@@ -181,19 +181,53 @@ class CatalogResolver {
   /// upsert the catalog graph). Bounded: capped, best-effort, and never
   /// retried here — the caller re-resolves once and then fails explicitly.
   Future<void> ingestTracks(Iterable<String> deezerIds) async {
+    // Retained for callers that only have track ids; see ingestAlbums for the
+    // path that actually populates the catalog.
     final ids = deezerIds
         .map((e) => e.trim())
         .where((e) => int.tryParse(e) != null)
         .toSet()
-        .take(20) // hard cap: never turn one add into a burst of requests
+        .take(20)
         .toList();
     if (ids.isEmpty) return;
     await Future.wait(ids.map((id) async {
       try {
         await _api.getTrackV2(int.parse(id));
+      } catch (_) {/* best-effort */}
+    }));
+  }
+
+  /// Ingests a track's ALBUM, which is what actually upserts the catalog.
+  ///
+  /// PROVEN 2026-08-11: `/v2/track/{deezerId}` returns data but does NOT write
+  /// to Supabase — after calling it for CLASSY 101 (2216510797), BIAF <3
+  /// (3936484551) and Chulo pt.2 (2328294525), `public.tracks` still held zero
+  /// rows for all three. `/v2/albums/deezer/{albumDeezerId}` DOES upsert the
+  /// whole album graph: one call created
+  /// `a3d2fe3c-0b65-499e-b968-24f0e82cfed2` for CLASSY 101.
+  ///
+  /// That is also why "open the album first, then add" always worked — opening
+  /// an album performs exactly this ingest as a side effect. Adding straight
+  /// from Artist Top Tracks skipped it, so the track was never catalogued.
+  ///
+  /// Bounded and idempotent: capped, deduplicated by album, best-effort per
+  /// album, and never retried here — the caller re-resolves once and then fails
+  /// explicitly. The upsert is keyed by Deezer id server-side, so concurrent
+  /// callers converge on ONE canonical row rather than creating duplicates.
+  Future<void> ingestAlbums(Iterable<String?> albumDeezerIds) async {
+    final ids = albumDeezerIds
+        .map((e) => (e ?? '').trim())
+        .where((e) => int.tryParse(e) != null)
+        .toSet()
+        .take(10) // one add must never become a burst of requests
+        .toList();
+    if (ids.isEmpty) return;
+    await Future.wait(ids.map((id) async {
+      try {
+        await _api.getAlbumNormalizedByDeezerId(int.parse(id));
       } catch (_) {
-        // Best-effort. An un-ingestable track becomes an explicit
-        // localIntegrity failure upstream, never a silent drop.
+        // Best-effort. A track whose album cannot be ingested becomes an
+        // explicit localIntegrity failure upstream, never a silent drop.
       }
     }));
   }
