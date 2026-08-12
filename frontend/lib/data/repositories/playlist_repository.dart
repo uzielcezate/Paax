@@ -123,13 +123,19 @@ class PlaylistRepository {
     // Bounded and non-recursive: one ingest attempt, one re-resolve, then an
     // explicit failure.
     if (r.unresolved.isNotEmpty) {
-      final ingestable = r.unresolved
-          .where((t) => int.tryParse((t.deezerTrackId ?? '').trim()) != null)
-          .toList();
-      if (ingestable.isNotEmpty) {
-        await _resolver.ingestTracks(
-            ingestable.map((t) => t.deezerTrackId!.trim()));
-        r = await _resolveTracks(tracks);
+      // Ingest via the track's ALBUM. `/v2/track/{id}` returns data but does
+      // NOT write to Supabase (verified: three top-track ids still had zero
+      // catalog rows after calling it), whereas `/v2/albums/deezer/{id}`
+      // upserts the whole album graph. That is exactly why "open the album
+      // first, then add" always worked and adding straight from Artist Top
+      // Tracks did not.
+      final albumIds = r.unresolved
+          .map((t) => t.albumId.trim())
+          .where((id) => int.tryParse(id) != null)
+          .toSet();
+      if (albumIds.isNotEmpty) {
+        await _resolver.ingestAlbums(albumIds);
+        r = await _resolveTracks(tracks); // ONE re-resolve, never a loop
       }
     }
 
