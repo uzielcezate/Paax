@@ -163,10 +163,20 @@ class LibraryController extends ChangeNotifier {
       // with the membership query's artist-less skeletons — the "Unknown
       // Artist after replay" bug. Membership and ORDER come from the server;
       // per-track metadata is kept from the local cache where it is richer.
-      final merged = PlaylistRepository.reconcileTracks(
+      var merged = PlaylistRepository.reconcileTracks(
         cached: existing.tracks,
         cloud: h.tracks,
       );
+      // A reorder that has NOT reached the server yet must not be visually
+      // undone by the authoritative read that follows the flush. Membership
+      // still comes from the server; only the ORDER stays the user's until
+      // their queued reorder replays.
+      if (_cloud.hasPendingReorder(h.id)) {
+        merged = PlaylistRepository.preservePendingOrder(
+          authoritative: merged,
+          localOrder: existing.tracks,
+        );
+      }
       await HiveStorage.savePlaylist(existing.copyWith(
         ownerId: h.ownerId,
         ownerUsername: h.ownerUsername,
@@ -226,16 +236,23 @@ class LibraryController extends ChangeNotifier {
         // `savePlaylist(h)`, replacing rich local Tracks with the membership
         // query's artist-less skeletons. The second is the Unknown-Artist bug
         // on the sign-in path, which the post-flush fix alone did not cover.
+        var merged = PlaylistRepository.reconcileTracks(
+          cached: existing.tracks,
+          cloud: h.tracks,
+        );
+        if (_cloud.hasPendingReorder(h.id)) {
+          merged = PlaylistRepository.preservePendingOrder(
+            authoritative: merged,
+            localOrder: existing.tracks,
+          );
+        }
         await HiveStorage.savePlaylist(existing.copyWith(
           ownerId: h.ownerId,
           ownerUsername: h.ownerUsername,
           visibility: h.visibility,
           isCollaborative: h.isCollaborative,
           collaboratorsJson: h.collaboratorsJson,
-          tracks: PlaylistRepository.reconcileTracks(
-            cached: existing.tracks,
-            cloud: h.tracks,
-          ),
+          tracks: merged,
         ));
       }
       await _reconcileRemoteDeletions(uid, hydrated);

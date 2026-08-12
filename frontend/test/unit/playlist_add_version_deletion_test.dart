@@ -6,6 +6,7 @@
 // established — that an add succeeded, that it knew the playlist version, or
 // that a playlist still existed. Each test states the assertion that was wrong.
 
+import 'package:beaty/data/repositories/playlist_repository.dart';
 import 'package:beaty/domain/entities/playlist_mutation_result.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -61,8 +62,14 @@ void main() {
     // The defect: PlaylistDetailController.version defaulted to 1, so a screen
     // whose load had not completed sent expected_version=1 against a server at
     // (say) 16 and the client reported its OWN mutation as an external change.
+    //
+    // Phase 3.4.11: this used to re-implement the rule as `lane ?? screen`,
+    // which meant it kept passing after production changed — and it encoded the
+    // *self-conflict* half of the bug as if it were correct. It now calls the
+    // real selector, so these cases are a genuine lock. See
+    // membership_and_version_test.dart for the full contract.
     int? effectiveExpectedVersion({int? laneVersion, int? screenVersion}) =>
-        laneVersion ?? screenVersion;
+        PlaylistRepository.authoritativeVersion(laneVersion, screenVersion);
 
     test('an unknown version sends NULL, not a fabricated 1', () {
       expect(effectiveExpectedVersion(laneVersion: null, screenVersion: null),
