@@ -27,6 +27,29 @@ import '../sync/playlist_op.dart';
 import '../sync/playlist_op_failure.dart';
 import '../sync/playlist_sync_service.dart';
 
+/// What a queued reorder should do when it is finally replayed.
+enum SaveOrderReplayAction {
+  /// Membership still matches — push the intended order.
+  send,
+
+  /// The playlist's contents changed while we were offline, so the intended
+  /// order is no longer applicable. TERMINAL: surfaced once, never retried.
+  membershipConflict,
+
+  /// The playlist is deleted or no longer visible to this user.
+  playlistGone,
+}
+
+class SaveOrderReplayPlan {
+  final SaveOrderReplayAction action;
+
+  /// The version to assert, re-derived at replay time — never the one captured
+  /// while offline.
+  final int? expectedVersion;
+
+  const SaveOrderReplayPlan(this.action, {this.expectedVersion});
+}
+
 class PlaylistRepository {
   final PlaylistRemoteDataSource _remote;
   final CatalogResolver _resolver;
@@ -221,7 +244,8 @@ class PlaylistRepository {
       // the server has since changed would push a wrong list. A 409 here is
       // terminal and surfaces for user recovery.
       () => _versioned(playlistId,
-          (expected) => _remote.saveOrder(playlistId, uuids, expected ?? expectedVersion),
+          (expected) => _remote.saveOrder(
+              playlistId, uuids, authoritativeVersion(expected, expectedVersion)),
           rebasable: false),
       journalOnNetworkError: uid == null
           ? null
@@ -235,6 +259,30 @@ class PlaylistRepository {
               payload: {'ids': uuids},
             ),
     );
+  }
+
+  /// The authoritative expected_version to send.
+  ///
+  /// THE SELF-CONFLICT BUG (Phase 3.4.11). This used to be
+  /// `expected ?? expectedVersion`, so the mutation lane's value won even when
+  /// it was OLDER than the version the screen had just authoritatively loaded.
+  /// Lane versions only move forward, so once the lane held a stale value —
+  /// e.g. seeded early in the session, or from a playlist opened before other
+  /// changes — every reorder sent that stale number and the server correctly
+  /// rejected it. Because reorder is deliberately non-rebasable, the client
+  /// then reported the device's OWN mutation as "changed on another device",
+  /// online and (after replay) offline alike.
+  ///
+  /// Both values are authoritative *observations* of the same monotonic
+  /// counter, so the newest one wins. Null only when neither is known, which
+  /// means "do not assert a version" rather than "assert 1".
+  ///
+  /// Public and static so the regression suite exercises THIS function rather
+  /// than a copy of its rule.
+  static int? authoritativeVersion(int? laneVersion, int? screenVersion) {
+    if (laneVersion == null) return screenVersion;
+    if (screenVersion == null) return laneVersion;
+    return laneVersion > screenVersion ? laneVersion : screenVersion;
   }
 
   /// The per-playlist mutation lane. Shared across the repository so every
@@ -388,7 +436,7 @@ class PlaylistRepository {
           playlistId,
           (expected) => _remote.updateMetadata(playlistId,
               visibility: visibility,
-              expectedVersion: expected ?? expectedVersion)),
+              expectedVersion: authoritativeVersion(expected, expectedVersion))),
       journalOnNetworkError: uid == null
           ? null
           : PlaylistOp(
@@ -471,8 +519,17 @@ class PlaylistRepository {
       _remote.transferOwnership(playlistId, newOwner);
 
   // ── reads ──
-  Future<Map<String, dynamic>?> fetchPlaylist(String playlistId) =>
-      _remote.fetchPlaylist(playlistId);
+  Future<Map<String, dynamic>?> fetchPlaylist(String playlistId) async {
+    final row = await _remote.fetchPlaylist(playlistId);
+    // Seed the lane from every authoritative read, so opening or refreshing a
+    // playlist advances the shared version rather than leaving the lane pinned
+    // to whatever it last saw. recordVersion is monotonic, so this can only
+    // move the lane FORWARD.
+    final v = row == null ? null : _versionOf(row);
+    final uid = currentUserId;
+    if (v != null && uid != null) mutationLane.recordVersion(uid, playlistId, v);
+    return row;
+  }
   Future<List<Map<String, dynamic>>> fetchTracks(String playlistId) =>
       _remote.fetchTracks(playlistId);
   Future<List<Map<String, dynamic>>> fetchCollaborators(String playlistId) =>
@@ -530,11 +587,7 @@ class PlaylistRepository {
   Future<Playlist> hydrateEntity(Map<String, dynamic> row) async {
     final id = row['id'].toString();
     final trackRows = await _remote.fetchTracks(id);
-    final tracks = <Track>[];
-    for (final tr in trackRows) {
-      final t = _mapCloudTrack(tr);
-      if (t != null) tracks.add(t);
-    }
+    final tracks = membershipFromRows(trackRows);
     final collabRows = await _remote.fetchCollaborators(id);
     final accepted =
         collabRows.where((c) => c['status']?.toString() == 'accepted').toList();
@@ -575,11 +628,61 @@ class PlaylistRepository {
     );
   }
 
-  Track? _mapCloudTrack(Map<String, dynamic> row) {
+  /// Reconstructs playlist MEMBERSHIP from authoritative `playlist_tracks`
+  /// rows, in `position` order.
+  ///
+  /// THE CARDINALITY INVARIANT (Phase 3.4.11). One authoritative row in, one
+  /// entry out. Metadata hydration is a separate concern and is never allowed
+  /// to change how many members a playlist has — the only rejected row is one
+  /// carrying no track identity whatsoever, which cannot be rendered, played,
+  /// removed or reordered by any code path.
+  ///
+  /// Sorting here (rather than trusting the query) is deliberate: the read used
+  /// to come back DESCENDING, which silently reversed every playlist. Position
+  /// order is part of the membership contract, so it is enforced where the
+  /// contract lives.
+  static List<Track> membershipFromRows(List<Map<String, dynamic>> rows) {
+    final ordered = [...rows]..sort((a, b) => _positionOf(a).compareTo(_positionOf(b)));
+    final out = <Track>[];
+    for (final row in ordered) {
+      final t = mapCloudTrack(row);
+      if (t != null) out.add(t);
+    }
+    return out;
+  }
+
+  static int _positionOf(Map<String, dynamic> row) {
+    final p = row['position'];
+    return p is int ? p : int.tryParse('${p ?? ''}') ?? 0;
+  }
+
+  /// Maps ONE `playlist_tracks` row (with its embedded `tracks` graph) to a
+  /// local [Track]. Public and static so the regression suite drives the real
+  /// implementation instead of a copy of it.
+  static Track? mapCloudTrack(Map<String, dynamic> row) {
     final t = row['tracks'];
     if (t is! Map) return null;
-    final videoId = t['preferred_youtube_video_id']?.toString();
-    if (videoId == null || videoId.isEmpty) return null; // unplayable — skip
+
+    // MEMBERSHIP IS NOT METADATA (Phase 3.4.11).
+    //
+    // This used to `return null` when `preferred_youtube_video_id` was empty,
+    // which silently REMOVED an authoritative playlist_tracks row from the UI.
+    // Since PR #92 ingests a track's album on demand, a freshly-ingested row
+    // exists with `youtube_match_status = 'pending'` and a NULL videoId for a
+    // while — so exactly the tracks the user just added (CLASSY 101, BIAF <3,
+    // Desesperados) vanished a few seconds later, while the server correctly
+    // held all six rows.
+    //
+    // A metadata gap must never mutate membership. The row is kept; the track
+    // simply cannot play yet, which the playback layer already handles
+    // ("Unable to play" + skip on auto-advance).
+    final videoId = t['preferred_youtube_video_id']?.toString() ?? '';
+    final catalogUuid = t['id']?.toString() ?? '';
+    // Track.id doubles as the playback id. Falling back to the catalog UUID
+    // keeps the entry uniquely identifiable for dedupe/removal/reorder while
+    // being obviously non-playable.
+    final trackId = videoId.isNotEmpty ? videoId : catalogUuid;
+    if (trackId.isEmpty) return null; // no identity at all — genuinely unusable
     final dur = t['duration_seconds'];
 
     // Artist names from the canonical track_artists graph. This used to be
@@ -600,7 +703,7 @@ class PlaylistRepository {
     }
 
     return Track(
-      id: videoId,
+      id: trackId,
       title: t['title']?.toString() ?? '',
       artistName: artistsList.map((a) => a['name']!).join(', '),
       artistId: artistsList.isNotEmpty ? artistsList.first['id'] : null,
@@ -659,7 +762,7 @@ class PlaylistRepository {
     if (uid == null) return const PlaylistFlushResult();
     return _sync.flush(
       uid,
-      _execute,
+      executeOp,
       onAdopted: (localId, cloudId, version) async {
         // Persist the authoritative version into the lane BEFORE dependents
         // run, so the first dependent mutation uses it rather than a stale one.
@@ -671,7 +774,145 @@ class PlaylistRepository {
     );
   }
 
-  Future<OpOutcome> _execute(PlaylistOp op) async {
+  /// Replays a queued reorder by REBASING it onto the authoritative state.
+  ///
+  /// THE OFFLINE REORDER BUG (Phase 3.4.11). This used to be a single line:
+  ///
+  ///     await _remote.saveOrder(op.playlistId, ids, op.expectedVersion);
+  ///
+  /// `op.expectedVersion` is the version captured on the device WHILE OFFLINE.
+  /// By replay time the server has almost always moved on — every queued add,
+  /// remove and metadata op ahead of this one in the very same replay pass
+  /// bumps it. So the reorder asserted a version that could not still be
+  /// current, the RPC raised PLAYLIST_VERSION_CONFLICT, the sync engine
+  /// (correctly) treated the conflict as terminal, and the positions were never
+  /// written. The user saw the reconnect replay work for every other mutation
+  /// while the old server order silently replaced their new one — and got
+  /// "changed on another device" for a change only this device had made.
+  ///
+  /// The queued payload is the INTENT (the ordered track UUIDs). A version
+  /// captured beside it is an observation, not part of the intent, so it is
+  /// re-derived here instead of being trusted. Ordering is still safe because
+  /// membership is validated against the server first: if the playlist's
+  /// contents changed while we were offline, the intended order is genuinely no
+  /// longer applicable and the op becomes a terminal conflict rather than a
+  /// blind overwrite.
+  Future<void> _replaySaveOrder(PlaylistOp op, List<String> ids) async {
+    final uid = currentUserId ?? op.userId;
+
+    // 1) The newest authoritative version, read once. A network failure here
+    //    propagates and is classified transient, so the op stays queued.
+    final row = await _remote.fetchPlaylist(op.playlistId);
+    final serverVersion = row == null ? null : _versionOf(row);
+    if (serverVersion != null) {
+      mutationLane.recordVersion(uid, op.playlistId, serverVersion);
+    }
+
+    // 2) Current membership, so we never push an order against a set the
+    //    server no longer has (which is exactly what ORDER_SET_MISMATCH
+    //    protects, but detected here with a usable reason).
+    final membership = row == null
+        ? null
+        : (await _remote.fetchTracks(op.playlistId))
+            .map((r) => r['track_id']?.toString() ?? '')
+            .where((s) => s.isNotEmpty)
+            .toList();
+
+    final plan = planSaveOrderReplay(
+      intendedOrder: ids,
+      serverMembership: membership,
+      serverVersion: serverVersion,
+      laneVersion: mutationLane.versionFor(uid, op.playlistId),
+    );
+
+    switch (plan.action) {
+      case SaveOrderReplayAction.playlistGone:
+        // Deleted or access lost. NOT_FOUND poisons the playlist's remaining
+        // ops rather than retrying an impossible write.
+        throw const PlaylistRemoteException('NOT_FOUND');
+      case SaveOrderReplayAction.membershipConflict:
+        // TERMINAL, and surfaced through the existing conflict path so the user
+        // sees the external-change message exactly once. Never retried.
+        throw PlaylistConflictException(
+            expectedVersion: op.expectedVersion, actualVersion: serverVersion);
+      case SaveOrderReplayAction.send:
+        final saved = await _remote.saveOrder(
+            op.playlistId, ids, plan.expectedVersion);
+        final v = _versionOf(saved);
+        if (v != null) mutationLane.recordVersion(uid, op.playlistId, v);
+        // Reported so the sync engine persists the version before the next op
+        // for this playlist runs.
+        signalApplied(version: v);
+    }
+  }
+
+  /// Decides what a queued reorder should do against the authoritative state
+  /// observed at replay time. Pure, so the whole decision table is testable.
+  static SaveOrderReplayPlan planSaveOrderReplay({
+    required List<String> intendedOrder,
+    required List<String>? serverMembership,
+    required int? serverVersion,
+    int? laneVersion,
+  }) {
+    if (serverMembership == null) {
+      return const SaveOrderReplayPlan(SaveOrderReplayAction.playlistGone);
+    }
+    // The RPC requires an exact set: same cardinality, no duplicates, every id
+    // present. Anything else is a membership change we cannot safely reorder.
+    final intended = intendedOrder.toSet();
+    final server = serverMembership.toSet();
+    final sameSet = intended.length == intendedOrder.length &&
+        intended.length == server.length &&
+        intended.containsAll(server);
+    if (!sameSet) {
+      return const SaveOrderReplayPlan(SaveOrderReplayAction.membershipConflict);
+    }
+    return SaveOrderReplayPlan(
+      SaveOrderReplayAction.send,
+      // The freshest observation wins — never the version frozen while offline.
+      expectedVersion: authoritativeVersion(laneVersion, serverVersion),
+    );
+  }
+
+  /// True when a reorder for [playlistId] is still queued for replay.
+  ///
+  /// Hydration uses this so an authoritative read cannot visibly revert an
+  /// order the user has already saved but which has not reached the server yet.
+  bool hasPendingReorder(String playlistId) {
+    final uid = currentUserId;
+    if (uid == null) return false;
+    return _sync.pending(uid).any((o) =>
+        o.playlistId == playlistId && o.type == PlaylistOpType.saveOrder);
+  }
+
+  /// Re-applies a still-pending local order on top of authoritative membership.
+  ///
+  /// Server membership always wins (adds/removes made elsewhere appear), but
+  /// while a reorder is queued the ORDER stays the user's — otherwise hydration
+  /// between "Save" and a successful replay bounces the list back to the old
+  /// server order and looks like the save was lost. Members the local order
+  /// does not know about keep their server-relative order, appended after the
+  /// known ones.
+  static List<Track> preservePendingOrder({
+    required List<Track> authoritative,
+    required List<Track> localOrder,
+  }) {
+    final rank = <String, int>{};
+    for (var i = 0; i < localOrder.length; i++) {
+      rank.putIfAbsent(localOrder[i].id, () => i);
+    }
+    final known = <Track>[];
+    final unknown = <Track>[];
+    for (final t in authoritative) {
+      (rank.containsKey(t.id) ? known : unknown).add(t);
+    }
+    known.sort((a, b) => rank[a.id]!.compareTo(rank[b.id]!));
+    return [...known, ...unknown];
+  }
+
+  /// Executes ONE queued op. Named (not `_execute`) so the replay contract can
+  /// be driven directly by tests against a fake remote.
+  Future<OpOutcome> executeOp(PlaylistOp op) async {
     try {
       final ids = (op.payload['ids'] as List?)?.cast<String>() ?? const <String>[];
       switch (op.type) {
@@ -690,7 +931,7 @@ class PlaylistRepository {
           );
           break;
         case PlaylistOpType.saveOrder:
-          await _remote.saveOrder(op.playlistId, ids, op.expectedVersion);
+          await _replaySaveOrder(op, ids);
           break;
         case PlaylistOpType.addTracks:
           await _remote.addTracks(op.playlistId, ids);
