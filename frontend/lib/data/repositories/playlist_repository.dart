@@ -55,13 +55,23 @@ class PlaylistRepository {
   final CatalogResolver _resolver;
   final PlaylistSyncService _sync;
 
+  /// Injected so tests exercise the real readiness loop without real delays.
+  final Future<void> Function(Duration) _sleep;
+
+  /// Bounded post-ingest identity wait: at most 3 attempts ~200 ms apart, so a
+  /// single Add tap can never take more than ~0.4 s longer than before.
+  static const int _identityReadyAttempts = 3;
+  static const Duration _identityReadyBackoff = Duration(milliseconds: 200);
+
   PlaylistRepository({
     PlaylistRemoteDataSource? remote,
     CatalogResolver? resolver,
     PlaylistSyncService? sync,
+    Future<void> Function(Duration)? sleep,
   })  : _remote = remote ?? PlaylistRemoteDataSource(),
         _resolver = resolver ?? CatalogResolver(),
-        _sync = sync ?? PlaylistSyncService(PlaylistOpsJournal());
+        _sync = sync ?? PlaylistSyncService(PlaylistOpsJournal()),
+        _sleep = sleep ?? Future<void>.delayed;
 
   String? get currentUserId => _remote.currentUserId;
 
@@ -158,7 +168,24 @@ class PlaylistRepository {
           .toSet();
       if (albumIds.isNotEmpty) {
         await _resolver.ingestAlbums(albumIds);
-        r = await _resolveTracks(tracks); // ONE re-resolve, never a loop
+        // IDENTITY READINESS (Phase 3.4.13). This used to re-resolve exactly
+        // ONCE, immediately. Ingestion returns as soon as paax-api answers, but
+        // the catalog rows it upserts are not always readable by the very next
+        // query — so the first Add tap failed with "Couldn't add…", having done
+        // nothing except make the row exist, and the SECOND identical tap
+        // succeeded. Requiring the user to tap twice is the bug.
+        //
+        // One tap is now one bounded logical operation: ingest, then wait for
+        // the identity it created, for a strictly bounded number of short
+        // attempts. Bounded means bounded — a few hundred milliseconds, never a
+        // poll loop, and it stops the instant every track resolves.
+        for (var attempt = 0; attempt < _identityReadyAttempts; attempt++) {
+          r = await _resolveTracks(tracks);
+          if (r.unresolved.isEmpty) break;
+          if (attempt < _identityReadyAttempts - 1) {
+            await _sleep(_identityReadyBackoff);
+          }
+        }
       }
     }
 
@@ -731,15 +758,68 @@ class PlaylistRepository {
   /// So: take membership + order from [cloud], but for each track prefer the
   /// cached object when it carries metadata the cloud row lacks. A cloud row is
   /// only allowed to ADD information, never to erase it.
+  /// The identity two representations of the same song share.
+  ///
+  /// IDENTITY IS NOT STABLE ACROSS HYDRATION (Phase 3.4.13). `Track.id` is the
+  /// YouTube videoId when one exists and the catalog UUID when the match is
+  /// still pending, so the SAME song changes `id` the moment its match
+  /// completes. Keying reconciliation on `id` alone therefore made a
+  /// newly-ingested track look like a different song before and after the
+  /// match: the cached copy no longer matched the cloud row, so its metadata
+  /// was dropped and the membership guards could double-count it.
+  ///
+  /// The Deezer id is the one identifier both sides carry throughout, so it
+  /// wins when present; `id` remains the fallback for tracks that have none.
+  static String trackKey(Track t) => trackKeys(t).first;
+
+  /// EVERY identity a track can be recognised by, most specific first.
+  ///
+  /// Matching on the primary key alone is not enough: the cloud row for a
+  /// track may carry no `deezer_id` at all, while the cached copy does (and
+  /// vice versa). Indexing and looking up under both keys means two
+  /// representations match whenever they agree on EITHER identity, so neither
+  /// a pending-match id flip nor a missing Deezer id can make one song look
+  /// like two.
+  static List<String> trackKeys(Track t) {
+    final deezer = (t.deezerTrackId ?? '').trim();
+    return [if (deezer.isNotEmpty) 'd:$deezer', 'i:${t.id}'];
+  }
+
+  static Map<String, Track> _indexByIdentity(List<Track> tracks) {
+    final out = <String, Track>{};
+    for (final t in tracks) {
+      for (final k in trackKeys(t)) {
+        out.putIfAbsent(k, () => t);
+      }
+    }
+    return out;
+  }
+
+  static int? _rankOf(Map<String, int> rank, Track t) {
+    for (final k in trackKeys(t)) {
+      final hit = rank[k];
+      if (hit != null) return hit;
+    }
+    return null;
+  }
+
+  static Track? _lookup(Map<String, Track> index, Track t) {
+    for (final k in trackKeys(t)) {
+      final hit = index[k];
+      if (hit != null) return hit;
+    }
+    return null;
+  }
+
   static List<Track> reconcileTracks({
     required List<Track> cached,
     required List<Track> cloud,
   }) {
-    final byId = {for (final t in cached) t.id: t};
+    final byId = _indexByIdentity(cached);
     return [
       for (final c in cloud)
         () {
-          final local = byId[c.id];
+          final local = _lookup(byId, c);
           if (local == null) return c; // genuinely new membership
           final cloudHasArtists = c.artistName.trim().isNotEmpty;
           final localHasArtists = local.artistName.trim().isNotEmpty;
@@ -939,10 +1019,17 @@ class PlaylistRepository {
     required bool hasPendingAdd,
   }) {
     if (!hasPendingAdd) return authoritative;
-    final present = {for (final t in authoritative) t.id};
+    // Keyed canonically: a track whose YouTube match is still pending is
+    // reported by the server under its catalog UUID while the local optimistic
+    // copy still carries its videoId, so an `id` comparison would treat the two
+    // as different songs and show the track twice.
+    final present = {for (final t in authoritative) ...trackKeys(t)};
     // Appended in their local order: playlist_add_tracks appends after the
     // current maximum position, so this is where the server will put them too.
-    final pending = [for (final t in cached) if (!present.contains(t.id)) t];
+    final pending = [
+      for (final t in cached)
+        if (!trackKeys(t).any(present.contains)) t
+    ];
     return pending.isEmpty ? authoritative : [...authoritative, ...pending];
   }
 
@@ -971,14 +1058,18 @@ class PlaylistRepository {
   }) {
     final rank = <String, int>{};
     for (var i = 0; i < localOrder.length; i++) {
-      rank.putIfAbsent(localOrder[i].id, () => i);
+      // Canonically keyed for the same reason as preservePendingAdds: a
+      // pending match flips Track.id between videoId and catalog UUID.
+      for (final k in trackKeys(localOrder[i])) {
+        rank.putIfAbsent(k, () => i);
+      }
     }
     final known = <Track>[];
     final unknown = <Track>[];
     for (final t in authoritative) {
-      (rank.containsKey(t.id) ? known : unknown).add(t);
+      (_rankOf(rank, t) != null ? known : unknown).add(t);
     }
-    known.sort((a, b) => rank[a.id]!.compareTo(rank[b.id]!));
+    known.sort((a, b) => _rankOf(rank, a)!.compareTo(_rankOf(rank, b)!));
     return [...known, ...unknown];
   }
 

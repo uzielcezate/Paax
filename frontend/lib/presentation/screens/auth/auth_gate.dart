@@ -131,6 +131,24 @@ class AuthGate extends StatelessWidget {
 /// Helper to push auth sub-routes on the root navigator without breaking the
 /// gate's single-destination model (these are pushed ON TOP of the gate).
 class AuthRoutes {
+  /// The root navigator, so a deep link can return to the gate from anywhere.
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
+
   static Future<T?> push<T>(BuildContext context, Widget screen) =>
       Navigator.of(context).push<T>(MaterialPageRoute(builder: (_) => screen));
+
+  /// Pops every pushed auth sub-route so the gate's destination is what the
+  /// user actually sees.
+  ///
+  /// THE RECOVERY DEEP LINK LANDED BEHIND A PUSHED ROUTE (Phase 3.4.13). Forgot
+  /// password is pushed ON TOP of the gate, so when the recovery link flipped
+  /// the gate to the new-password screen the user kept looking at the
+  /// resend-email form underneath which nothing had dismissed — indistinguishable
+  /// from "the link did nothing".
+  static void popToGate() {
+    final nav = navigatorKey.currentState;
+    if (nav == null) return; // cold start: the gate is already the only route
+    if (nav.canPop()) nav.popUntil((route) => route.isFirst);
+  }
 }
