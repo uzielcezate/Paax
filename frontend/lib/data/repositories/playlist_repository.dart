@@ -588,6 +588,10 @@ class PlaylistRepository {
     final id = row['id'].toString();
     final trackRows = await _remote.fetchTracks(id);
     final tracks = membershipFromRows(trackRows);
+    // Hydration already holds the authoritative track_id for every row, which is
+    // exactly what a later mutation must resolve. Seeding it here is what makes
+    // an OFFLINE reorder/add possible at all — see seedTrackIdentities.
+    await _seedIdentities(trackRows);
     final collabRows = await _remote.fetchCollaborators(id);
     final accepted =
         collabRows.where((c) => c['status']?.toString() == 'accepted').toList();
@@ -872,6 +876,74 @@ class PlaylistRepository {
       // The freshest observation wins — never the version frozen while offline.
       expectedVersion: authoritativeVersion(laneVersion, serverVersion),
     );
+  }
+
+  /// Feeds the resolver the (deezer_id → uuid) and (videoId → uuid) pairs the
+  /// authoritative membership read already contains. Best-effort: a caching
+  /// failure must never break hydration.
+  Future<void> _seedIdentities(List<Map<String, dynamic>> trackRows) async {
+    final byDeezer = <String, String>{};
+    final byVideo = <String, String>{};
+    for (final row in trackRows) {
+      final t = row['tracks'];
+      if (t is! Map) continue;
+      final uuid = t['id']?.toString() ?? '';
+      if (uuid.isEmpty) continue;
+      final deezer = t['deezer_id']?.toString() ?? '';
+      if (deezer.isNotEmpty) byDeezer[deezer] = uuid;
+      final video = t['preferred_youtube_video_id']?.toString() ?? '';
+      if (video.isNotEmpty) byVideo[video] = uuid;
+      // A track still awaiting a YouTube match is keyed by its catalog UUID
+      // (Phase 3.4.11), so record that identity too — otherwise exactly the
+      // tracks from BUG 1 would stay unresolvable offline.
+      byVideo[uuid] = uuid;
+    }
+    if (byDeezer.isEmpty && byVideo.isEmpty) return;
+    try {
+      await _resolver
+          .seedTrackIdentities(byDeezerId: byDeezer, byVideoId: byVideo);
+    } catch (_) {
+      // Caching is an optimization; hydration must still succeed.
+    }
+  }
+
+  /// True when an add for [playlistId] is still queued for replay.
+  bool hasPendingAdd(String playlistId) {
+    final uid = currentUserId;
+    if (uid == null) return false;
+    return _sync.pending(uid).any((o) =>
+        o.playlistId == playlistId &&
+        (o.type == PlaylistOpType.addTracks ||
+            o.type == PlaylistOpType.create));
+  }
+
+  /// Keeps membership the user added locally but whose add has NOT reached the
+  /// server yet.
+  ///
+  /// THE DISAPPEARING OFFLINE ADD (Phase 3.4.12). Reconciliation takes
+  /// membership from the server, which is right — except while our own add is
+  /// still queued. A replay pass that ends with the add still pending (it joined
+  /// an in-flight pass, or hit a transient failure and stopped) is immediately
+  /// followed by an authoritative hydrate, and the server legitimately does not
+  /// have the track yet. The optimistic row was therefore deleted from the cache
+  /// and the user watched their addition vanish — until any later mutation
+  /// triggered another flush, the add finally committed, and it reappeared.
+  ///
+  /// This is deliberately gated on a QUEUED op, not on "is it missing from the
+  /// server". Once the op leaves the journal — committed, rejected, dropped or
+  /// quarantined — the track is no longer preserved, so a refusal still removes
+  /// it exactly as before.
+  static List<Track> preservePendingAdds({
+    required List<Track> authoritative,
+    required List<Track> cached,
+    required bool hasPendingAdd,
+  }) {
+    if (!hasPendingAdd) return authoritative;
+    final present = {for (final t in authoritative) t.id};
+    // Appended in their local order: playlist_add_tracks appends after the
+    // current maximum position, so this is where the server will put them too.
+    final pending = [for (final t in cached) if (!present.contains(t.id)) t];
+    return pending.isEmpty ? authoritative : [...authoritative, ...pending];
   }
 
   /// True when a reorder for [playlistId] is still queued for replay.

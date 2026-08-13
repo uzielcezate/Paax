@@ -167,10 +167,15 @@ class LibraryController extends ChangeNotifier {
         cached: existing.tracks,
         cloud: h.tracks,
       );
-      // A reorder that has NOT reached the server yet must not be visually
-      // undone by the authoritative read that follows the flush. Membership
-      // still comes from the server; only the ORDER stays the user's until
-      // their queued reorder replays.
+      // Our own STILL-QUEUED intent must survive the authoritative read that
+      // follows the flush: a pending add is not yet on the server, and a pending
+      // reorder has not yet been applied there. Everything else — membership the
+      // server does hold, and any op that has left the journal — is unchanged.
+      merged = PlaylistRepository.preservePendingAdds(
+        authoritative: merged,
+        cached: existing.tracks,
+        hasPendingAdd: _cloud.hasPendingAdd(h.id),
+      );
       if (_cloud.hasPendingReorder(h.id)) {
         merged = PlaylistRepository.preservePendingOrder(
           authoritative: merged,
@@ -239,6 +244,12 @@ class LibraryController extends ChangeNotifier {
         var merged = PlaylistRepository.reconcileTracks(
           cached: existing.tracks,
           cloud: h.tracks,
+        );
+        // Same still-queued-intent guard as the post-flush path.
+        merged = PlaylistRepository.preservePendingAdds(
+          authoritative: merged,
+          cached: existing.tracks,
+          hasPendingAdd: _cloud.hasPendingAdd(h.id),
         );
         if (_cloud.hasPendingReorder(h.id)) {
           merged = PlaylistRepository.preservePendingOrder(

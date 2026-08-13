@@ -232,6 +232,46 @@ class CatalogResolver {
     }));
   }
 
+  /// Records track identities we ALREADY hold authoritatively, so resolving
+  /// them later needs no network.
+  ///
+  /// THE OFFLINE-MUTATION BLOCKER (Phase 3.4.12). Every cloud mutation resolves
+  /// local tracks → catalog UUIDs before it can be journaled, and this cache was
+  /// only ever filled as a side effect of a successful QUERY. A playlist that
+  /// arrived through cloud hydration therefore had none of its tracks cached:
+  /// the app knew each row's `track_id` and threw it away. Offline, resolution
+  /// then failed for every track and `_resolveOrThrow` raised `localIntegrity`
+  /// BEFORE the journaling wrapper ran — so an offline reorder was never queued
+  /// at all, and no replay could ever fix it.
+  ///
+  /// Hydration reads exactly the mapping resolution needs, so it seeds it here.
+  /// Purely additive and idempotent: it can only turn a future network lookup
+  /// into a cache hit.
+  Future<void> seedTrackIdentities({
+    Map<String, String> byDeezerId = const {},
+    Map<String, String> byVideoId = const {},
+  }) async {
+    await _ensureLoaded();
+    var tracksChanged = false;
+    byDeezerId.forEach((deezerId, uuid) {
+      final key = deezerId.trim();
+      if (!_isValidDeezerId(key) || uuid.isEmpty) return;
+      if (_trackCache[key] == uuid) return;
+      _trackCache[key] = uuid;
+      tracksChanged = true;
+    });
+    var videosChanged = false;
+    byVideoId.forEach((videoId, uuid) {
+      final key = videoId.trim();
+      if (key.isEmpty || uuid.isEmpty) return;
+      if (_videoIdCache[key] == uuid) return;
+      _videoIdCache[key] = uuid;
+      videosChanged = true;
+    });
+    if (tracksChanged) await _persist(_kTracksCache, _trackCache);
+    if (videosChanged) await _persist(_kVideoIdsCache, _videoIdCache);
+  }
+
   Future<Map<String, String>> resolveTracksByVideoId(
       Iterable<String?> videoIds) async {
     await _ensureLoaded();
