@@ -283,6 +283,8 @@ class PaaxApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
+        // Lets an auth deep link pop back to the gate from a pushed sub-route.
+        navigatorKey: AuthRoutes.navigatorKey,
         title: 'Paax',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,

@@ -51,6 +51,7 @@ import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/profile_repository.dart';
 import '../../domain/entities/profile.dart';
 import '../../domain/entities/user_profile.dart';
+import '../screens/auth/auth_gate.dart' show AuthRoutes;
 
 class AuthController extends ChangeNotifier {
   final AuthRepository _auth;
@@ -62,6 +63,10 @@ class AuthController extends ChangeNotifier {
   bool _submitting = false;
   String? _pendingVerificationEmail;
   bool _recovery = false;
+
+  /// The user the recovery session belongs to. In memory only — a recovery
+  /// context must never survive a process restart.
+  String? _recoveryUserId;
   bool _disposed = false;
 
   StreamSubscription<sb.AuthState>? _authSub;
@@ -153,7 +158,9 @@ class AuthController extends ChangeNotifier {
     if (_bootstrapStarted) return _inFlight ?? Future<void>.value();
     _bootstrapStarted = true;
     StartupDiagnostics.recordBootstrap();
-    _recovery = false;
+    // Deliberately does NOT clear recovery: on a cold start the deep link can
+    // be processed before this runs, and wiping the context here sent the user
+    // to the normal destination instead of the new-password screen.
     return _resolveSession('bootstrap');
   }
 
@@ -178,8 +185,28 @@ class AuthController extends ChangeNotifier {
     if (_disposed) return;
     switch (data.event) {
       case AuthChangeEvent.passwordRecovery:
+        // A RECOVERY CONTEXT, NOT A FLAG (Phase 3.4.13). Supabase emits this
+        // with the short-lived recovery session attached. Requiring that
+        // session is what stops a stale local boolean from ever routing to the
+        // set-a-new-password screen: without a session there is nothing to
+        // authorise the password update, so there is nothing to route to.
+        final session = data.session ?? _auth.currentSession;
+        if (session == null) break;
         _recovery = true;
+        _recoveryUserId = session.user.id;
+        // Invalidate any resolution already in flight. On a COLD START,
+        // bootstrap() is launched from the constructor and its async
+        // continuation used to land AFTER this event, dispatching
+        // SessionRestored and moving the phase straight back off `recovery` —
+        // which is why tapping the link opened the normal destination instead
+        // of the new-password screen.
+        _generation++;
         _dispatch(const RecoveryRequested());
+        // The Forgot-password screen is PUSHED on top of the gate, so flipping
+        // the gate's destination underneath leaves the user looking at the
+        // resend form. Returning to the gate is what actually shows them the
+        // new-password screen.
+        AuthRoutes.popToGate();
         break;
 
       case AuthChangeEvent.signedOut:
@@ -274,7 +301,7 @@ class AuthController extends ChangeNotifier {
       return;
     }
 
-    if (_recovery) {
+    if (isRecoveryActive) {
       _dispatch(const RecoveryRequested());
       return;
     }
@@ -458,6 +485,11 @@ class AuthController extends ChangeNotifier {
   }
 
   Future<void> login({required String email, required String password}) async {
+    // An explicit password sign-in is NOT a recovery flow. Clearing here is what
+    // stops an abandoned recovery attempt from dropping a later, normal sign-in
+    // onto the set-a-new-password screen.
+    _recovery = false;
+    _recoveryUserId = null;
     _setSubmitting(true);
     _dispatch(const AuthenticationStarted());
     final normEmail = AuthValidators.normalizeEmail(email);
@@ -521,7 +553,10 @@ class AuthController extends ChangeNotifier {
     _setSubmitting(true);
     try {
       await _auth.updatePassword(newPassword);
+      // Recovery is consumed exactly once, on success only. A failed update
+      // keeps the context so the user can retry on the same screen.
       _recovery = false;
+      _recoveryUserId = null;
       await _resolveSession('password-updated', force: true);
     } catch (e) {
       throw AuthErrorMapper.map(e);
@@ -563,6 +598,7 @@ class AuthController extends ChangeNotifier {
       await _auth.signOut();
     } catch (_) {/* signedOut event / dispatch below still clears state */}
     _recovery = false;
+    _recoveryUserId = null;
     _pendingVerificationEmail = null;
     // Clearing the active pointer is what makes an OFFLINE logout return to the
     // auth screen instead of restoring the cached Home. The per-account record
@@ -580,8 +616,39 @@ class AuthController extends ChangeNotifier {
   // ── internals ─────────────────────────────────────────────────────────────
 
   /// The ONLY way state changes. Every transition goes through the pure reducer.
+  /// True only when BOTH a recovery event arrived AND a live Supabase session
+  /// backs it. Routing reads this, never the raw flag.
+  bool get isRecoveryActive {
+    if (!_recovery) return false;
+    final session = _auth.currentSession;
+    if (session == null) {
+      // The recovery session expired or was signed out — drop the context
+      // rather than leaving a flag that could route later.
+      _recovery = false;
+      _recoveryUserId = null;
+      return false;
+    }
+    // A different account signed in since; that sign-in is not this recovery.
+    if (_recoveryUserId != null && _recoveryUserId != session.user.id) {
+      _recovery = false;
+      _recoveryUserId = null;
+      return false;
+    }
+    return true;
+  }
+
   void _dispatch(StartupEvent e) {
     if (_disposed) return;
+    // RECOVERY IS NOT PREEMPTIBLE. Bootstrap and session-restore resolutions run
+    // concurrently with the deep link and used to overwrite the recovery phase
+    // the moment they finished. Only finishing recovery (updatePassword), losing
+    // the session, or a fatal local failure may move off it.
+    if (isRecoveryActive &&
+        e is! RecoveryRequested &&
+        e is! SignedOut &&
+        e is! LocalStorageFailed) {
+      return;
+    }
     final next = startupReducer(_startup, e);
     if (next == _startup) return; // no spurious rebuilds / route thrash
     _startup = next;
