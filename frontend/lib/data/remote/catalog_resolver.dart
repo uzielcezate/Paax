@@ -61,6 +61,12 @@ class CatalogResolver {
       _mergeInto(_albumCache, prefs.getString(_kAlbumsCache));
       _mergeInto(_trackCache, prefs.getString(_kTracksCache));
       _mergeInto(_genreCache, prefs.getString(_kGenresCache));
+      // The videoId → uuid cache was PERSISTED but never restored (Phase
+      // 3.4.14), so every app start began with a cold second identity path.
+      // Anything whose only identity is a videoId therefore had to be looked up
+      // again over the network — impossible offline, and the reason a
+      // canonical identity could not be derived locally after a restart.
+      _mergeInto(_videoIdCache, prefs.getString(_kVideoIdsCache));
     } catch (_) {
       // Ignore — cache is a pure optimization.
     }
@@ -270,6 +276,32 @@ class CatalogResolver {
     });
     if (tracksChanged) await _persist(_kTracksCache, _trackCache);
     if (videosChanged) await _persist(_kVideoIdsCache, _videoIdCache);
+  }
+
+  /// The canonical catalog UUID this device ALREADY knows for a track, read
+  /// from the caches only — never a query, never an ingest.
+  ///
+  /// IDENTITY IS NOT STABLE ACROSS HYDRATION (Phase 3.4.14). The same song is
+  /// `Track.id == videoId` while the app holds it optimistically and
+  /// `Track.id == catalog UUID` when the server reports it with a still-pending
+  /// YouTube match. Reconciliation needs ONE canonical identity for both, and
+  /// this is where the app already has it: every add resolves deezer → uuid or
+  /// videoId → uuid before it is sent, and every hydration seeds both maps.
+  /// So the answer is always already cached by the time reconciliation asks —
+  /// no new identity system, and no side effects to depend on.
+  Future<String?> cachedUuidFor({String? deezerId, String? videoId}) async {
+    await _ensureLoaded();
+    final d = (deezerId ?? '').trim();
+    if (d.isNotEmpty) {
+      final hit = _trackCache[d];
+      if (hit != null && hit.isNotEmpty) return hit;
+    }
+    final v = (videoId ?? '').trim();
+    if (v.isNotEmpty) {
+      final hit = _videoIdCache[v];
+      if (hit != null && hit.isNotEmpty) return hit;
+    }
+    return null;
   }
 
   Future<Map<String, String>> resolveTracksByVideoId(

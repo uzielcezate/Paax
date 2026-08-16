@@ -50,6 +50,15 @@ class SaveOrderReplayPlan {
   const SaveOrderReplayPlan(this.action, {this.expectedVersion});
 }
 
+/// An immutable snapshot of "how many adds had finished per playlist", taken
+/// immediately BEFORE an authoritative read is issued so the read's result can
+/// be interpreted causally. See [PlaylistRepository.addOverlapped].
+class AddFence {
+  final Map<String, int> completed;
+  const AddFence(this.completed);
+  static const AddFence empty = AddFence({});
+}
+
 class PlaylistRepository {
   final PlaylistRemoteDataSource _remote;
   final CatalogResolver _resolver;
@@ -363,6 +372,16 @@ class PlaylistRepository {
   }
 
   Future<Map<String, dynamic>> addTracks(String playlistId, List<Track> tracks) async {
+    _addsStarted[playlistId] = (_addsStarted[playlistId] ?? 0) + 1;
+    try {
+      return await _addTracks(playlistId, tracks);
+    } finally {
+      _addsCompleted[playlistId] = (_addsCompleted[playlistId] ?? 0) + 1;
+    }
+  }
+
+  Future<Map<String, dynamic>> _addTracks(
+      String playlistId, List<Track> tracks) async {
     // Throws localIntegrity rather than sending an empty/short array, which the
     // RPC would accept as a silent no-op success.
     final uuids = await _resolveOrThrow(tracks);
@@ -770,7 +789,29 @@ class PlaylistRepository {
   ///
   /// The Deezer id is the one identifier both sides carry throughout, so it
   /// wins when present; `id` remains the fallback for tracks that have none.
-  static String trackKey(Track t) => trackKeys(t).first;
+  static String trackKey(Track t, [Map<String, String> aliases = const {}]) =>
+      trackKeys(t, aliases).first;
+
+  /// The canonical catalog UUID for every track whose identity this device
+  /// already holds, as an alias table reconciliation can key on.
+  ///
+  /// Keyed by the identities a local [Track] can be recognised by (`i:<id>` and
+  /// `d:<deezerId>`) so BOTH representations of the same song — the optimistic
+  /// copy keyed by videoId and the authoritative copy keyed by catalog UUID —
+  /// resolve to the same canonical value. Cache-only: no query, no ingest, and
+  /// nothing here depends on a future resolver side effect.
+  Future<Map<String, String>> canonicalTrackUuids(Iterable<Track> tracks) async {
+    final out = <String, String>{};
+    for (final t in tracks) {
+      final uuid = await _resolver.cachedUuidFor(
+          deezerId: t.deezerTrackId, videoId: t.id);
+      if (uuid == null || uuid.isEmpty) continue;
+      out['i:${t.id}'] = uuid;
+      final d = (t.deezerTrackId ?? '').trim();
+      if (d.isNotEmpty) out['d:$d'] = uuid;
+    }
+    return out;
+  }
 
   /// EVERY identity a track can be recognised by, most specific first.
   ///
@@ -780,31 +821,44 @@ class PlaylistRepository {
   /// representations match whenever they agree on EITHER identity, so neither
   /// a pending-match id flip nor a missing Deezer id can make one song look
   /// like two.
-  static List<String> trackKeys(Track t) {
+  /// [aliases] is the canonical UUID table from [canonicalTrackUuids]. When it
+  /// knows this track, the catalog UUID is the MOST specific identity and comes
+  /// first, so the videoId→UUID flip can no longer make one song look like two.
+  static List<String> trackKeys(Track t,
+      [Map<String, String> aliases = const {}]) {
     final deezer = (t.deezerTrackId ?? '').trim();
-    return [if (deezer.isNotEmpty) 'd:$deezer', 'i:${t.id}'];
+    final uuid = aliases['i:${t.id}'] ??
+        (deezer.isEmpty ? null : aliases['d:$deezer']);
+    return [
+      if (uuid != null && uuid.isNotEmpty) 'u:$uuid',
+      if (deezer.isNotEmpty) 'd:$deezer',
+      'i:${t.id}',
+    ];
   }
 
-  static Map<String, Track> _indexByIdentity(List<Track> tracks) {
+  static Map<String, Track> _indexByIdentity(
+      List<Track> tracks, Map<String, String> aliases) {
     final out = <String, Track>{};
     for (final t in tracks) {
-      for (final k in trackKeys(t)) {
+      for (final k in trackKeys(t, aliases)) {
         out.putIfAbsent(k, () => t);
       }
     }
     return out;
   }
 
-  static int? _rankOf(Map<String, int> rank, Track t) {
-    for (final k in trackKeys(t)) {
+  static int? _rankOf(
+      Map<String, int> rank, Track t, Map<String, String> aliases) {
+    for (final k in trackKeys(t, aliases)) {
       final hit = rank[k];
       if (hit != null) return hit;
     }
     return null;
   }
 
-  static Track? _lookup(Map<String, Track> index, Track t) {
-    for (final k in trackKeys(t)) {
+  static Track? _lookup(
+      Map<String, Track> index, Track t, Map<String, String> aliases) {
+    for (final k in trackKeys(t, aliases)) {
       final hit = index[k];
       if (hit != null) return hit;
     }
@@ -814,12 +868,13 @@ class PlaylistRepository {
   static List<Track> reconcileTracks({
     required List<Track> cached,
     required List<Track> cloud,
+    Map<String, String> aliases = const {},
   }) {
-    final byId = _indexByIdentity(cached);
+    final byId = _indexByIdentity(cached, aliases);
     return [
       for (final c in cloud)
         () {
-          final local = _lookup(byId, c);
+          final local = _lookup(byId, c, aliases);
           if (local == null) return c; // genuinely new membership
           final cloudHasArtists = c.artistName.trim().isNotEmpty;
           final localHasArtists = local.artistName.trim().isNotEmpty;
@@ -987,6 +1042,75 @@ class PlaylistRepository {
     }
   }
 
+  // ── in-flight add fence (Phase 3.4.14) ──
+  /// Per-playlist counters of adds that have STARTED and that have FINISHED.
+  /// Monotonic; the difference is the number currently in flight.
+  final Map<String, int> _addsStarted = {};
+  final Map<String, int> _addsCompleted = {};
+
+  /// A snapshot of the completed-add counters, taken BEFORE an authoritative
+  /// read is issued. See [addOverlapped].
+  AddFence captureAddFence() => AddFence(Map<String, int>.from(_addsCompleted));
+
+  /// True when an add for [playlistId] was in flight at ANY point between
+  /// [since] being captured and now.
+  ///
+  /// THE DISAPPEARING TOP-TRACK ADD (Phase 3.4.14). [hasPendingAdd] protects an
+  /// optimistic row only while a JOURNAL op exists — and a Top Track that is not
+  /// in the catalog yet can never have one. Its add resolves nothing offline, so
+  /// `_resolveOrThrow` ingests first and the whole call simply stays in flight
+  /// on the stalled socket until connectivity returns (proven in production:
+  /// `tracks.created_at` 15:44:29.207 → `playlist_tracks.added_at` 15:44:29.476,
+  /// two minutes after the tap, and a replayed op never ingests). Reconnect then
+  /// fires the journal flush and its authoritative hydrate CONCURRENTLY with
+  /// that still-running add: the read observes membership without the track,
+  /// nothing is queued, so reconciliation deleted the optimistic row — and the
+  /// add committed a few hundred milliseconds later. Server right, UI wrong,
+  /// with no further mutation able to fix it until some later hydrate.
+  ///
+  /// A plain "is one in flight right now?" check is not enough: the add can
+  /// finish between the read and the check, which is exactly the losing race.
+  /// The fence answers the causally correct question — did any add OVERLAP the
+  /// window in which this authoritative snapshot was taken? Anything that
+  /// started no later than the last completion observed before the window has
+  /// already been accounted for by the server, so:
+  ///
+  ///     overlapped ⇔ startedNow > completedBefore
+  bool addOverlapped(String playlistId, AddFence since) =>
+      (_addsStarted[playlistId] ?? 0) > (since.completed[playlistId] ?? 0);
+
+  /// THE hydration merge: authoritative membership + order, local metadata,
+  /// unfinished local intent, one canonical identity per song.
+  ///
+  /// Both hydration paths (post-flush and sign-in) call exactly this, so the
+  /// rule lives in one place and the regression suite drives the real thing.
+  /// [fence] MUST have been captured before the read that produced [cloud].
+  Future<List<Track>> reconcileHydrated({
+    required String playlistId,
+    required List<Track> cached,
+    required List<Track> cloud,
+    required AddFence fence,
+  }) async {
+    final aliases = await canonicalTrackUuids([...cached, ...cloud]);
+    var merged =
+        reconcileTracks(cached: cached, cloud: cloud, aliases: aliases);
+    merged = preservePendingAdds(
+      authoritative: merged,
+      cached: cached,
+      hasPendingAdd:
+          hasPendingAdd(playlistId) || addOverlapped(playlistId, fence),
+      aliases: aliases,
+    );
+    if (hasPendingReorder(playlistId)) {
+      merged = preservePendingOrder(
+        authoritative: merged,
+        localOrder: cached,
+        aliases: aliases,
+      );
+    }
+    return merged;
+  }
+
   /// True when an add for [playlistId] is still queued for replay.
   bool hasPendingAdd(String playlistId) {
     final uid = currentUserId;
@@ -1017,18 +1141,19 @@ class PlaylistRepository {
     required List<Track> authoritative,
     required List<Track> cached,
     required bool hasPendingAdd,
+    Map<String, String> aliases = const {},
   }) {
     if (!hasPendingAdd) return authoritative;
     // Keyed canonically: a track whose YouTube match is still pending is
     // reported by the server under its catalog UUID while the local optimistic
     // copy still carries its videoId, so an `id` comparison would treat the two
     // as different songs and show the track twice.
-    final present = {for (final t in authoritative) ...trackKeys(t)};
+    final present = {for (final t in authoritative) ...trackKeys(t, aliases)};
     // Appended in their local order: playlist_add_tracks appends after the
     // current maximum position, so this is where the server will put them too.
     final pending = [
       for (final t in cached)
-        if (!trackKeys(t).any(present.contains)) t
+        if (!trackKeys(t, aliases).any(present.contains)) t
     ];
     return pending.isEmpty ? authoritative : [...authoritative, ...pending];
   }
@@ -1055,21 +1180,23 @@ class PlaylistRepository {
   static List<Track> preservePendingOrder({
     required List<Track> authoritative,
     required List<Track> localOrder,
+    Map<String, String> aliases = const {},
   }) {
     final rank = <String, int>{};
     for (var i = 0; i < localOrder.length; i++) {
       // Canonically keyed for the same reason as preservePendingAdds: a
       // pending match flips Track.id between videoId and catalog UUID.
-      for (final k in trackKeys(localOrder[i])) {
+      for (final k in trackKeys(localOrder[i], aliases)) {
         rank.putIfAbsent(k, () => i);
       }
     }
     final known = <Track>[];
     final unknown = <Track>[];
     for (final t in authoritative) {
-      (_rankOf(rank, t) != null ? known : unknown).add(t);
+      (_rankOf(rank, t, aliases) != null ? known : unknown).add(t);
     }
-    known.sort((a, b) => _rankOf(rank, a)!.compareTo(_rankOf(rank, b)!));
+    known.sort(
+        (a, b) => _rankOf(rank, a, aliases)!.compareTo(_rankOf(rank, b, aliases)!));
     return [...known, ...unknown];
   }
 
@@ -1097,7 +1224,16 @@ class PlaylistRepository {
           await _replaySaveOrder(op, ids);
           break;
         case PlaylistOpType.addTracks:
-          await _remote.addTracks(op.playlistId, ids);
+          // Fenced like a live add: a replay makes membership grow too, so an
+          // authoritative read taken while the pass is still running is just as
+          // stale — and by the time the merge runs, the op has left the journal.
+          _addsStarted[op.playlistId] = (_addsStarted[op.playlistId] ?? 0) + 1;
+          try {
+            await _remote.addTracks(op.playlistId, ids);
+          } finally {
+            _addsCompleted[op.playlistId] =
+                (_addsCompleted[op.playlistId] ?? 0) + 1;
+          }
           break;
         case PlaylistOpType.removeTracks:
           await _remote.removeTracks(op.playlistId, ids);

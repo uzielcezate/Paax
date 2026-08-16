@@ -150,7 +150,12 @@ class LibraryController extends ChangeNotifier {
   }
 
   Future<void> _hydrateAfterFlush(String uid) async {
-    final hydrated = await _cloud!.hydrateLibrary();
+    // Captured BEFORE the read is issued: an add that is still in flight (or
+    // that finishes while the read is on the wire) is not yet reflected in what
+    // comes back, and it has no journal op to be recognised by. See
+    // PlaylistRepository.addOverlapped.
+    final fence = _cloud!.captureAddFence();
+    final hydrated = await _cloud.hydrateLibrary();
     final localById = {for (final p in HiveStorage.getPlaylists()) p.id: p};
     for (final h in hydrated) {
       final existing = localById[h.id];
@@ -163,25 +168,15 @@ class LibraryController extends ChangeNotifier {
       // with the membership query's artist-less skeletons — the "Unknown
       // Artist after replay" bug. Membership and ORDER come from the server;
       // per-track metadata is kept from the local cache where it is richer.
-      var merged = PlaylistRepository.reconcileTracks(
+      // Membership + ORDER from the server, per-track metadata from the cache,
+      // our own UNFINISHED intent preserved (queued OR still in flight), and one
+      // canonical identity per song. See PlaylistRepository.reconcileHydrated.
+      final merged = await _cloud.reconcileHydrated(
+        playlistId: h.id,
         cached: existing.tracks,
         cloud: h.tracks,
+        fence: fence,
       );
-      // Our own STILL-QUEUED intent must survive the authoritative read that
-      // follows the flush: a pending add is not yet on the server, and a pending
-      // reorder has not yet been applied there. Everything else — membership the
-      // server does hold, and any op that has left the journal — is unchanged.
-      merged = PlaylistRepository.preservePendingAdds(
-        authoritative: merged,
-        cached: existing.tracks,
-        hasPendingAdd: _cloud.hasPendingAdd(h.id),
-      );
-      if (_cloud.hasPendingReorder(h.id)) {
-        merged = PlaylistRepository.preservePendingOrder(
-          authoritative: merged,
-          localOrder: existing.tracks,
-        );
-      }
       await HiveStorage.savePlaylist(existing.copyWith(
         ownerId: h.ownerId,
         ownerUsername: h.ownerUsername,
@@ -224,7 +219,8 @@ class LibraryController extends ChangeNotifier {
       // 2) Replay any queued offline ops before hydrating.
       await _cloud!.flushPending();
       // 3) Hydrate owned + accepted-collaborating + followed cloud playlists.
-      final hydrated = await _cloud!.hydrateLibrary();
+      final fence = _cloud.captureAddFence(); // see _hydrateAfterFlush
+      final hydrated = await _cloud.hydrateLibrary();
       final localById = {for (final p in HiveStorage.getPlaylists()) p.id: p};
       for (final h in hydrated) {
         final existing = localById[h.id];
@@ -241,22 +237,13 @@ class LibraryController extends ChangeNotifier {
         // `savePlaylist(h)`, replacing rich local Tracks with the membership
         // query's artist-less skeletons. The second is the Unknown-Artist bug
         // on the sign-in path, which the post-flush fix alone did not cover.
-        var merged = PlaylistRepository.reconcileTracks(
+        // Exactly the same merge as the post-flush path.
+        final merged = await _cloud.reconcileHydrated(
+          playlistId: h.id,
           cached: existing.tracks,
           cloud: h.tracks,
+          fence: fence,
         );
-        // Same still-queued-intent guard as the post-flush path.
-        merged = PlaylistRepository.preservePendingAdds(
-          authoritative: merged,
-          cached: existing.tracks,
-          hasPendingAdd: _cloud.hasPendingAdd(h.id),
-        );
-        if (_cloud.hasPendingReorder(h.id)) {
-          merged = PlaylistRepository.preservePendingOrder(
-            authoritative: merged,
-            localOrder: existing.tracks,
-          );
-        }
         await HiveStorage.savePlaylist(existing.copyWith(
           ownerId: h.ownerId,
           ownerUsername: h.ownerUsername,
