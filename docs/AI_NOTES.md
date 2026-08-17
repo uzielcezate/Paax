@@ -322,3 +322,39 @@ call `playlist_delete`. Use `PlaylistRepository.isLocalOnly` (checks for a queue
 conflict, pauses that playlist, and never maps it to `retry`. Do not "helpfully"
 add a retry path for `OpOutcome.conflict`.
 
+
+## Phase 3.4.14 — an add can be IN FLIGHT for minutes (2026-08-16)
+
+**"Offline" does not mean "the request failed".** A request already on the wire
+when connectivity drops does not fail fast — it stalls until the socket times
+out or the network returns. Production proof (playlist `biza`): the Add tap
+happened ~15:42 while offline, `tracks.created_at` is 15:44:29.207 and
+`playlist_tracks.added_at` is 15:44:29.476 — the ingest inside `_resolveOrThrow`
+simply hung for two minutes and then succeeded. So an add can be neither
+committed nor journaled nor failed for an arbitrarily long time.
+
+**A journal-gated guard cannot protect such an add.** `preservePendingAdds` is
+gated on a queued op, and a Top Track that is not in the catalog yet can never
+HAVE one: its catalog UUID does not exist while offline, so nothing can be
+enqueued. Reconnect flushes and hydrates concurrently with that still-running
+add; the read misses it, nothing is queued, and reconciliation deleted the
+optimistic row moments before the add committed. Server right, UI wrong.
+
+**Use the add fence, not "is one in flight right now".** An add that finishes
+between the read and the check is exactly the losing race.
+`PlaylistRepository.captureAddFence()` is taken BEFORE the read and
+`addOverlapped()` answers the causal question (`startedNow > completedBefore`).
+Both live adds and journal replays are fenced. It is bounded: once no add
+overlaps the window, a genuine remote removal removes the row as before.
+
+**Divergent membership is what breaks reorder.** While the UI held 6 and the
+server held 7, `playlist_save_order` correctly rejected the short set with
+`ORDER_SET_MISMATCH`. Do not add a reorder special case — fix membership.
+
+**Canonical identity comes from the resolver caches, not a new map.**
+`canonicalTrackUuids` reads only what the app already recorded (deezer→uuid,
+videoId→uuid, both seeded by hydration and by the add itself), so the optimistic
+copy (`Track.id == videoId`) and the authoritative copy (`Track.id == catalog
+UUID`, YouTube match pending) resolve to one `u:<uuid>` key. Cache-only: never a
+query, and never dependent on a later resolver side effect. The videoId cache
+was persisted but never restored on cold start — that is now fixed too.
