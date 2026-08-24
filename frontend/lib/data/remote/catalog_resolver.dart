@@ -51,6 +51,19 @@ class CatalogResolver {
 
   bool _loaded = false;
 
+  /// The error the MOST RECENT lookup/ingest hit, or null when it completed.
+  ///
+  /// WHY THIS IS EXPOSED (Phase 3.4.15). This class deliberately never throws —
+  /// a failed lookup and a genuinely absent row both come back as "no entry".
+  /// That conflation is what made an offline add of an un-ingested track
+  /// indistinguishable from adding a song Paax truly does not have, so the
+  /// caller reported the terminal "isn't available in Paax yet" and discarded
+  /// the user's intent instead of queuing it. The swallowing behaviour is
+  /// unchanged; the caller can now simply ASK why, and classify it with the one
+  /// taxonomy the app already has (`classifyPlaylistOpError`) rather than a
+  /// second, drifting copy of it here.
+  Object? lastLookupError;
+
   /// Lazily hydrate the in-memory caches from SharedPreferences. Best-effort.
   Future<void> _ensureLoaded() async {
     if (_loaded) return;
@@ -221,6 +234,7 @@ class CatalogResolver {
   /// explicitly. The upsert is keyed by Deezer id server-side, so concurrent
   /// callers converge on ONE canonical row rather than creating duplicates.
   Future<void> ingestAlbums(Iterable<String?> albumDeezerIds) async {
+    lastLookupError = null;
     final ids = albumDeezerIds
         .map((e) => (e ?? '').trim())
         .where((e) => int.tryParse(e) != null)
@@ -231,9 +245,12 @@ class CatalogResolver {
     await Future.wait(ids.map((id) async {
       try {
         await _api.getAlbumNormalizedByDeezerId(int.parse(id));
-      } catch (_) {
+      } catch (e) {
         // Best-effort. A track whose album cannot be ingested becomes an
-        // explicit localIntegrity failure upstream, never a silent drop.
+        // explicit localIntegrity failure upstream, never a silent drop —
+        // unless [lastLookupError] shows the reason was connectivity, in which
+        // case the caller queues the intent instead.
+        lastLookupError = e;
       }
     }));
   }
@@ -307,6 +324,7 @@ class CatalogResolver {
   Future<Map<String, String>> resolveTracksByVideoId(
       Iterable<String?> videoIds) async {
     await _ensureLoaded();
+    lastLookupError = null;
     final result = <String, String>{};
     final toQuery = <String>{};
 
@@ -337,9 +355,11 @@ class CatalogResolver {
         changed = true;
       }
       if (changed) await _persist(_kVideoIdsCache, _videoIdCache);
-    } catch (_) {
+    } catch (e) {
       // Return whatever was cached; the caller reports unresolved tracks
-      // explicitly rather than dropping them.
+      // explicitly rather than dropping them, and reads [lastLookupError] to
+      // tell "offline" apart from "not in the catalog".
+      lastLookupError = e;
     }
     return result;
   }
@@ -354,6 +374,7 @@ class CatalogResolver {
     String cacheKey,
   ) async {
     await _ensureLoaded();
+    lastLookupError = null;
     final result = <String, String>{};
 
     // Collect valid, not-yet-cached numeric ids to query.
@@ -388,8 +409,9 @@ class CatalogResolver {
         changed = true;
       }
       if (changed) await _persist(cacheKey, cache);
-    } catch (_) {
+    } catch (e) {
       // Return whatever was already cached; unresolved ids stay local-only.
+      lastLookupError = e;
     }
     return result;
   }
