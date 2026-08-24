@@ -80,6 +80,32 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   build_runner: ^2.4.9
   hive_generator: ^2.0.1
+  flutter_launcher_icons: ^0.14.4   # generates the Android launcher icon set
+
+# ── Android launcher icon (Phase 3.4.15 branding) ─────────────────────────────
+#
+# Source of truth is the shipped logo; nothing here redraws or recolours it.
+#
+#   image_path                → legacy (pre-API-26) icon: the full-bleed square
+#                               artwork exactly as delivered.
+#   adaptive_icon_background  → the artwork's OWN background colour (#0A0A0A),
+#                               sampled from the file, so the composed icon is
+#                               indistinguishable from the asset.
+#   adaptive_icon_foreground  → the same mark, uniformly scaled and centred so
+#                               its bounding box fits inside the 72dp safe zone
+#                               (circle, rounded-square and squircle masks all
+#                               clip to at most that). Generated reproducibly by
+#                               `dart run tool/make_launcher_foreground.dart`.
+#
+# Regenerate with: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: false
+  image_path: "assets/logo/paaxlogo.png"
+  adaptive_icon_background: "#0A0A0A"
+  adaptive_icon_foreground: "assets/logo/paaxlogo_foreground.png"
+  min_sdk_android: 21
+  remove_alpha_ios: false
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

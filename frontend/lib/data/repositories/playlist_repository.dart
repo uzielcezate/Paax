@@ -23,6 +23,7 @@ import '../local/playlist_ops_journal.dart';
 import '../remote/catalog_resolver.dart';
 import '../remote/playlist_remote_data_source.dart';
 import '../sync/playlist_mutation_lane.dart';
+import '../sync/pending_track_ref.dart';
 import '../sync/playlist_op.dart';
 import '../sync/playlist_op_failure.dart';
 import '../sync/playlist_sync_service.dart';
@@ -116,6 +117,27 @@ class PlaylistRepository {
   /// can fail loudly. Nothing is ever silently dropped.
   Future<({List<String> uuids, List<Track> unresolved})> _resolveTracks(
       List<Track> tracks) async {
+    final slots = await _resolveSlots(tracks);
+    final uuids = <String>[];
+    final unresolved = <Track>[];
+    for (var i = 0; i < tracks.length; i++) {
+      final u = slots[i];
+      if (u != null) {
+        uuids.add(u);
+      } else {
+        unresolved.add(tracks[i]);
+      }
+    }
+    return (uuids: uuids, unresolved: unresolved);
+  }
+
+  /// The same two-stage resolution, reported POSITIONALLY: `slots[i]` is the
+  /// catalog UUID for `tracks[i]`, or null when it has none yet.
+  ///
+  /// Position matters for an order-sensitive op: a queued reorder must be able
+  /// to splice a later-resolved UUID back into the exact slot the user put it
+  /// in, which a compacted "resolved ids + leftovers" pair cannot express.
+  Future<List<String?>> _resolveSlots(List<Track> tracks) async {
     final byDeezer =
         await _resolver.resolveTracks(tracks.map((t) => t.deezerTrackId));
 
@@ -128,18 +150,10 @@ class PlaylistRepository {
         ? const <String, String>{}
         : await _resolver.resolveTracksByVideoId(needVideoId.map((t) => t.id));
 
-    final uuids = <String>[];
-    final unresolved = <Track>[];
-    for (final t in tracks) {
-      final u = byDeezer[(t.deezerTrackId ?? '').trim()] ??
-          byVideoId[t.id.trim()];
-      if (u != null) {
-        uuids.add(u);
-      } else {
-        unresolved.add(t);
-      }
-    }
-    return (uuids: uuids, unresolved: unresolved);
+    return [
+      for (final t in tracks)
+        byDeezer[(t.deezerTrackId ?? '').trim()] ?? byVideoId[t.id.trim()]
+    ];
   }
 
   /// Resolves [tracks], throwing rather than silently losing any of them.
@@ -150,7 +164,44 @@ class PlaylistRepository {
   /// than queued forever — and, critically, the caller rolls the optimistic UI
   /// back instead of leaving a phantom track on screen.
   Future<List<String>> _resolveOrThrow(List<Track> tracks) async {
-    var r = await _resolveTracks(tracks);
+    final r = await _resolveWithIngest(tracks);
+    final unresolved = [
+      for (var i = 0; i < tracks.length; i++)
+        if (r.slots[i] == null) tracks[i]
+    ];
+    if (unresolved.isNotEmpty) {
+      throw _unresolvedFailure(unresolved);
+    }
+    return r.slots.cast<String>();
+  }
+
+  static PlaylistOpFailure _unresolvedFailure(List<Track> unresolved) {
+    final titles = unresolved.map((t) => t.title).take(3).join(', ');
+    return PlaylistOpFailure(
+      PlaylistFailureKind.localIntegrity,
+      cause: 'UNRESOLVED_TRACK: ${unresolved.length} track(s) are not in '
+          'the Paax catalog and cannot be synced ($titles)',
+    );
+  }
+
+  /// Resolve → ingest-on-miss → bounded re-resolve, reported per slot.
+  ///
+  /// This is the whole of the old [_resolveOrThrow] minus its final throw, so
+  /// the ONLINE behaviour is byte-identical and there is exactly one ingest
+  /// path in the app: an offline add that queues intent and the replay that
+  /// completes it both run THIS function, not a copy of it.
+  ///
+  /// [lookupError] is what the resolver last hit, so the caller can tell
+  /// "the catalog says no" from "we never reached the catalog".
+  Future<({List<String?> slots, Object? lookupError})> _resolveWithIngest(
+      List<Track> tracks) async {
+    var slots = await _resolveSlots(tracks);
+    var lookupError = _resolver.lastLookupError;
+    List<Track> stillMissing() => [
+          for (var i = 0; i < tracks.length; i++)
+            if (slots[i] == null) tracks[i]
+        ];
+    var unresolved = stillMissing();
 
     // INGEST-ON-MISS (Phase 3.4.8). Artist Top Tracks was the only add-to-
     // playlist entry point that never triggers catalog ingestion — Album,
@@ -164,19 +215,20 @@ class PlaylistRepository {
     // Asking paax-api for the track ingests it, so we retry resolution ONCE.
     // Bounded and non-recursive: one ingest attempt, one re-resolve, then an
     // explicit failure.
-    if (r.unresolved.isNotEmpty) {
+    if (unresolved.isNotEmpty) {
       // Ingest via the track's ALBUM. `/v2/track/{id}` returns data but does
       // NOT write to Supabase (verified: three top-track ids still had zero
       // catalog rows after calling it), whereas `/v2/albums/deezer/{id}`
       // upserts the whole album graph. That is exactly why "open the album
       // first, then add" always worked and adding straight from Artist Top
       // Tracks did not.
-      final albumIds = r.unresolved
+      final albumIds = unresolved
           .map((t) => t.albumId.trim())
           .where((id) => int.tryParse(id) != null)
           .toSet();
       if (albumIds.isNotEmpty) {
         await _resolver.ingestAlbums(albumIds);
+        lookupError = _resolver.lastLookupError ?? lookupError;
         // IDENTITY READINESS (Phase 3.4.13). This used to re-resolve exactly
         // ONCE, immediately. Ingestion returns as soon as paax-api answers, but
         // the catalog rows it upserts are not always readable by the very next
@@ -189,8 +241,12 @@ class PlaylistRepository {
         // attempts. Bounded means bounded — a few hundred milliseconds, never a
         // poll loop, and it stops the instant every track resolves.
         for (var attempt = 0; attempt < _identityReadyAttempts; attempt++) {
-          r = await _resolveTracks(tracks);
-          if (r.unresolved.isEmpty) break;
+          slots = await _resolveSlots(tracks);
+          // The LAST attempt's outcome is what decides offline vs absent: a
+          // successful query that simply found no row clears this.
+          lookupError = _resolver.lastLookupError;
+          unresolved = stillMissing();
+          if (unresolved.isEmpty) break;
           if (attempt < _identityReadyAttempts - 1) {
             await _sleep(_identityReadyBackoff);
           }
@@ -198,15 +254,113 @@ class PlaylistRepository {
       }
     }
 
-    if (r.unresolved.isNotEmpty) {
-      final titles = r.unresolved.map((t) => t.title).take(3).join(', ');
+    return (slots: slots, lookupError: lookupError);
+  }
+
+  /// True when [error] means "we never reached the catalog" rather than "the
+  /// catalog answered and does not have it". Uses the app's ONE taxonomy.
+  static bool _isConnectivity(Object? error) =>
+      error != null &&
+      classifyPlaylistOpError(error).kind ==
+          PlaylistFailureKind.transientNetwork;
+
+  /// What a mutation should put in the journal for [tracks].
+  ///
+  /// THE OFFLINE UN-INGESTED TOP TRACK (Phase 3.4.15). `ids` alone cannot
+  /// express "this song, whose UUID does not exist yet". When resolution fails
+  /// because we are OFFLINE and the track carries an ingestable source
+  /// identity, its slot is recorded as a [PendingTrackRef] instead — the intent
+  /// is durable and replay finishes it. Every other case is unchanged:
+  ///
+  ///   all resolved                     → ids only, exactly as before
+  ///   unresolved, catalog answered     → throws localIntegrity, as before
+  ///   unresolved, not ingestable       → throws localIntegrity, as before
+  ///
+  /// So this can only ever turn a guaranteed failure into a durable intent.
+  Future<({List<String> ids, List<PendingTrackRef> unresolved})> _planQueue(
+      List<Track> tracks) async {
+    final r = await _resolveWithIngest(tracks);
+    final ids = <String>[];
+    final refs = <PendingTrackRef>[];
+    final hard = <Track>[];
+    final offline = _isConnectivity(r.lookupError);
+    for (var i = 0; i < tracks.length; i++) {
+      final uuid = r.slots[i];
+      if (uuid != null) {
+        ids.add(uuid);
+        continue;
+      }
+      final ref = PendingTrackRef.fromTrack(tracks[i], i);
+      if (offline && ref.isIngestable) {
+        refs.add(ref);
+      } else {
+        hard.add(tracks[i]);
+      }
+    }
+    if (hard.isNotEmpty) throw _unresolvedFailure(hard);
+    return (ids: ids, unresolved: refs);
+  }
+
+  /// Resolution AT REPLAY TIME, where "not resolved" has two very different
+  /// meanings and only one of them is terminal.
+  ///
+  /// A TRANSIENT UNRESOLVED STATE IS NOT TERMINAL (Phase 3.4.15). Replay runs
+  /// the moment connectivity is reported back, and a reconnect edge is not a
+  /// guarantee that the catalog is reachable yet — nor is a relaunch that
+  /// happens while still offline, which flushes as soon as auth is ready. If
+  /// those attempts raised `localIntegrity` the op would be DISCARDED and the
+  /// user's queued add destroyed by the very mechanism meant to complete it.
+  /// So the failure keeps the shape of its cause: unreachable → transient
+  /// (stays queued, bounded retries); the catalog answered and has no such
+  /// track → terminal, exactly as a live add would report.
+  Future<List<String>> _resolveForReplay(List<Track> tracks) async {
+    final r = await _resolveWithIngest(tracks);
+    final missing = [
+      for (var i = 0; i < tracks.length; i++)
+        if (r.slots[i] == null) tracks[i]
+    ];
+    if (missing.isEmpty) return r.slots.cast<String>();
+    if (_isConnectivity(r.lookupError)) {
       throw PlaylistOpFailure(
-        PlaylistFailureKind.localIntegrity,
-        cause: 'UNRESOLVED_TRACK: ${r.unresolved.length} track(s) are not in '
-            'the Paax catalog and cannot be synced ($titles)',
+        PlaylistFailureKind.transientNetwork,
+        cause: r.lookupError,
       );
     }
-    return r.uuids;
+    throw _unresolvedFailure(missing);
+  }
+
+  /// Rebuilds the full ordered id list of a queued op, resolving (and ingesting
+  /// for) any slot that had no UUID when it was queued.
+  ///
+  /// Runs the SAME bounded path an online add runs, so a replayed intent and a
+  /// live add cannot diverge. Throws exactly like [_resolveOrThrow]: terminal
+  /// localIntegrity when the catalog authoritatively lacks the track, and the
+  /// underlying connectivity error (classified transient) when we still cannot
+  /// reach it — which leaves the op queued for the next reconnect.
+  Future<List<String>> _materializeIds(PlaylistOp op) async {
+    final ids = (op.payload['ids'] as List?)?.map((e) => '$e').toList() ??
+        const <String>[];
+    final refs = PendingTrackRef.listFrom(op.payload['unresolved']);
+    if (refs.isEmpty) return ids;
+
+    final resolved = await _resolveForReplay([for (final r in refs) r.toTrack()]);
+
+    // Splice each late-resolved UUID back into the slot the user put it in.
+    final total = ids.length + refs.length;
+    final out = List<String?>.filled(total, null);
+    for (var i = 0; i < refs.length; i++) {
+      final at = refs[i].at;
+      if (at >= 0 && at < total && out[at] == null) out[at] = resolved[i];
+    }
+    var next = 0;
+    for (final id in ids) {
+      while (next < total && out[next] != null) {
+        next++;
+      }
+      if (next >= total) break;
+      out[next] = id;
+    }
+    return out.whereType<String>().toList();
   }
 
   /// Back-compat shim for read paths that legitimately tolerate partial
@@ -273,8 +427,38 @@ class PlaylistRepository {
     // A short array here would fail ORDER_SET_MISMATCH server-side anyway, but
     // failing locally gives the user an accurate reason instead of a generic
     // validation error.
-    final uuids = await _resolveOrThrow(orderedTracks);
+    //
+    // A reorder whose list contains a track added offline and NOT YET INGESTED
+    // is the one case that cannot produce a complete UUID list yet. Its slot is
+    // carried as intent and resolved at replay time, so the intended ORDER
+    // survives — the reorder's own semantics (rebase, membership validation,
+    // terminal conflicts) are untouched.
+    final plan = await _planQueue(orderedTracks);
+    final uuids = plan.ids;
     final uid = currentUserId;
+
+    if (plan.unresolved.isNotEmpty) {
+      if (uid == null) throw _unresolvedFailure(orderedTracks);
+      await _sync.enqueue(PlaylistOp(
+        opId: _newOpId(),
+        userId: uid,
+        playlistId: playlistId,
+        type: PlaylistOpType.saveOrder,
+        createdAt: DateTime.now(),
+        expectedVersion: expectedVersion,
+        payload: {
+          'ids': uuids,
+          'unresolved': PendingTrackRef.listToJson(plan.unresolved),
+        },
+      ));
+      OfflineStatus.report(succeeded: false, wasNetworkFailure: true);
+      throw const PlaylistOpFailure(
+        PlaylistFailureKind.transientNetwork,
+        cause: 'ORDER_QUEUED_FOR_INGEST: queued with the source identity of '
+            'tracks the catalog has not ingested yet',
+      );
+    }
+
     return _online(
       // Reorder is NOT auto-rebasable: replaying an order against a membership
       // the server has since changed would push a wrong list. A 409 here is
@@ -383,9 +567,37 @@ class PlaylistRepository {
   Future<Map<String, dynamic>> _addTracks(
       String playlistId, List<Track> tracks) async {
     // Throws localIntegrity rather than sending an empty/short array, which the
-    // RPC would accept as a silent no-op success.
-    final uuids = await _resolveOrThrow(tracks);
+    // RPC would accept as a silent no-op success — except for a track that is
+    // merely NOT INGESTED YET while we are offline, whose intent is queued.
+    final plan = await _planQueue(tracks);
+    final uuids = plan.ids;
     final uid = currentUserId;
+
+    if (plan.unresolved.isNotEmpty) {
+      // Nothing can be sent: the UUIDs do not exist yet, and inventing one is
+      // never acceptable. Queue the INTENT and report the same transient
+      // failure a dropped connection produces, so the caller keeps the
+      // optimistic row and says "will sync when you're back online".
+      if (uid == null) throw _unresolvedFailure(tracks);
+      await _sync.enqueue(PlaylistOp(
+        opId: _newOpId(),
+        userId: uid,
+        playlistId: playlistId,
+        type: PlaylistOpType.addTracks,
+        createdAt: DateTime.now(),
+        payload: {
+          'ids': uuids,
+          'unresolved': PendingTrackRef.listToJson(plan.unresolved),
+        },
+      ));
+      OfflineStatus.report(succeeded: false, wasNetworkFailure: true);
+      throw const PlaylistOpFailure(
+        PlaylistFailureKind.transientNetwork,
+        cause: 'ADD_QUEUED_FOR_INGEST: the catalog is unreachable, so the add '
+            'is queued with its source identity and completes on reconnect',
+      );
+    }
+
     return _online(
       // playlist_add_tracks is idempotent (it skips tracks already present) and
       // takes no expected_version, so it needs the lane for ORDERING — so each
@@ -1204,7 +1416,11 @@ class PlaylistRepository {
   /// be driven directly by tests against a fake remote.
   Future<OpOutcome> executeOp(PlaylistOp op) async {
     try {
-      final ids = (op.payload['ids'] as List?)?.cast<String>() ?? const <String>[];
+      // Resolves — and, when needed, INGESTS — any slot that had no catalog
+      // UUID when this op was queued. For an op without `unresolved` (every op
+      // written before this existed, and every fully-resolved one since) this
+      // is the same `ids` list it always was, with no extra work.
+      final ids = await _materializeIds(op);
       switch (op.type) {
         case PlaylistOpType.create:
           final row = await _remote.createPlaylist(
@@ -1224,6 +1440,15 @@ class PlaylistRepository {
           await _replaySaveOrder(op, ids);
           break;
         case PlaylistOpType.addTracks:
+          // NEVER send an empty array: `playlist_add_tracks` gates its insert,
+          // version bump and activity behind `if v_count > 0`, so an empty one
+          // is a SILENT SUCCESS that would drop the user's add without a trace.
+          if (ids.isEmpty) {
+            throw const PlaylistOpFailure(
+              PlaylistFailureKind.localIntegrity,
+              cause: 'UNRESOLVED_TRACK: queued add resolved to no catalog ids',
+            );
+          }
           // Fenced like a live add: a replay makes membership grow too, so an
           // authoritative read taken while the pass is still running is just as
           // stale — and by the time the merge runs, the op has left the journal.
@@ -1280,6 +1505,10 @@ class PlaylistRepository {
   /// a network. Ordering matters: typed exceptions first, then message
   /// signatures, then `unknown`.
   static PlaylistOpFailure classifyPlaylistOpError(Object e) {
+    // Already classified — never re-derive it from a stringified message, which
+    // would silently downgrade a deliberate kind (Phase 3.4.15: replay resolves
+    // and ingests, so it can raise both terminal and transient failures itself).
+    if (e is PlaylistOpFailure) return e;
     if (e is PlaylistConflictException) {
       return PlaylistOpFailure(PlaylistFailureKind.versionConflict,
           actualVersion: e.actualVersion, cause: e);
